@@ -69,34 +69,144 @@ WGA:
 - zoom, pan, click a gene or block for details, tooltip with locus tag,
   symbol, coverage, coordinates
 
-## Tech stack (proposal, to be decided in repo docs)
+## Architecture
 
-- Backend: Python (FastAPI) wrapping the pipeline; MUMmer (nucmer,
-  show-coords, dnadiff) and NCBI BLAST+ as external tools, managed in a
-  container on the VM
-- Frontend: web UI with a virtualized data grid (e.g. AG Grid / TanStack
-  Table) for the table view, and a genome browser library (e.g.
-  PGDV.js / custom SVG canvas) for the WGA view
-- Storage: project directory per project on the VM disk
-- Phase 2: package backend + frontend core as desktop app (e.g. Tauri or
-  Electron) with local tool bundling, reusing the same engine
+Strict backend / frontend split. The frontend never runs any analysis;
+it only collects parameters and renders results. The engine lives in the
+backend as a self contained package so it can later be embedded in the
+desktop build unchanged.
+
+```
+browser SPA  <── JSON over HTTP ──>  API server  ──>  engine
+  (React)          (REST)          (FastAPI)     (pipeline)
+                                       │
+                                       └──> job runner ──> nucmer / show-coords /
+                                             (async queue)    dnadiff / blastn
+```
+
+### Backend
+
+- **API server**: Python + FastAPI. Owns projects, files, runs, users.
+  Exposes a typed REST API (OpenAPI schema generated automatically, the
+  frontend consumes it via a generated client).
+- **Engine**: a separate package (no web code, just the pipeline), a
+  Python port of the R script logic. Steps: FASTA header sanitization,
+  nucmer, delta header rewrite, show-coords parsing, per gene coverage
+  with merged intervals, gap computation, optional BLAST panel recheck.
+  Each step is a pure function of (input files, parameter set) where
+  possible, so parameters can be changed without redoing expensive
+  alignment work.
+- **Job runner**: analysis runs are async jobs (RQ or Celery + Redis, or
+  a simple in process worker for the first VM version). Status polled
+  via `GET /runs/{id}` or pushed over WebSocket; logs streamed to the
+  UI.
+- **Storage**: SQLite (later Postgres) for metadata; one directory per
+  project on disk for FASTA/GFF/delta/TSV artifacts; `runs` table keeps
+  the exact parameter JSON for every run so any result is reproducible.
+
+### Engine parameters (tweakable from the frontend)
+
+Every threshold the R script hardcodes becomes a named parameter with a
+default, a range, and a UI control. The frontend sends a parameter JSON
+with each run request; the backend validates it (pydantic model, rejects
+out of range values) and stores it with the run.
+
+| Parameter        | Default | Range    | Controls                                    |
+|------------------|---------|----------|---------------------------------------------|
+| `min_gap`        | 200     | 0-100000 | minimum unaligned region reported (bp)      |
+| `present_cov`    | 95      | 0-100    | % of gene aligned to call it present       |
+| `partial_cov`    | 1       | 0-100    | >0% and <present_cov = PARTIAL (implicit)  |
+| `blast_cov`      | 90      | 0-100    | % query coverage for panel gene present    |
+| `blast_pid`      | 90      | 0-100    | % identity for panel gene present          |
+| `blast_evalue`   | 1e-10   | 1e-50-10 | BLAST e value cutoff                       |
+| `nucmer_minmatch`| (nucmer default) | int | nucmer `-l` minimal match length |
+| `nucmer_breaklen`| (nucmer default) | int | nucmer `-b` breakpoint distance |
+| `dnadiff`        | on/off  | bool     | run overall alignment report or skip        |
+
+Cheap re runs: `min_gap`, `present_cov` and the BLAST thresholds only
+affect post processing of a finished alignment, so changing them
+recomputes tables in seconds without re-running nucmer. Only
+`nucmer_*` parameters and input changes trigger a real re-alignment.
+The run model records which layer a parameter belongs to
+(postprocess vs align) and the engine reuses cached artifacts
+accordingly.
+
+### API sketch
+
+```
+POST   /projects                      create project (name, organism=bacteria)
+GET    /projects                      list projects
+GET    /projects/{id}                 project detail
+POST   /projects/{id}/reference       upload FASTA + GFF (or NCBI accession)
+POST   /projects/{id}/queries         upload one or many query FASTAs
+POST   /projects/{id}/panel           upload gene panel FASTA (optional)
+POST   /projects/{id}/runs            start run: {query_ids, params{...}}
+GET    /runs/{id}                     status, progress, logs
+GET    /runs/{id}/genes_coverage      table data (paginated, sortable)
+GET    /runs/{id}/unaligned_gaps      table data
+GET    /runs/{id}/panel_recheck      table data (if panel given)
+GET    /runs/{id}/wga                 alignment blocks + gaps + genes for viewer
+GET    /runs/{id}/export/{table}      TSV/CSV download
+GET    /runs/{id}/params              parameter set used (reproducibility)
+```
+
+### Frontend
+
+- **Stack**: React + TypeScript + Vite, Tailwind (or similar).
+- **Pages**:
+  - project list / create project
+  - project detail with tabs: Inputs (reference, queries, panel),
+    Runs, Table view, Genome view
+- **Parameter panel**: a form (sliders, number inputs, toggles) bound to
+  the engine parameter schema above. Presets ("strict", "loose",
+  "default") plus a diff against defaults. Submitting starts a run;
+  re-submitting with only postprocess thresholds changed shows a "fast
+  recompute" hint.
+- **Table view**: virtualized grid (AG Grid or TanStack Table) fed by
+  the paginated run endpoints; column visibility picker, global search,
+  per column filters, sort. Handles 10k+ rows smoothly.
+- **Genome view**: interactive WGA viewer. Reference coordinates on a
+  horizontal axis (circular mode later), one alignment track per query,
+  blocks colored by % identity, unaligned gaps shaded, gene track from
+  the GFF. Zoom/pan, click for details (tooltip popover with locus tag,
+  symbol, coverage, coordinates), deep links from table rows to the
+  corresponding genome position and back.
+- **Live updates**: run progress, tool logs and errors surface in a run
+  drawer (WebSocket or polling).
+
+### Deployment (phase 1, VM)
+
+- One docker compose stack on the Proxmox VM: `api` (FastAPI), `worker`
+  (engine + job runner), `db` (SQLite volume or Postgres), `frontend`
+  (static build served by nginx), nginx as reverse proxy with TLS.
+- MUMmer and BLAST+ live in the worker image (apt/bioconda), no
+  auto-download at runtime.
+- Phase 2 desktop build (Tauri): the engine package runs as a local
+  process, the frontend is served from the app bundle, storage moves to
+  a local directory. The API layer is the same contract, implemented as
+  an in process backend.
 
 ## Roadmap
 
 1. [ ] Repo scaffolding, CI, tool container (MUMmer + BLAST+)
-2. [ ] Core engine: port the R logic (sanitize, nucmer, coverage, gaps,
-       panel recheck) to a service API
-3. [ ] Project + organism model: create project, attach reference
-       (upload FASTA/GFF or NCBI accession), upload queries
-4. [ ] Table view: virtualized grid, column picker, filters, exports
+2. [ ] Engine package: port the R logic (sanitize, nucmer, coverage, gaps,
+       panel recheck) with a validated parameter model and layered
+       caching (align vs postprocess artifacts)
+3. [ ] API server: projects, uploads, runs, parameter validation, job
+       runner, result endpoints
+4. [ ] Frontend shell: project pages, input upload, parameter panel with
+       presets, run drawer with logs
+5. [ ] Table view: virtualized grid, column picker, filters, exports
        (TSV/CSV)
-5. [ ] Multi query support: run several queries, presence/absence matrix
-6. [ ] Interactive WGA view: reference genome rendering, alignment
-       tracks, gap highlighting, gene tooltips
-7. [ ] VM deployment on Proxmox (reverse proxy, TLS, auth)
-8. [ ] Hardening: job queue, result caching, quotas
-9. [ ] Phase 2: standalone desktop packaging
-10. [ ] Virus support (organism type: virus)
+6. [ ] Multi query support: run several queries, presence/absence matrix
+7. [ ] Interactive WGA view: reference genome rendering, alignment
+       tracks, gap highlighting, gene tooltips, deep links from table
+8. [ ] VM deployment on Proxmox (docker compose, reverse proxy, TLS,
+       auth)
+9. [ ] Hardening: result caching, quotas, users
+10. [ ] Phase 2: standalone desktop packaging (Tauri, engine in
+       process)
+11. [ ] Virus support (organism type: virus)
 
 ## Known caveats carried over from the R script
 
