@@ -174,6 +174,9 @@ GET    /runs/{id}/params              parameter set used (reproducibility)
 ### Frontend
 
 - **Stack**: React + TypeScript + Vite, Tailwind (or similar).
+- **Target users**: mostly NOT IT experienced people (lab scientists,
+  students). The UI must be usable by someone who has never seen a
+  command line and does not know what nucmer or a delta file is.
 - **Pages**:
   - project list / create project
   - project detail with tabs: Inputs (reference, queries, panel),
@@ -194,6 +197,44 @@ GET    /runs/{id}/params              parameter set used (reproducibility)
   corresponding genome position and back.
 - **Live updates**: run progress, tool logs and errors surface in a run
   drawer (WebSocket or polling).
+
+### UI / UX principles (non IT audience)
+
+The users are biologists, not developers. Every screen follows:
+
+- **Clean and minimalistic**: one primary action per screen. No menus
+  inside menus, no jargon in labels. Say "Compare genomes", not "Run
+  nucmer pipeline". Technical terms live in tooltips / an info icon,
+  never in button text.
+- **Big and greatly visible**: large buttons, large fonts (16 px base,
+  headings much bigger), generous spacing, high contrast colors.
+  Comfortable on a laptop projector in a lab meeting. Touch friendly
+  hit areas, nothing smaller than ~44 px.
+- **Forgiving inputs**: drag and drop file upload with clear accepted
+  formats ("FASTA file, e.g. LM259.fasta"), inline validation with
+  plain language errors ("This file is not a FASTA file"), no way to
+  reach a raw stack trace. Destructive actions ask for confirmation.
+- **Guided flow**: a project is created through a small numbered wizard
+  (1 reference, 2 queries, 3 optional panel, 4 run). Defaults are
+  always sensible: a user who never opens a parameter panel still gets
+  a valid, correct result. Parameters are hidden behind an "Advanced
+  settings" section, collapsed by default, with plain language
+  descriptions next to each control and safe ranges enforced by the
+  backend.
+- **Obvious state**: running jobs show a big progress indicator and
+  elapsed time, not a spinner alone. Failures say what to do next
+  ("Reference file could not be read. Try uploading it again or
+  contact support"), not an error code.
+- **Forgiving navigation**: table and genome views are always reachable
+  by big tabs; a selected row, filter or zoom state survives
+  navigation and reloads; nothing is lost by clicking the wrong
+  button.
+- **Accessibility and low reading load**: icon + text on every button,
+  color never the only signal (color blind safe palette for
+  present / PARTIAL / ABSENT), keyboard support for the grid.
+- **Test with real users**: before each release, watch one target user
+  complete the full flow (create project, upload, run, find an absent
+  gene) without help. If they hesitate, the UI is wrong, not them.
 
 ### Deployment (phase 1, VM)
 
@@ -218,19 +259,22 @@ GET    /runs/{id}/params              parameter set used (reproducibility)
        caching (align vs postprocess artifacts)
 3. [ ] API server (axum): projects, uploads, runs, parameter validation,
        job runner, result endpoints
-4. [ ] Frontend shell: project pages, input upload, parameter panel with
-       presets, run drawer with logs
+4. [ ] Frontend shell: project pages, guided wizard for inputs, big
+       minimal UI per the UX principles, parameter panel with presets
+       (collapsed "Advanced settings"), run drawer with logs
 5. [ ] Table view: virtualized grid, column picker, filters, exports
        (TSV/CSV)
 6. [ ] Multi query support: run several queries, presence/absence matrix
 7. [ ] Interactive WGA view: reference genome rendering, alignment
        tracks, gap highlighting, gene tooltips, deep links from table
-8. [ ] VM deployment on Proxmox (docker compose, reverse proxy, TLS,
+8. [ ] Usability test: watch target (non IT) users complete the full
+       flow, fix friction
+9. [ ] VM deployment on Proxmox (docker compose, reverse proxy, TLS,
        auth)
-9. [ ] Hardening: result caching, quotas, users
-10. [ ] Phase 2: standalone desktop packaging (Tauri, engine in
-       process)
-11. [ ] Virus support (organism type: virus)
+10. [ ] Hardening: result caching, quotas, users
+11. [ ] Phase 2: standalone desktop packaging (Tauri, engine in
+        process)
+12. [ ] Virus support (organism type: virus)
 
 ## Known caveats carried over from the R script
 
