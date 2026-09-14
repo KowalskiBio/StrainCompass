@@ -70,6 +70,27 @@ WGA:
 - zoom, pan, click a gene or block for details, tooltip with locus tag,
   symbol, coverage, coordinates
 
+### 3. Gene alignment (MSA) viewer
+
+Drilling from "this gene is PARTIAL" down to the actual bases:
+
+- **Hover** on any gene in the table or genome view shows a quick
+  preview: coverage %, best block identity, mismatch and indel counts
+  for each query.
+- **Click** (or a "Show alignment" button) opens an MSA viewer dialog:
+  a pairwise alignment of the reference gene versus the aligned query
+  region(s), one row per query, rendered as a scrollable sequence
+  track. Mismatches, insertions and deletions are highlighted in
+  place; a coordinate ruler shows gene position; premature stop codons
+  in the query are flagged. When a gene is split across several
+  alignment blocks, blocks are shown in order with the unaligned
+  stretches marked as gaps.
+- **Data source**: computed from the run's cached delta/alignment
+  artifacts (MUMmer's delta encodes the full alignment including
+  indels; show-snps provides the variant list). No re-alignment needed
+  for reasonable gene sizes; the endpoint renders on demand.
+- **Export**: the gene alignment as FASTA / clustal for reporting.
+
 ## Architecture
 
 Strict backend / frontend split. The frontend never runs any analysis;
@@ -202,6 +223,8 @@ GET    /runs/{id}/genes_coverage      table data (paginated, sortable)
 GET    /runs/{id}/unaligned_gaps      table data
 GET    /runs/{id}/panel_recheck      table data (if panel given)
 GET    /runs/{id}/wga                 alignment blocks + gaps + genes for viewer
+GET    /runs/{id}/gene/{locus}       gene preview stats (hover) + full
+                                      alignment rows for the MSA viewer
 GET    /runs/{id}/export/{table}      TSV/CSV download
 GET    /runs/{id}/params              parameter set used (reproducibility)
 ```
@@ -230,6 +253,9 @@ GET    /runs/{id}/params              parameter set used (reproducibility)
   the GFF. Zoom/pan, click for details (tooltip popover with locus tag,
   symbol, coverage, coordinates), deep links from table rows to the
   corresponding genome position and back.
+- **Gene alignment (MSA) viewer**: hover preview plus a dialog MSA view
+  for any PARTIAL gene (mismatches, indels, premature stops), fed by
+  `GET /runs/{id}/gene/{locus}` (see Outputs, section 3).
 - **Live updates**: run progress, tool logs and errors surface in a run
   drawer (WebSocket or polling).
 
@@ -346,14 +372,16 @@ GET    /projects/{id}/usage          storage used by the project
 6. [ ] Multi query support: run several queries, presence/absence matrix
 7. [ ] Interactive WGA view: reference genome rendering, alignment
        tracks, gap highlighting, gene tooltips, deep links from table
-8. [ ] Usability test: watch target (non IT) users complete the full
+8. [ ] Gene alignment (MSA) viewer: hover preview, per gene pairwise
+       alignment with mismatches/indels, export FASTA/clustal
+9. [ ] Usability test: watch target (non IT) users complete the full
        flow, fix friction
-9. [ ] VM deployment on Proxmox (docker compose, reverse proxy, TLS,
-       auth)
-10. [ ] Hardening: result caching, quotas, users
-11. [ ] Phase 2: standalone desktop packaging (Tauri, engine in
+10. [ ] VM deployment on Proxmox (docker compose, reverse proxy, TLS,
+        auth)
+11. [ ] Hardening: result caching, quotas, users
+12. [ ] Phase 2: standalone desktop packaging (Tauri, engine in
         process)
-12. [ ] Virus support (organism type: virus)
+13. [ ] Virus support (organism type: virus)
 
 ## Known caveats carried over from the R script
 
