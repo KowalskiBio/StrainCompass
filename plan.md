@@ -29,7 +29,8 @@ same engine serves both deployment modes.
 - **Organism type per project**: bacteria first (viruses later).
 - **Reference**: user supplies a bacterial reference genome (FASTA) and
   its annotation (GFF). Optionally fetched from NCBI by accession
-  (e.g. GCF_000196035.1).
+  (e.g. GCF_000196035.1); a user provided NCBI API key (Settings page)
+  speeds these downloads up.
 - **Inputs (queries)**: one or multiple query FASTA files (user strains,
   draft or complete).
 - **Engine**: sanitize FASTA headers, run nucmer (query vs reference) and
@@ -94,6 +95,40 @@ snappy API with low memory, a single static binary per service, no
 runtime to install on the VM, and one language shared with the desktop
 packaging. A bacterial genome (3k genes, ~3 Mb) parses and scores in
 well under a second.
+
+### Making the tools faster
+
+- **Parallelize across queries, not within a run.** A single nucmer
+  invocation is effectively single threaded: extra cores do NOT make one
+  comparison faster. But a project with N queries means N independent
+  nucmer runs, which the job runner executes in parallel on all cores.
+  This is where "more cores" actually pays off, and it is the main
+  scaling path in the app.
+- **RAM is a non issue for bacteria.** The suffix tree scales with
+  genome size; a 3-10 Mb bacterial genome needs a few hundred MB.
+  Allocate cores, not RAM.
+- **nucmer knobs**: default settings are already fast at bacterial
+  scale (seconds to a minute per comparison). `--mum` (default, unique
+  matches) is faster than `--maxmatch`; a larger `-l` cuts matching
+  work. Do not tune for speed, tune for correctness.
+- **Optional alternative aligner**: minimap2 (`-t` for real multi
+  threading, PAF output) can serve as a second alignment backend for
+  the big table if nucmer ever becomes the bottleneck; the delta
+  pipeline stays the reference/default. Evaluate during engine work.
+- **NCBI API key (user provided).** Reference genomes and annotations
+  fetched by accession go through NCBI, which throttles anonymous
+  requests hard (about 3/s). A user supplied NCBI API key raises the
+  limit (about 10/s), making reference download and multi accession
+  fetches much faster. The key is entered in Settings, stored server
+  side (never logged, never returned in full by the API), and attached
+  to every NCBI request the engine makes. No key: everything still
+  works, just slower.
+
+```
+PUT    /settings/ncbi_api_key       store key (masked in responses)
+DELETE /settings/ncbi_api_key       remove key
+GET    /settings                    show masked key + status
+```
 
 ### Backend (Rust workspace)
 
