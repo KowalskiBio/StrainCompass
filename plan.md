@@ -399,8 +399,9 @@ GET    /projects/{id}/usage          storage used by the project
        alignment with mismatches/indels, export FASTA/clustal
 9. [ ] Usability test: watch target (non IT) users complete the full
        flow, fix friction
-10. [ ] VM deployment on Proxmox (docker compose, reverse proxy, TLS,
-        auth)
+10. [ ] VM deployment on Proxmox: per deployment.md (native binary +
+        systemd + existing nginx, port 127.0.0.1:8010, backup before
+        every push, never touch foreign prod services)
 11. [ ] Hardening: result caching, quotas, users
 12. [ ] Phase 2: standalone desktop packaging (Tauri, engine in
         process)
