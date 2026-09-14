@@ -72,44 +72,65 @@ WGA:
 ## Architecture
 
 Strict backend / frontend split. The frontend never runs any analysis;
-it only collects parameters and renders results. The engine lives in the
-backend as a self contained package so it can later be embedded in the
-desktop build unchanged.
+it only collects parameters and renders results. The backend is Rust
+end to end: one workspace, zero Python. The engine lives in the backend
+as a self contained crate so it can later be embedded in the desktop
+build unchanged (Tauri is Rust too, so phase 2 links the very same
+crate into the app).
 
 ```
 browser SPA  <── JSON over HTTP ──>  API server  ──>  engine
-  (React)          (REST)          (FastAPI)     (pipeline)
+  (React)          (REST)          (Rust, axum)  (pipeline)
                                        │
                                        └──> job runner ──> nucmer / show-coords /
-                                             (async queue)    dnadiff / blastn
+                                             (tokio tasks)    dnadiff / blastn
 ```
 
-### Backend
+Honest note on speed: the wall clock of a run is dominated by the
+external tools (nucmer, BLAST), which stay external regardless of
+language. What Rust buys here is everything around them: FASTA/GFF/
+delta parsing and coverage math in milliseconds instead of seconds, a
+snappy API with low memory, a single static binary per service, no
+runtime to install on the VM, and one language shared with the desktop
+packaging. A bacterial genome (3k genes, ~3 Mb) parses and scores in
+well under a second.
 
-- **API server**: Python + FastAPI. Owns projects, files, runs, users.
-  Exposes a typed REST API (OpenAPI schema generated automatically, the
-  frontend consumes it via a generated client).
-- **Engine**: a separate package (no web code, just the pipeline), a
-  Python port of the R script logic. Steps: FASTA header sanitization,
-  nucmer, delta header rewrite, show-coords parsing, per gene coverage
-  with merged intervals, gap computation, optional BLAST panel recheck.
-  Each step is a pure function of (input files, parameter set) where
-  possible, so parameters can be changed without redoing expensive
-  alignment work.
-- **Job runner**: analysis runs are async jobs (RQ or Celery + Redis, or
-  a simple in process worker for the first VM version). Status polled
-  via `GET /runs/{id}` or pushed over WebSocket; logs streamed to the
-  UI.
-- **Storage**: SQLite (later Postgres) for metadata; one directory per
-  project on disk for FASTA/GFF/delta/TSV artifacts; `runs` table keeps
-  the exact parameter JSON for every run so any result is reproducible.
+### Backend (Rust workspace)
+
+- **Crates**: `bactiment-engine` (pipeline, no web code), `bactiment-api`
+  (HTTP server), `bactiment-types` (shared DTOs + parameter model). The
+  engine has no dependency on axum or the DB, so the Tauri build uses it
+  directly.
+- **API server**: axum + tokio. Owns projects, files, runs, users.
+  OpenAPI schema via utoipa; the frontend client is generated from it.
+- **Engine**: a Rust port of the R script logic. Steps: FASTA header
+  sanitization, nucmer, delta header rewrite, show-coords parsing,
+  per gene coverage with merged intervals, gap computation, optional
+  BLAST panel recheck. Rust makes the parsing and interval math
+  (nom + custom iterators, sorted vec merging) effectively free
+  compared to tool runtimes. Each step is a pure function of (input
+  files, parameter set) where possible, so parameters can be changed
+  without redoing expensive alignment work.
+- **Job runner**: analysis runs are async jobs on tokio tasks with a
+  SQLite backed queue (escalate to a dedicated queue later if needed).
+  Long tool invocations stream stdout line by line into run logs.
+  Status polled via `GET /runs/{id}` or pushed over WebSocket; logs
+  streamed to the UI.
+- **Storage**: SQLite via sqlx/rusqlite for metadata (later Postgres if
+  multi user load demands it); one directory per project on disk for
+  FASTA/GFF/delta/TSV artifacts; `runs` table keeps the exact parameter
+  JSON for every run so any result is reproducible.
+- **Web frontend serving**: in phase 1 the same axum binary serves the
+  compiled SPA from its static dir, so the VM stack needs just one app
+  container plus nginx.
 
 ### Engine parameters (tweakable from the frontend)
 
 Every threshold the R script hardcodes becomes a named parameter with a
 default, a range, and a UI control. The frontend sends a parameter JSON
-with each run request; the backend validates it (pydantic model, rejects
-out of range values) and stores it with the run.
+with each run request; the backend validates it (serde + garde
+validation attributes, rejects out of range values with a field level
+error response) and stores it with the run.
 
 | Parameter        | Default | Range    | Controls                                    |
 |------------------|---------|----------|---------------------------------------------|
@@ -176,24 +197,27 @@ GET    /runs/{id}/params              parameter set used (reproducibility)
 
 ### Deployment (phase 1, VM)
 
-- One docker compose stack on the Proxmox VM: `api` (FastAPI), `worker`
-  (engine + job runner), `db` (SQLite volume or Postgres), `frontend`
-  (static build served by nginx), nginx as reverse proxy with TLS.
-- MUMmer and BLAST+ live in the worker image (apt/bioconda), no
+- One docker compose stack on the Proxmox VM: `app` (single static Rust
+  binary: API + job runner + SPA static serving), `db` (SQLite volume;
+  Postgres only if multi user load demands it), nginx as reverse proxy
+  with TLS. Because everything is one static binary, the container is
+  distroless and starts in milliseconds.
+- MUMmer and BLAST+ live in the app image (apt/bioconda), no
   auto-download at runtime.
-- Phase 2 desktop build (Tauri): the engine package runs as a local
-  process, the frontend is served from the app bundle, storage moves to
-  a local directory. The API layer is the same contract, implemented as
-  an in process backend.
+- Phase 2 desktop build (Tauri): the engine crate links directly into
+  the app process, no separate backend, storage moves to a local
+  directory. The REST layer becomes an in process command interface;
+  the frontend is the same codebase.
 
 ## Roadmap
 
-1. [ ] Repo scaffolding, CI, tool container (MUMmer + BLAST+)
-2. [ ] Engine package: port the R logic (sanitize, nucmer, coverage, gaps,
+1. [ ] Repo scaffolding (Rust workspace: engine, api, types + frontend),
+       CI, tool container (MUMmer + BLAST+)
+2. [ ] Engine crate: port the R logic (sanitize, nucmer, coverage, gaps,
        panel recheck) with a validated parameter model and layered
        caching (align vs postprocess artifacts)
-3. [ ] API server: projects, uploads, runs, parameter validation, job
-       runner, result endpoints
+3. [ ] API server (axum): projects, uploads, runs, parameter validation,
+       job runner, result endpoints
 4. [ ] Frontend shell: project pages, input upload, parameter panel with
        presets, run drawer with logs
 5. [ ] Table view: virtualized grid, column picker, filters, exports
