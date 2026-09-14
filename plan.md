@@ -58,6 +58,29 @@ Features: column visibility chosen by the user, sorting, filtering,
 searching, multi query comparison (one column set per query or a joined
 presence/absence matrix across all queries in the project).
 
+### Export / download to the user's computer
+
+Every result can leave the app as a file, with a big always visible
+"Export" button:
+
+- On each table (genes coverage, unaligned gaps, panel recheck,
+  presence/absence matrix): "Export" with a format choice, TSV or CSV.
+  Exports respect the user's current view: active column selection,
+  sorting and filters are what gets written, so the downloaded file
+  matches what the user sees (with a "current view" vs "all columns"
+  choice, default current view).
+- On the gene alignment (MSA) viewer: export the shown alignment as
+  FASTA or clustal.
+- On the run "Files" panel: each artifact (including the dnadiff report)
+  downloadable as is.
+- Downloads stream straight from the browser to the user's computer
+  (standard browser download, no server side zip required; a "download
+  all tables" button that bundles them in one zip is a nice extra).
+  Served via `GET /runs/{id}/export/{table}?format=tsv|csv`, marked
+  `Content-Disposition: attachment` so the file lands in the user's
+  Downloads folder with a clear name like
+  `LM259_vs_reference_genes_coverage.tsv`.
+
 ### 2. Interactive genome view
 
 A window with an interactive genome built from the input vs reference
