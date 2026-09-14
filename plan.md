@@ -250,7 +250,8 @@ The users are biologists, not developers. Every screen follows:
   plain language errors ("This file is not a FASTA file"), no way to
   reach a raw stack trace. Destructive actions ask for confirmation.
 - **Guided flow**: a project is created through a small numbered wizard
-  (1 reference, 2 queries, 3 optional panel, 4 run). Defaults are
+  (1 reference, 2 queries, 3 optional panel, 4 run), shown as a nice
+  dialog popup (see "Everything through the UI"). Defaults are
   always sensible: a user who never opens a parameter panel still gets
   a valid, correct result. Parameters are hidden behind an "Advanced
   settings" section, collapsed by default, with plain language
@@ -270,6 +271,49 @@ The users are biologists, not developers. Every screen follows:
 - **Test with real users**: before each release, watch one target user
   complete the full flow (create project, upload, run, find an absent
   gene) without help. If they hesitate, the UI is wrong, not them.
+
+### Everything through the UI (no filesystem exposure)
+
+The app is completely UI based. Users never see, type or browse a
+server path, and never open a terminal. Concretely:
+
+- **The only things a user ever provides**: their NCBI API key
+  (optional, Settings), the reference genome (FASTA), its annotation
+  (GFF), one or more query FASTAs, and optionally a gene panel FASTA.
+  Exactly the inputs the R script demanded, nothing more. Tools
+  (MUMmer, BLAST+) are pre installed in the app container: installing
+  them is the operator's one time job, invisible to users.
+- **Everything else is the app's business**: working directories,
+  sanitized FASTAs, delta files, caches, intermediate files. They exist
+  on disk but the user never needs to know where. No path inputs
+  anywhere in the UI.
+- **All outputs are reachable in the UI**: every table, the dnadiff
+  report, run logs, and per run parameter sets are viewable in the app
+  and downloadable as files (TSV/CSV exports, report as text). A run
+  page shows its full artifact list; a "Files" panel lists what the run
+  produced with friendly names ("Genes coverage table",
+  "Alignment report"), each with View and Download buttons.
+- **Projects are managed in the UI**: create, rename, delete (with
+  confirmation), and revisit old runs with their exact parameters and
+  results. Storage quotas, if any, are shown as a plain number
+  ("This project uses 340 MB").
+- **Guided input flow**: adding the reference, queries and panel is a
+  friendly dialog popup (wizard): step 1 pick reference (upload files
+  or fetch from NCBI by accession with a big search box), step 2 add
+  query FASTAs (drag and drop, multiple at once), step 3 optional gene
+  panel, step 4 review and "Compare genomes". Each step validates
+  immediately and explains in plain language what is missing. The
+  dialog pops up automatically when a project is created and can be
+  reopened any time from a big "Add / change inputs" button.
+
+Supporting endpoints (run artifacts surfaced through the API, not the
+filesystem):
+
+```
+GET    /runs/{id}/files              list artifacts with friendly names
+GET    /runs/{id}/files/{name}       view or download one artifact
+GET    /projects/{id}/usage          storage used by the project
+```
 
 ### Deployment (phase 1, VM)
 
@@ -294,9 +338,9 @@ The users are biologists, not developers. Every screen follows:
        caching (align vs postprocess artifacts)
 3. [ ] API server (axum): projects, uploads, runs, parameter validation,
        job runner, result endpoints
-4. [ ] Frontend shell: project pages, guided wizard for inputs, big
-       minimal UI per the UX principles, parameter panel with presets
-       (collapsed "Advanced settings"), run drawer with logs
+4. [ ] Frontend shell: project pages, guided input wizard dialog (big
+       minimal UI per the UX principles), run drawer with logs, run
+       artifact Files panel (view + download, no filesystem exposure)
 5. [ ] Table view: virtualized grid, column picker, filters, exports
        (TSV/CSV)
 6. [ ] Multi query support: run several queries, presence/absence matrix
