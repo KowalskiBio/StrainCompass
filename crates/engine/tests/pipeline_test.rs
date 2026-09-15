@@ -110,7 +110,7 @@ fn build_fixture(dir: &std::path::Path) -> Vec<u8> {
     // 10bp insertion inside G1
     let ins_at = (gene_start(1) + 500) as usize;
     let mut q2: Vec<u8> = q[..ins_at].to_vec();
-    q2.extend(std::iter::repeat(b'A').take(10));
+    q2.extend(std::iter::repeat_n(b'A', 10));
     q2.extend_from_slice(&q[ins_at..]);
 
     // 1489bp deletion removing G3 entirely (plus flanks)
@@ -196,7 +196,12 @@ fn full_pipeline_with_real_tools() {
     assert_eq!(g3.call, Call::Absent, "G3 removed by the deletion");
     assert_eq!(g3.cov_bp, 0);
     let g6 = by_tag("G6");
-    assert_eq!(g6.call, Call::Partial, "G6 truncated at contig end, got {:?}", g6);
+    assert_eq!(
+        g6.call,
+        Call::Partial,
+        "G6 truncated at contig end, got {:?}",
+        g6
+    );
 
     // Gaps: the deletion appears as a ~1.99kb unaligned region containing
     // G3, and the truncation leaves the rest of the reference unaligned.
@@ -205,8 +210,11 @@ fn full_pipeline_with_real_tools() {
         .iter()
         .find(|g| (1900..2100).contains(&g.length))
         .expect("the deletion gap");
-    assert!(del_gap.genes.contains(&"G3".to_string()), "G3 inside the gap");
-    let end_gap = res
+    assert!(
+        del_gap.genes.contains(&"G3".to_string()),
+        "G3 inside the gap"
+    );
+    let _end_gap = res
         .unaligned_gaps
         .iter()
         .find(|g| g.start == 14501 && g.length > 25000)
@@ -256,7 +264,10 @@ fn full_pipeline_with_real_tools() {
         .zip(joined_ref.iter())
         .filter(|(a, b)| a != b)
         .count();
-    assert_eq!(diff, 3, "the TTA edit appears as 3 mismatches after revcomp, got {diff}");
+    assert_eq!(
+        diff, 3,
+        "the TTA edit appears as 3 mismatches after revcomp, got {diff}"
+    );
 
     // ---- cache: second run with only postprocess changes ----
     let params2 = RunParams {
@@ -312,7 +323,12 @@ fn reverse_complement_query_full_coverage() {
     let progress = |_m: &str, _d: u32, _t: u32| {};
     let res = pipeline::run_comparison(&tools, &inputs, &dirs, &progress).unwrap();
     for row in &res.genes_coverage {
-        assert_eq!(row.call, Call::Present, "gene {} not present", row.locus_tag);
+        assert_eq!(
+            row.call,
+            Call::Present,
+            "gene {} not present",
+            row.locus_tag
+        );
         assert!(row.cov_pct > 99.99);
     }
     assert!(res.unaligned_gaps.iter().all(|g| g.length < 200));
@@ -340,6 +356,9 @@ fn reverse_complement_query_full_coverage() {
         .flat_map(|b| b.ref_seq.bytes().zip(b.qry_seq.bytes()))
         .filter(|(r, s)| *r != b'-' && *s != b'-' && r != s)
         .count();
-    assert_eq!(mismatches, 0, "revcomp of the reference must match perfectly");
+    assert_eq!(
+        mismatches, 0,
+        "revcomp of the reference must match perfectly"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

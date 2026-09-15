@@ -9,10 +9,7 @@ use bactiment_types::{validate_params, RunParams};
 use serde::Deserialize;
 use std::sync::MutexGuard;
 
-fn run_dto(
-    conn: &MutexGuard<'_, rusqlite::Connection>,
-    run_id: i64,
-) -> ApiResult<Option<RunDto>> {
+fn run_dto(conn: &MutexGuard<'_, rusqlite::Connection>, run_id: i64) -> ApiResult<Option<RunDto>> {
     let Ok(row) = conn.query_row(
         "SELECT id, project_id, status, step, error, created_at, started_at, finished_at, query_ids
          FROM runs WHERE id = ?1",
@@ -45,11 +42,9 @@ fn run_dto(
     let mut queries = Vec::new();
     for qid in ids {
         let name: Option<String> = conn
-            .query_row(
-                "SELECT display_name FROM files WHERE id = ?1",
-                [qid],
-                |r| r.get(0),
-            )
+            .query_row("SELECT display_name FROM files WHERE id = ?1", [qid], |r| {
+                r.get(0)
+            })
             .ok();
         if let Some(name) = name {
             queries.push(RunQueryDto { file_id: qid, name });
@@ -149,7 +144,10 @@ pub async fn start(
 }
 
 /// GET /runs/{id}
-pub async fn detail(State(state): State<SharedState>, Path(run_id): Path<i64>) -> ApiResult<Json<RunLogDto>> {
+pub async fn detail(
+    State(state): State<SharedState>,
+    Path(run_id): Path<i64>,
+) -> ApiResult<Json<RunLogDto>> {
     let (dto, logs) = {
         let conn = state.db.lock().unwrap();
         let dto = run_dto(&conn, run_id)?
@@ -170,8 +168,7 @@ pub async fn list_for_project(
     Path(project_id): Path<i64>,
 ) -> ApiResult<Json<Vec<RunDto>>> {
     let conn = state.db.lock().unwrap();
-    let mut stmt = conn
-        .prepare("SELECT id FROM runs WHERE project_id = ?1 ORDER BY id DESC")?;
+    let mut stmt = conn.prepare("SELECT id FROM runs WHERE project_id = ?1 ORDER BY id DESC")?;
     let ids: Vec<i64> = stmt
         .query_map([project_id], |r| r.get(0))?
         .collect::<std::result::Result<_, _>>()?;
@@ -186,14 +183,21 @@ pub async fn list_for_project(
 }
 
 /// DELETE /runs/{id}
-pub async fn delete(State(state): State<SharedState>, Path(run_id): Path<i64>) -> ApiResult<&'static str> {
+pub async fn delete(
+    State(state): State<SharedState>,
+    Path(run_id): Path<i64>,
+) -> ApiResult<&'static str> {
     let project_id: Option<i64> = {
         let conn = state.db.lock().unwrap();
-        conn.query_row("SELECT project_id FROM runs WHERE id = ?1", [run_id], |r| r.get(0))
-            .ok()
+        conn.query_row("SELECT project_id FROM runs WHERE id = ?1", [run_id], |r| {
+            r.get(0)
+        })
+        .ok()
     };
     let Some(project_id) = project_id else {
-        return Err(ApiError::NotFound("This run does not exist (anymore).".into()));
+        return Err(ApiError::NotFound(
+            "This run does not exist (anymore).".into(),
+        ));
     };
     {
         let conn = state.db.lock().unwrap();
@@ -206,14 +210,23 @@ pub async fn delete(State(state): State<SharedState>, Path(run_id): Path<i64>) -
 }
 
 /// GET /runs/{id}/params : the parameter set used, plus the defaults.
-pub async fn params(State(state): State<SharedState>, Path(run_id): Path<i64>) -> ApiResult<Json<serde_json::Value>> {
+pub async fn params(
+    State(state): State<SharedState>,
+    Path(run_id): Path<i64>,
+) -> ApiResult<Json<serde_json::Value>> {
     let stored: Option<String> = {
         let conn = state.db.lock().unwrap();
-        conn.query_row("SELECT params_json FROM runs WHERE id = ?1", [run_id], |r| r.get(0))
-            .ok()
+        conn.query_row(
+            "SELECT params_json FROM runs WHERE id = ?1",
+            [run_id],
+            |r| r.get(0),
+        )
+        .ok()
     };
     let Some(stored) = stored else {
-        return Err(ApiError::NotFound("This run does not exist (anymore).".into()));
+        return Err(ApiError::NotFound(
+            "This run does not exist (anymore).".into(),
+        ));
     };
     let params: RunParams = serde_json::from_str(&stored)
         .map_err(|_| ApiError::Internal("The stored parameters could not be read.".into()))?;

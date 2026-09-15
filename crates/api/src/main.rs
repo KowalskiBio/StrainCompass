@@ -17,7 +17,10 @@ use std::sync::{Arc, Mutex};
 fn routes() -> Router<SharedState> {
     Router::new()
         .route("/health", get(|| async { "{\"status\":\"ok\"}" }))
-        .route("/projects", post(routes::projects::create).get(routes::projects::list))
+        .route(
+            "/projects",
+            post(routes::projects::create).get(routes::projects::list),
+        )
         .route(
             "/projects/{id}",
             get(routes::projects::detail)
@@ -25,25 +28,61 @@ fn routes() -> Router<SharedState> {
                 .delete(routes::projects::delete),
         )
         .route("/projects/{id}/files", get(routes::uploads::list_files))
-        .route("/projects/{id}/files/{file_id}", delete(routes::uploads::delete_file))
-        .route("/projects/{id}/reference", post(routes::uploads::upload_reference))
-        .route("/projects/{id}/reference/ncbi", post(routes::ncbi::fetch_reference))
-        .route("/projects/{id}/queries", post(routes::uploads::upload_queries))
+        .route(
+            "/projects/{id}/files/{file_id}",
+            delete(routes::uploads::delete_file),
+        )
+        .route(
+            "/projects/{id}/reference",
+            post(routes::uploads::upload_reference),
+        )
+        .route(
+            "/projects/{id}/reference/ncbi",
+            post(routes::ncbi::fetch_reference),
+        )
+        .route(
+            "/projects/{id}/queries",
+            post(routes::uploads::upload_queries),
+        )
         .route("/projects/{id}/panel", post(routes::uploads::upload_panel))
-        .route("/projects/{id}/runs", post(routes::runs::start).get(routes::runs::list_for_project))
+        .route(
+            "/projects/{id}/runs",
+            post(routes::runs::start).get(routes::runs::list_for_project),
+        )
         .route("/projects/{id}/usage", get(routes::usage::usage))
-        .route("/runs/{id}", get(routes::runs::detail).delete(routes::runs::delete))
+        .route(
+            "/runs/{id}",
+            get(routes::runs::detail).delete(routes::runs::delete),
+        )
         .route("/runs/{id}/params", get(routes::runs::params))
-        .route("/runs/{id}/genes_coverage", get(routes::results::genes_coverage))
-        .route("/runs/{id}/unaligned_gaps", get(routes::results::unaligned_gaps))
-        .route("/runs/{id}/panel_recheck", get(routes::results::panel_recheck))
+        .route(
+            "/runs/{id}/genes_coverage",
+            get(routes::results::genes_coverage),
+        )
+        .route(
+            "/runs/{id}/unaligned_gaps",
+            get(routes::results::unaligned_gaps),
+        )
+        .route(
+            "/runs/{id}/panel_recheck",
+            get(routes::results::panel_recheck),
+        )
         .route("/runs/{id}/matrix", get(routes::results::matrix))
         .route("/runs/{id}/wga", get(routes::results::wga))
         .route("/runs/{id}/gene/{locus}", get(routes::results::gene_detail))
-        .route("/runs/{id}/gene/{locus}/export", get(routes::runfiles::export_gene_alignment))
+        .route(
+            "/runs/{id}/gene/{locus}/export",
+            get(routes::runfiles::export_gene_alignment),
+        )
         .route("/runs/{id}/files", get(routes::runfiles::list_run_files))
-        .route("/runs/{id}/files/{name}", get(routes::runfiles::get_run_file))
-        .route("/runs/{id}/export/{table}", get(routes::export::export_table))
+        .route(
+            "/runs/{id}/files/{name}",
+            get(routes::runfiles::get_run_file),
+        )
+        .route(
+            "/runs/{id}/export/{table}",
+            get(routes::export::export_table),
+        )
         .route(
             "/settings/ncbi_api_key",
             put(routes::settings::put_key).delete(routes::settings::delete_key),
@@ -77,7 +116,8 @@ async fn main() {
     let data_dir = std::path::PathBuf::from(data_dir);
     std::fs::create_dir_all(&data_dir).expect("cannot create the data directory");
 
-    let conn = rusqlite::Connection::open(data_dir.join("bactiment.db")).expect("cannot open the database");
+    let conn = rusqlite::Connection::open(data_dir.join("bactiment.db"))
+        .expect("cannot open the database");
     db::init_db(&conn).expect("cannot initialize the database");
 
     let cores = std::thread::available_parallelism()
@@ -110,15 +150,28 @@ async fn main() {
     let dist = dist.unwrap_or_else(|| data_dir.join("static"));
 
     let app = Router::new()
-        .nest("/api", routes().with_state(state.clone()).layer(DefaultBodyLimit::max(600 * 1024 * 1024)))
+        .nest(
+            "/api",
+            routes()
+                .with_state(state.clone())
+                .layer(DefaultBodyLimit::max(600 * 1024 * 1024)),
+        )
         .fallback_service(
             tower_http::services::ServeDir::new(&dist)
                 .append_index_html_on_directories(true)
-                .fallback(tower_http::services::ServeFile::new(dist.join("index.html"))),
+                .fallback(tower_http::services::ServeFile::new(
+                    dist.join("index.html"),
+                )),
         );
 
-    let listener = tokio::net::TcpListener::bind(&bind).await.expect("cannot bind");
-    tracing::info!("bactiment listening on http://{bind} (data: {}, {} parallel slots)", data_dir.display(), slots);
+    let listener = tokio::net::TcpListener::bind(&bind)
+        .await
+        .expect("cannot bind");
+    tracing::info!(
+        "bactiment listening on http://{bind} (data: {}, {} parallel slots)",
+        data_dir.display(),
+        slots
+    );
     spawn_maintenance();
     axum::serve(listener, app)
         .with_graceful_shutdown(async {

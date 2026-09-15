@@ -123,7 +123,7 @@ pub fn gene_coverage(
             let (m, ind) = match (pw.ref_row[c], pw.qry_row[c]) {
                 (b'-', b'-') => continue,
                 (b'-', _) => (0u64, 1u64), // insertion in query
-                (_, b'-') => (0, 1),      // insertion in reference
+                (_, b'-') => (0, 1),       // insertion in reference
                 (r, q) => {
                     if r != q {
                         (1, 0)

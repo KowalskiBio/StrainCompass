@@ -194,10 +194,24 @@ pub struct ParamSpec {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ParamKind {
-    Int { default: i64, min: i64, max: i64 },
-    Float { default: f64, min: f64, max: f64 },
-    OptionalInt { default: Option<i64>, min: i64, max: i64 },
-    Bool { default: bool },
+    Int {
+        default: i64,
+        min: i64,
+        max: i64,
+    },
+    Float {
+        default: f64,
+        min: f64,
+        max: f64,
+    },
+    OptionalInt {
+        default: Option<i64>,
+        min: i64,
+        max: i64,
+    },
+    Bool {
+        default: bool,
+    },
 }
 
 impl RunParams {
@@ -242,10 +256,7 @@ impl RunParams {
     /// Stable string used in cache keys: only inputs and align-layer
     /// parameters invalidate a cached alignment.
     pub fn align_signature(&self) -> String {
-        format!(
-            "l={:?};b={:?}",
-            self.nucmer_minmatch, self.nucmer_breaklen
-        )
+        format!("l={:?};b={:?}", self.nucmer_minmatch, self.nucmer_breaklen)
     }
 }
 

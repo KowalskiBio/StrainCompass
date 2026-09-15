@@ -171,7 +171,9 @@ pub async fn rename(
             rusqlite::params![name, id],
         )?;
         if n == 0 {
-            return Err(ApiError::NotFound("This project does not exist (anymore).".into()));
+            return Err(ApiError::NotFound(
+                "This project does not exist (anymore).".into(),
+            ));
         }
     }
     detail(State(state), Path(id)).await
@@ -184,7 +186,9 @@ pub async fn delete(
     let conn = state.db.lock().unwrap();
     let n = conn.execute("DELETE FROM projects WHERE id = ?1", [id])?;
     if n == 0 {
-        return Err(ApiError::NotFound("This project does not exist (anymore).".into()));
+        return Err(ApiError::NotFound(
+            "This project does not exist (anymore).".into(),
+        ));
     }
     drop(conn);
     let dir = state.project_dir(id);

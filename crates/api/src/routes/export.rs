@@ -262,7 +262,10 @@ fn sort_coverage(rows: &mut [GeneCoverageRow], q: &TableQuery) {
             "end" => a.end.cmp(&b.end),
             "length" => a.length.cmp(&b.length),
             "cov_bp" => a.cov_bp.cmp(&b.cov_bp),
-            "cov_pct" => a.cov_pct.partial_cmp(&b.cov_pct).unwrap_or(std::cmp::Ordering::Equal),
+            "cov_pct" => a
+                .cov_pct
+                .partial_cmp(&b.cov_pct)
+                .unwrap_or(std::cmp::Ordering::Equal),
             "call" => a.call.as_str().cmp(b.call.as_str()),
             "best_identity" => a
                 .best_identity
@@ -303,7 +306,10 @@ fn coverage_cols(cols: &Option<String>) -> Vec<String> {
             .map(|s| s.trim().to_string())
             .filter(|s| COVERAGE_ALL_COLS.iter().any(|(k, _)| *k == *s))
             .collect(),
-        _ => COVERAGE_ALL_COLS.iter().map(|(k, _)| k.to_string()).collect(),
+        _ => COVERAGE_ALL_COLS
+            .iter()
+            .map(|(k, _)| k.to_string())
+            .collect(),
     }
 }
 

@@ -64,8 +64,8 @@ pub fn parse_fasta_str(text: &str) -> Result<Vec<FastaRecord>> {
             for b in line.bytes() {
                 let b = b.to_ascii_uppercase();
                 match b {
-                    b'A' | b'C' | b'G' | b'T' | b'U' | b'R' | b'Y' | b'S' | b'W' | b'K'
-                    | b'M' | b'B' | b'D' | b'H' | b'V' | b'N' | b'-' | b'*' => cur_seq.push(b),
+                    b'A' | b'C' | b'G' | b'T' | b'U' | b'R' | b'Y' | b'S' | b'W' | b'K' | b'M'
+                    | b'B' | b'D' | b'H' | b'V' | b'N' | b'-' | b'*' => cur_seq.push(b),
                     _ => {
                         return Err(friendly(format!(
                             "This FASTA file contains an unexpected character ({}) in the sequence. The file may be corrupted or not a FASTA file.",
@@ -87,9 +87,7 @@ pub fn parse_fasta_str(text: &str) -> Result<Vec<FastaRecord>> {
         });
     }
     if records.is_empty() {
-        return Err(friendly(
-            "No sequences were found in this FASTA file.",
-        ));
+        return Err(friendly("No sequences were found in this FASTA file."));
     }
     Ok(records)
 }

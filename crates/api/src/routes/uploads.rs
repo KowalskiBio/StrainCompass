@@ -62,10 +62,7 @@ async fn store_upload(
     match role {
         "reference_fasta" | "query" | "panel" => {
             fasta::parse_fasta_str(&text).map_err(|e| {
-                ApiError::BadRequest(format!(
-                    "\u{201c}{display_name}\u{201d}: {}",
-                    e
-                ))
+                ApiError::BadRequest(format!("\u{201c}{display_name}\u{201d}: {}", e))
             })?;
         }
         "reference_gff" => {
@@ -77,7 +74,11 @@ async fn store_upload(
     }
     let uploads = state.uploads_dir(project_id);
     std::fs::create_dir_all(&uploads)?;
-    let stored_name = format!("{}_{}", Uuid::new_v4().simple(), safe_filename(display_name));
+    let stored_name = format!(
+        "{}_{}",
+        Uuid::new_v4().simple(),
+        safe_filename(display_name)
+    );
     let path = uploads.join(&stored_name);
     let mut f = std::fs::File::create(&path)?;
     f.write_all(&bytes)?;
@@ -88,7 +89,14 @@ async fn store_upload(
         conn.execute(
             "INSERT INTO files (project_id, role, display_name, stored_name, size, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![project_id, role, display_name, stored_name, bytes.len() as i64, created_at],
+            rusqlite::params![
+                project_id,
+                role,
+                display_name,
+                stored_name,
+                bytes.len() as i64,
+                created_at
+            ],
         )?;
         conn.last_insert_rowid()
     };
@@ -110,17 +118,14 @@ pub async fn upload_reference(
     ensure_project(&state, project_id).await?;
     let mut fasta_bytes: Option<(String, Vec<u8>)> = None;
     let mut gff_bytes: Option<(String, Vec<u8>)> = None;
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| ApiError::BadRequest("The upload could not be read. Please try again.".into()))?
-    {
+    while let Some(field) = multipart.next_field().await.map_err(|_| {
+        ApiError::BadRequest("The upload could not be read. Please try again.".into())
+    })? {
         let name = field.name().unwrap_or("").to_string();
         let filename = field.file_name().unwrap_or("file").to_string();
-        let data = field
-            .bytes()
-            .await
-            .map_err(|_| ApiError::BadRequest("The upload was interrupted. Please try again.".into()))?;
+        let data = field.bytes().await.map_err(|_| {
+            ApiError::BadRequest("The upload was interrupted. Please try again.".into())
+        })?;
         match name.as_str() {
             "fasta" => fasta_bytes = Some((filename, data.to_vec())),
             "gff" => gff_bytes = Some((filename, data.to_vec())),
@@ -156,22 +161,17 @@ pub async fn upload_queries(
 ) -> ApiResult<Json<Vec<FileDto>>> {
     ensure_project(&state, project_id).await?;
     let mut created = Vec::new();
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| ApiError::BadRequest("The upload could not be read. Please try again.".into()))?
-    {
+    while let Some(field) = multipart.next_field().await.map_err(|_| {
+        ApiError::BadRequest("The upload could not be read. Please try again.".into())
+    })? {
         let filename = field.file_name().unwrap_or("").to_string();
-        let data = field
-            .bytes()
-            .await
-            .map_err(|_| ApiError::BadRequest("The upload was interrupted. Please try again.".into()))?;
+        let data = field.bytes().await.map_err(|_| {
+            ApiError::BadRequest("The upload was interrupted. Please try again.".into())
+        })?;
         if filename.is_empty() {
             continue;
         }
-        created.push(
-            store_upload(&state, project_id, "query", &filename, data.to_vec()).await?,
-        );
+        created.push(store_upload(&state, project_id, "query", &filename, data.to_vec()).await?);
     }
     if created.is_empty() {
         return Err(ApiError::BadRequest(
@@ -189,16 +189,13 @@ pub async fn upload_panel(
 ) -> ApiResult<Json<FileDto>> {
     ensure_project(&state, project_id).await?;
     let mut got: Option<(String, Vec<u8>)> = None;
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| ApiError::BadRequest("The upload could not be read. Please try again.".into()))?
-    {
+    while let Some(field) = multipart.next_field().await.map_err(|_| {
+        ApiError::BadRequest("The upload could not be read. Please try again.".into())
+    })? {
         let filename = field.file_name().unwrap_or("").to_string();
-        let data = field
-            .bytes()
-            .await
-            .map_err(|_| ApiError::BadRequest("The upload was interrupted. Please try again.".into()))?;
+        let data = field.bytes().await.map_err(|_| {
+            ApiError::BadRequest("The upload was interrupted. Please try again.".into())
+        })?;
         if filename.is_empty() {
             continue;
         }
@@ -253,7 +250,9 @@ pub async fn delete_file(
         .ok()
     };
     let Some(stored_name) = stored_name else {
-        return Err(ApiError::NotFound("This file does not exist (anymore).".into()));
+        return Err(ApiError::NotFound(
+            "This file does not exist (anymore).".into(),
+        ));
     };
     {
         let conn = state.db.lock().unwrap();
@@ -291,11 +290,15 @@ pub async fn delete_role(state: &SharedState, project_id: i64, role: &str) -> Ap
 pub async fn ensure_project(state: &SharedState, project_id: i64) -> ApiResult<()> {
     let exists = {
         let conn = state.db.lock().unwrap();
-        conn.query_row("SELECT 1 FROM projects WHERE id = ?1", [project_id], |_| Ok(()))
-            .is_ok()
+        conn.query_row("SELECT 1 FROM projects WHERE id = ?1", [project_id], |_| {
+            Ok(())
+        })
+        .is_ok()
     };
     if !exists {
-        return Err(ApiError::NotFound("This project does not exist (anymore).".into()));
+        return Err(ApiError::NotFound(
+            "This project does not exist (anymore).".into(),
+        ));
     }
     Ok(())
 }

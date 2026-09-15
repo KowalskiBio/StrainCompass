@@ -7,8 +7,8 @@ use crate::state::SharedState;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use bactiment_types::{
-    Call, GapRow, GeneCoverageRow, GeneDetail, MatrixRow, Page, PanelRow, TableQuery,
-    WgaData, WgaQuery,
+    Call, GapRow, GeneCoverageRow, GeneDetail, MatrixRow, Page, PanelRow, TableQuery, WgaData,
+    WgaQuery,
 };
 use serde_json::Value;
 
@@ -32,16 +32,18 @@ fn resolve_query_id(
             }
             q
         }
-        None => *query_ids.first().ok_or_else(|| {
-            ApiError::BadRequest("This run has no queries.".into())
-        })?,
+        None => *query_ids
+            .first()
+            .ok_or_else(|| ApiError::BadRequest("This run has no queries.".into()))?,
     };
     Ok((project_id, run_id, qid))
 }
 
 fn matches_search(row_text: &str, search: &Option<String>) -> bool {
     match search {
-        Some(s) if !s.trim().is_empty() => row_text.to_lowercase().contains(&s.trim().to_lowercase()),
+        Some(s) if !s.trim().is_empty() => {
+            row_text.to_lowercase().contains(&s.trim().to_lowercase())
+        }
         _ => true,
     }
 }
@@ -59,7 +61,7 @@ fn row_str(row: &GeneCoverageRow) -> String {
     format!("{} {} {}", row.locus_tag, row.symbol, row.seqid)
 }
 
-fn sort_rows(rows: &mut Vec<GeneCoverageRow>, by: &Option<String>, dir: &Option<String>) {
+fn sort_rows(rows: &mut [GeneCoverageRow], by: &Option<String>, dir: &Option<String>) {
     let asc = dir.as_deref() != Some("desc");
     let by = by.clone().unwrap_or_default();
     rows.sort_by(|a, b| {
@@ -72,7 +74,10 @@ fn sort_rows(rows: &mut Vec<GeneCoverageRow>, by: &Option<String>, dir: &Option<
             "end" => a.end.cmp(&b.end),
             "length" => a.length.cmp(&b.length),
             "cov_bp" => a.cov_bp.cmp(&b.cov_bp),
-            "cov_pct" => a.cov_pct.partial_cmp(&b.cov_pct).unwrap_or(std::cmp::Ordering::Equal),
+            "cov_pct" => a
+                .cov_pct
+                .partial_cmp(&b.cov_pct)
+                .unwrap_or(std::cmp::Ordering::Equal),
             "call" => a.call.as_str().cmp(b.call.as_str()),
             "best_identity" => a
                 .best_identity
@@ -99,9 +104,7 @@ pub async fn genes_coverage(
     let (project_id, run_id, qid) = resolve_query_id(&state, run_id, q.query_id)?;
     let res = jobs::load_query_result(&state, project_id, run_id, qid)?;
     let mut rows = res.genes_coverage;
-    rows.retain(|r| {
-        matches_search(&row_str(r), &q.search) && call_filter_ok(r.call, &q.call)
-    });
+    rows.retain(|r| matches_search(&row_str(r), &q.search) && call_filter_ok(r.call, &q.call));
     sort_rows(&mut rows, &q.sort_by, &q.sort_dir);
     let total = rows.len() as u64;
     let page = apply_page(&rows, q.page, q.page_size);
@@ -159,21 +162,23 @@ pub async fn panel_recheck(
     let (project_id, run_id, qid) = resolve_query_id(&state, run_id, q.query_id)?;
     let res = jobs::load_query_result(&state, project_id, run_id, qid)?;
     let mut rows = res.panel.ok_or_else(|| {
-        ApiError::BadRequest(
-            "This run has no gene panel results (no panel was provided).".into(),
-        )
+        ApiError::BadRequest("This run has no gene panel results (no panel was provided).".into())
     })?;
-    rows.retain(|r| {
-        matches_search(&r.gene_id, &q.search) && call_filter_ok(r.call, &q.call)
-    });
+    rows.retain(|r| matches_search(&r.gene_id, &q.search) && call_filter_ok(r.call, &q.call));
     let asc = q.sort_dir.as_deref() != Some("desc");
     let by = q.sort_by.clone().unwrap_or_default();
     rows.sort_by(|a, b| {
         let ord = match by.as_str() {
             "gene_id" => a.gene_id.cmp(&b.gene_id),
             "qlen" => a.qlen.cmp(&b.qlen),
-            "cov_pct" => a.cov_pct.partial_cmp(&b.cov_pct).unwrap_or(std::cmp::Ordering::Equal),
-            "identity" => a.identity.partial_cmp(&b.identity).unwrap_or(std::cmp::Ordering::Equal),
+            "cov_pct" => a
+                .cov_pct
+                .partial_cmp(&b.cov_pct)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            "identity" => a
+                .identity
+                .partial_cmp(&b.identity)
+                .unwrap_or(std::cmp::Ordering::Equal),
             "call" => a.call.as_str().cmp(b.call.as_str()),
             _ => a.gene_id.cmp(&b.gene_id),
         };
@@ -226,7 +231,12 @@ pub async fn matrix(
             });
         }
     }
-    rows.retain(|r| matches_search(&format!("{} {} {}", r.locus_tag, r.symbol, r.seqid), &q.search));
+    rows.retain(|r| {
+        matches_search(
+            &format!("{} {} {}", r.locus_tag, r.symbol, r.seqid),
+            &q.search,
+        )
+    });
     if q.call.as_deref() == Some("not_present") {
         rows.retain(|r| r.calls.iter().any(|c| *c != Call::Present));
     }
@@ -250,7 +260,10 @@ pub async fn matrix(
 }
 
 /// GET /runs/{id}/wga
-pub async fn wga(State(state): State<SharedState>, Path(run_id): Path<i64>) -> ApiResult<Json<WgaData>> {
+pub async fn wga(
+    State(state): State<SharedState>,
+    Path(run_id): Path<i64>,
+) -> ApiResult<Json<WgaData>> {
     let (project_id, query_ids, status) = jobs::run_meta(&state, run_id)?;
     if status != "succeeded" {
         return Err(ApiError::BadRequest(
@@ -260,8 +273,9 @@ pub async fn wga(State(state): State<SharedState>, Path(run_id): Path<i64>) -> A
     let reference: Value = jobs::load_reference_json(&state, project_id, run_id)?;
     let lengths: Vec<(String, u64)> = serde_json::from_value(reference["lengths"].clone())
         .map_err(|_| ApiError::Internal("The reference metadata is unreadable.".into()))?;
-    let genes: Vec<bactiment_types::WgaGene> = serde_json::from_value(reference["genes"].clone())
-        .map_err(|_| ApiError::Internal("The reference metadata is unreadable.".into()))?;
+    let genes: Vec<bactiment_types::WgaGene> =
+        serde_json::from_value(reference["genes"].clone())
+            .map_err(|_| ApiError::Internal("The reference metadata is unreadable.".into()))?;
     let mut queries = Vec::new();
     for qid in &query_ids {
         let res = jobs::load_query_result(&state, project_id, run_id, *qid)?;
@@ -286,13 +300,7 @@ pub async fn gene_detail(
     let (project_id, _, _) = jobs::run_meta(&state, run_id)?;
     let (ref_fa, ref_gff, params, sources) = jobs::msa_sources(&state, project_id, run_id)?;
     let borrowed: Vec<_> = sources.iter().map(|s| s.borrow()).collect();
-    let detail = bactiment_engine::pipeline::gene_detail(
-        &ref_fa,
-        &ref_gff,
-        &params,
-        &locus,
-        &borrowed,
-    )?;
+    let detail =
+        bactiment_engine::pipeline::gene_detail(&ref_fa, &ref_gff, &params, &locus, &borrowed)?;
     Ok(Json(detail))
 }
-

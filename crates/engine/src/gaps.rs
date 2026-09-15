@@ -62,6 +62,6 @@ pub fn unaligned_gaps(
             });
         }
     }
-    rows.sort_by(|a, b| (a.seqid.clone(), a.start).cmp(&(b.seqid.clone(), b.start)));
+    rows.sort_by_key(|a| (a.seqid.clone(), a.start));
     rows
 }

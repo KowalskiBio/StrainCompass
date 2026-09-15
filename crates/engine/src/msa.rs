@@ -85,7 +85,11 @@ pub fn reconstruct(a: &Alignment, ref_bases: &[u8], qry_bases: &[u8]) -> Pairwis
         i: 0,
         j: 0,
         r: a.ref_start - 1,
-        q: if a.qry_rev { a.qry_hi + 1 } else { a.qry_lo - 1 },
+        q: if a.qry_rev {
+            a.qry_hi + 1
+        } else {
+            a.qry_lo - 1
+        },
     };
 
     for &d in &a.deltas {
@@ -223,7 +227,11 @@ pub fn premature_stops(seq: &[u8]) -> Vec<(u64, u64)> {
 
 fn is_stop(codon: &[u8]) -> bool {
     matches!(
-        (codon[0].to_ascii_uppercase(), codon[1].to_ascii_uppercase(), codon[2].to_ascii_uppercase()),
+        (
+            codon[0].to_ascii_uppercase(),
+            codon[1].to_ascii_uppercase(),
+            codon[2].to_ascii_uppercase()
+        ),
         (b'T', b'A', b'A') | (b'T', b'A', b'G') | (b'T', b'G', b'A')
     )
 }
@@ -240,13 +248,7 @@ pub fn orient_for_strand(strand: i8, ref_row: Vec<u8>, qry_row: Vec<u8>) -> (Vec
 fn revcomp_gaps(row: &[u8]) -> Vec<u8> {
     row.iter()
         .rev()
-        .map(|&b| {
-            if b == b'-' {
-                b'-'
-            } else {
-                revcomp(&[b])[0]
-            }
-        })
+        .map(|&b| if b == b'-' { b'-' } else { revcomp(&[b])[0] })
         .collect()
 }
 

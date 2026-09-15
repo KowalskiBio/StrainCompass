@@ -46,7 +46,8 @@ fn parse_attrs(field: &str) -> HashMap<String, String> {
 pub fn parse_gff_str(text: &str) -> Result<Vec<Gene>> {
     let mut gene_rows: Vec<Gene> = Vec::new();
     // (seqid, start, end, strand, feature type, attrs)
-    let mut cds_rows: Vec<(String, u64, u64, i8, String, HashMap<String, String>)> = Vec::new();
+    type CdsRow = (String, u64, u64, i8, String, HashMap<String, String>);
+    let mut cds_rows: Vec<CdsRow> = Vec::new();
     let mut saw_gff_header = false;
     let mut n_data_rows = 0;
 
@@ -157,7 +158,11 @@ pub fn parse_gff_str(text: &str) -> Result<Vec<Gene>> {
                 end,
                 strand,
                 locus_tag: locus_tag.clone(),
-                symbol: attrs.get("gene").or_else(|| attrs.get("Name")).cloned().unwrap_or_default(),
+                symbol: attrs
+                    .get("gene")
+                    .or_else(|| attrs.get("Name"))
+                    .cloned()
+                    .unwrap_or_default(),
                 biotype: ftype.clone(),
             }
         });
@@ -168,9 +173,10 @@ pub fn parse_gff_str(text: &str) -> Result<Vec<Gene>> {
             entry.biotype = ftype;
         }
     }
-    let mut genes: Vec<Gene> = order.into_iter().filter_map(|t| by_tag.remove(&t)).collect();
-    genes.sort_by(|a, b| {
-        (a.seqid.clone(), a.start, a.end).cmp(&(b.seqid.clone(), b.start, b.end))
-    });
+    let mut genes: Vec<Gene> = order
+        .into_iter()
+        .filter_map(|t| by_tag.remove(&t))
+        .collect();
+    genes.sort_by_key(|a| (a.seqid.clone(), a.start, a.end));
     Ok(genes)
 }

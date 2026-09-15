@@ -75,11 +75,7 @@ pub fn file_hash(path: &Path) -> std::io::Result<String> {
 
 /// The alignment cache key: reference content + query content + align
 /// layer parameters.
-pub fn align_cache_key(
-    ref_hash: &str,
-    qry_hash: &str,
-    params: &RunParams,
-) -> String {
+pub fn align_cache_key(ref_hash: &str, qry_hash: &str, params: &RunParams) -> String {
     let mut h = Sha256::new();
     h.update(ref_hash.as_bytes());
     h.update(b"|");
@@ -115,16 +111,15 @@ pub fn run_comparison(
     let qry_hash = file_hash(inputs.qry_fasta)?;
     let key = align_cache_key(&ref_hash, &qry_hash, inputs.params);
     let cache_delta = dirs.cache.join(format!("{key}.delta"));
-    let (delta_path, cached) =
-        tools.run_nucmer(
-            inputs.ref_fasta,
-            inputs.qry_fasta,
-            dirs.work,
-            "cmp",
-            inputs.params.nucmer_minmatch,
-            inputs.params.nucmer_breaklen,
-            Some(&cache_delta),
-        )?;
+    let (delta_path, cached) = tools.run_nucmer(
+        inputs.ref_fasta,
+        inputs.qry_fasta,
+        dirs.work,
+        "cmp",
+        inputs.params.nucmer_minmatch,
+        inputs.params.nucmer_breaklen,
+        Some(&cache_delta),
+    )?;
     let _ = cached;
 
     progress("Scoring genes by alignment coverage", 2, 3);
@@ -311,12 +306,21 @@ pub fn gene_detail(
     let gene = genes
         .iter()
         .find(|g| g.locus_tag == locus_tag)
-        .ok_or_else(|| crate::friendly(format!("The gene {locus_tag} was not found in the reference annotation.")))?;
+        .ok_or_else(|| {
+            crate::friendly(format!(
+                "The gene {locus_tag} was not found in the reference annotation."
+            ))
+        })?;
     let ref_records = fasta::parse_fasta(ref_fasta)?;
     let ref_rec = ref_records
         .iter()
         .find(|r| r.id == gene.seqid)
-        .ok_or_else(|| crate::friendly(format!("The reference sequence {} was not found.", gene.seqid)))?;
+        .ok_or_else(|| {
+            crate::friendly(format!(
+                "The reference sequence {} was not found.",
+                gene.seqid
+            ))
+        })?;
     let gene_len = gene.end - gene.start + 1;
     let reference_seq = String::from_utf8_lossy(&fasta::subseq(
         ref_rec,
@@ -344,10 +348,7 @@ pub fn gene_detail(
         // Reconstruct blocks overlapping the gene.
         let mut blocks = Vec::new();
         for a in &delta.alignments {
-            if a.ref_seqid != gene.seqid
-                || a.ref_end < gene.start
-                || a.ref_start > gene.end
-            {
+            if a.ref_seqid != gene.seqid || a.ref_end < gene.start || a.ref_start > gene.end {
                 continue;
             }
             let Some(qry_rec) = qry_records.iter().find(|r| r.id == a.qry_seqid) else {

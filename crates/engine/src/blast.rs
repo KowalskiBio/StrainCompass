@@ -10,6 +10,7 @@ use std::process::Command;
 
 /// Run the panel recheck for one query. `workdir` receives the blast
 /// database files; it must be writable and private to this comparison.
+#[allow(clippy::too_many_arguments)]
 pub fn panel_recheck(
     tools: &ToolPaths,
     panel_fasta: &Path,

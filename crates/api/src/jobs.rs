@@ -2,7 +2,9 @@
 
 use crate::error::ApiResult;
 use crate::state::SharedState;
-use bactiment_engine::pipeline::{self, ComparisonInputs, ComparisonResult, QueryAlignmentSource, WorkDirs};
+use bactiment_engine::pipeline::{
+    self, ComparisonInputs, ComparisonResult, QueryAlignmentSource, WorkDirs,
+};
 use bactiment_engine::tools::ToolPaths;
 use bactiment_types::{MatrixRow, RunParams};
 use std::io::Write;
@@ -84,8 +86,9 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
         )
         .map_err(|_| crate::error::ApiError::NotFound("This run does not exist.".into()))?
     };
-    let params: RunParams = serde_json::from_str(&params_json)
-        .map_err(|_| crate::error::ApiError::Internal("Stored parameters are unreadable.".into()))?;
+    let params: RunParams = serde_json::from_str(&params_json).map_err(|_| {
+        crate::error::ApiError::Internal("Stored parameters are unreadable.".into())
+    })?;
     let query_file_ids: Vec<i64> = serde_json::from_str(&query_ids)
         .map_err(|_| crate::error::ApiError::Internal("Stored query list is unreadable.".into()))?;
 
@@ -101,9 +104,11 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
 
     // 2. resolve inputs
     let (ref_fasta, ref_gff) = crate::routes::uploads::reference_paths(state, project_id)?
-        .ok_or_else(|| crate::error::ApiError::BadRequest(
-            "Please add a reference genome (FASTA + GFF) before comparing.".into(),
-        ))?;
+        .ok_or_else(|| {
+            crate::error::ApiError::BadRequest(
+                "Please add a reference genome (FASTA + GFF) before comparing.".into(),
+            )
+        })?;
     let panel_path: Option<(String, PathBuf)> = {
         let conn = state.db.lock().unwrap();
         conn.query_row(
@@ -311,7 +316,9 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
             })
             .unwrap(),
         )?;
-        ctx.log(&format!("Wrote the result tables for \u{201c}{name}\u{201d} to disk."));
+        ctx.log(&format!(
+            "Wrote the result tables for \u{201c}{name}\u{201d} to disk."
+        ));
         let _ = name;
     }
     std::fs::write(run_dir.join("params.json"), &params_json)?;
@@ -320,8 +327,10 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
         let genes = bactiment_engine::gff::parse_gff(&staged_gff)?;
         let recs = bactiment_engine::fasta::parse_fasta(&staged_fa)?;
         let lengths: Vec<(String, u64)> = {
-            let mut v: Vec<(String, u64)> =
-                recs.iter().map(|r| (r.id.clone(), r.seq.len() as u64)).collect();
+            let mut v: Vec<(String, u64)> = recs
+                .iter()
+                .map(|r| (r.id.clone(), r.seq.len() as u64))
+                .collect();
             v.sort();
             v
         };
@@ -348,7 +357,7 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
     }
 
     // 7. the presence/absence matrix across queries
-    if results.len() >= 1 {
+    if !results.is_empty() {
         let mut rows: Vec<MatrixRow> = Vec::new();
         let n = results.len();
         for (i, g) in results[0].2.genes_coverage.iter().enumerate() {
@@ -370,7 +379,14 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
                 cov_pcts: covs,
             });
         }
-        write_matrix_tsv(&rows, &results.iter().map(|(_, n, _)| n.clone()).collect::<Vec<_>>(), &run_dir.join("matrix.tsv"))?;
+        write_matrix_tsv(
+            &rows,
+            &results
+                .iter()
+                .map(|(_, n, _)| n.clone())
+                .collect::<Vec<_>>(),
+            &run_dir.join("matrix.tsv"),
+        )?;
         ctx.log("Built the presence/absence table across all queries.");
     }
 
@@ -397,7 +413,11 @@ pub struct ComparisonResultJson {
     pub ref_lengths: Vec<(String, u64)>,
 }
 
-fn write_matrix_tsv(rows: &[MatrixRow], query_names: &[String], out: &std::path::Path) -> std::io::Result<()> {
+fn write_matrix_tsv(
+    rows: &[MatrixRow],
+    query_names: &[String],
+    out: &std::path::Path,
+) -> std::io::Result<()> {
     let mut w = std::io::BufWriter::new(std::fs::File::create(out)?);
     write!(w, "locus_tag\tsymbol\tbiotype\tseqid\tstart\tend")?;
     for n in query_names {
@@ -446,19 +466,14 @@ pub fn load_reference_json(
 ) -> ApiResult<serde_json::Value> {
     let path = state.run_dir(project_id, run_id).join("reference.json");
     let bytes = std::fs::read(&path).map_err(|_| {
-        crate::error::ApiError::NotFound(
-            "The reference data for this run is not available.".into(),
-        )
+        crate::error::ApiError::NotFound("The reference data for this run is not available.".into())
     })?;
     serde_json::from_slice(&bytes)
         .map_err(|_| crate::error::ApiError::Internal("A result file is unreadable.".into()))
 }
 
 /// Resolve (project_id, query_file_ids, status) for a run.
-pub fn run_meta(
-    state: &SharedState,
-    run_id: i64,
-) -> ApiResult<(i64, Vec<i64>, String)> {
+pub fn run_meta(state: &SharedState, run_id: i64) -> ApiResult<(i64, Vec<i64>, String)> {
     let conn = state.db.lock().unwrap();
     conn.query_row(
         "SELECT project_id, query_ids, status FROM runs WHERE id = ?1",
@@ -490,17 +505,17 @@ pub fn msa_sources(
             [run_id],
             |r| r.get(0),
         )?;
-        serde_json::from_str(&json).map_err(|_| crate::error::ApiError::Internal("The stored parameters are unreadable.".into()))?
+        serde_json::from_str(&json).map_err(|_| {
+            crate::error::ApiError::Internal("The stored parameters are unreadable.".into())
+        })?
     };
     let mut sources = Vec::new();
     for qid in query_ids {
         let name: Option<String> = {
             let conn = state.db.lock().unwrap();
-            conn.query_row(
-                "SELECT display_name FROM files WHERE id = ?1",
-                [qid],
-                |r| r.get(0),
-            )
+            conn.query_row("SELECT display_name FROM files WHERE id = ?1", [qid], |r| {
+                r.get(0)
+            })
             .ok()
         };
         let Some(name) = name else { continue };

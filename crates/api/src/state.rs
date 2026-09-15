@@ -17,7 +17,9 @@ impl AppState {
         self.data_dir.join("projects").join(project_id.to_string())
     }
     pub fn run_dir(&self, project_id: i64, run_id: i64) -> PathBuf {
-        self.project_dir(project_id).join("runs").join(run_id.to_string())
+        self.project_dir(project_id)
+            .join("runs")
+            .join(run_id.to_string())
     }
     pub fn uploads_dir(&self, project_id: i64) -> PathBuf {
         self.project_dir(project_id).join("uploads")

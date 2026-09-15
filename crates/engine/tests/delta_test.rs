@@ -58,9 +58,7 @@ fn reconstructs_alignment_rows() {
     let a = &d.alignments[0];
     // Deterministic reference and the matching query: build ref, then apply
     // the same edits used to produce this delta.
-    let ref_seq: Vec<u8> = (0..3000)
-        .map(|i| b"ACGT"[i % 4])
-        .collect();
+    let ref_seq: Vec<u8> = (0..3000).map(|i| b"ACGT"[i % 4]).collect();
     // query = ref with SNPs at 0-based 300,600,900,1200,1500, insertion of
     // 10 bases after index 1800, deletion of ref bases 2390..2397 (0-based).
     let mut q: Vec<u8> = ref_seq.clone();
@@ -111,7 +109,7 @@ fn reconstructs_alignment_rows() {
         .windows(7)
         .position(|w| w.iter().all(|&c| c == b'-'))
         .expect("7 dash run in qry row");
-    assert_eq!(pw.qry_row[qidx..qidx + 7].iter().all(|&c| c == b'-'), true);
+    assert!(pw.qry_row[qidx..qidx + 7].iter().all(|&c| c == b'-'));
     assert_eq!(pw.ref_pos[qidx], 2391);
     assert_eq!(pw.ref_pos[qidx + 6], 2397);
 }

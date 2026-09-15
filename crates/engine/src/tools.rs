@@ -50,7 +50,12 @@ impl ToolPaths {
     /// separated) then from PATH.
     pub fn discover() -> Result<ToolPaths> {
         let extra: Vec<PathBuf> = std::env::var("BACTIMENT_TOOLS_DIRS")
-            .map(|v| v.split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect())
+            .map(|v| {
+                v.split(':')
+                    .filter(|s| !s.is_empty())
+                    .map(PathBuf::from)
+                    .collect()
+            })
             .unwrap_or_default();
         Ok(ToolPaths {
             nucmer: find_tool("nucmer", &extra)?,
@@ -64,6 +69,7 @@ impl ToolPaths {
 
     /// Run nucmer with the given parameters. If `cache_delta` exists and
     /// is non-empty, it is reused and nucmer is not run.
+    #[allow(clippy::too_many_arguments)]
     pub fn run_nucmer(
         &self,
         ref_fasta: &Path,

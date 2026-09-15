@@ -1,8 +1,8 @@
 //! Fetch a reference genome (FASTA + GFF) from NCBI by accession.
 
 use crate::error::{ApiError, ApiResult};
-use crate::state::SharedState;
 use crate::routes::uploads::ensure_project;
+use crate::state::SharedState;
 use axum::extract::{Path, State};
 use axum::Json;
 use serde::Deserialize;
@@ -26,7 +26,7 @@ fn valid_accession(acc: &str) -> bool {
                 (pfx == "GCF" || pfx == "GCA")
                     && v.len() == 3
                     && v.chars().all(|c| c.is_ascii_digit())
-                    && n.len() >= 1
+                    && !n.is_empty()
                     && n.chars().all(|c| c.is_ascii_digit())
             }
             _ => false,
@@ -71,7 +71,9 @@ pub async fn fetch_reference(
         esearch.push_str(&format!("&api_key={k}"));
     }
     let resp = c.get(&esearch).send().await.map_err(|e| {
-        ApiError::Internal(format!("NCBI could not be reached. Please try again in a moment. ({e})"))
+        ApiError::Internal(format!(
+            "NCBI could not be reached. Please try again in a moment. ({e})"
+        ))
     })?;
     if !resp.status().is_success() {
         return Err(ApiError::BadRequest(format!(
@@ -98,7 +100,9 @@ pub async fn fetch_reference(
         esummary.push_str(&format!("&api_key={k}"));
     }
     let resp = c.get(&esummary).send().await.map_err(|e| {
-        ApiError::Internal(format!("NCBI could not be reached. Please try again in a moment. ({e})"))
+        ApiError::Internal(format!(
+            "NCBI could not be reached. Please try again in a moment. ({e})"
+        ))
     })?;
     let json: serde_json::Value = resp.json().await.map_err(|_| {
         ApiError::BadRequest("NCBI returned an unexpected answer. Please try again.".into())
@@ -134,11 +138,19 @@ pub async fn fetch_reference(
     crate::routes::uploads::delete_role(&state, project_id, "reference_fasta").await?;
     crate::routes::uploads::delete_role(&state, project_id, "reference_gff").await?;
     let f1 = crate::routes::uploads::store_upload_public(
-        &state, project_id, "reference_fasta", &fasta_name, fna,
+        &state,
+        project_id,
+        "reference_fasta",
+        &fasta_name,
+        fna,
     )
     .await?;
     let f2 = crate::routes::uploads::store_upload_public(
-        &state, project_id, "reference_gff", &gff_name, gff,
+        &state,
+        project_id,
+        "reference_gff",
+        &gff_name,
+        gff,
     )
     .await?;
     Ok(Json(serde_json::json!({ "fasta": f1, "gff": f2 })))
@@ -146,11 +158,14 @@ pub async fn fetch_reference(
 
 async fn download(c: &reqwest::Client, url: &str) -> ApiResult<Vec<u8>> {
     let resp = c.get(url).send().await.map_err(|e| {
-        ApiError::Internal(format!("The download from NCBI failed. Please try again. ({e})"))
+        ApiError::Internal(format!(
+            "The download from NCBI failed. Please try again. ({e})"
+        ))
     })?;
     if !resp.status().is_success() {
         return Err(ApiError::BadRequest(
-            "The genome files could not be downloaded from NCBI. Please try again in a moment.".into(),
+            "The genome files could not be downloaded from NCBI. Please try again in a moment."
+                .into(),
         ));
     }
     let bytes = resp.bytes().await.map_err(|e| {
@@ -169,8 +184,8 @@ const MAX_DL: usize = 512 * 1024 * 1024;
 fn gunzip(data: &[u8]) -> ApiResult<Vec<u8>> {
     let mut out = Vec::new();
     let mut decoder = flate2::read::GzDecoder::new(data);
-    decoder
-        .read_to_end(&mut out)
-        .map_err(|_| ApiError::BadRequest("The downloaded genome file could not be unpacked.".into()))?;
+    decoder.read_to_end(&mut out).map_err(|_| {
+        ApiError::BadRequest("The downloaded genome file could not be unpacked.".into())
+    })?;
     Ok(out)
 }

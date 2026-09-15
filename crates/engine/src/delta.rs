@@ -201,17 +201,17 @@ pub fn parse_delta_str(text: &str) -> Result<DeltaFile> {
             }
         }
         let qry_rev = e2 < s2;
-        let qry_lo = s2.min(e2).unsigned_abs() as u64;
-        let qry_hi = s2.max(e2).unsigned_abs() as u64;
+        let qry_lo = s2.min(e2).unsigned_abs();
+        let qry_hi = s2.max(e2).unsigned_abs();
         alignments.push(Alignment {
             ref_seqid,
             qry_seqid,
-            ref_start: s1.unsigned_abs() as u64,
-            ref_end: e1.unsigned_abs() as u64,
+            ref_start: s1.unsigned_abs(),
+            ref_end: e1.unsigned_abs(),
             qry_lo,
             qry_hi,
             qry_rev,
-            errors: errors.unsigned_abs() as u64,
+            errors: errors.unsigned_abs(),
             deltas,
         });
     }

@@ -22,13 +22,20 @@ pub async fn list_run_files(
     let run_dir = state.run_dir(project_id, run_id);
     let mut files = Vec::new();
     // parameters + log
-    push_artifact(&mut files, &run_dir.join("params.json"), "Parameters used (JSON)", "parameters.json");
+    push_artifact(
+        &mut files,
+        &run_dir.join("params.json"),
+        "Parameters used (JSON)",
+        "parameters.json",
+    );
     // per query artifacts
     let conn = state.db.lock().unwrap();
     let mut names = Vec::new();
     for qid in &query_ids {
         let name: Option<String> = conn
-            .query_row("SELECT display_name FROM files WHERE id = ?1", [qid], |r| r.get(0))
+            .query_row("SELECT display_name FROM files WHERE id = ?1", [qid], |r| {
+                r.get(0)
+            })
             .ok();
         names.push((qid, name));
     }
@@ -37,13 +44,38 @@ pub async fn list_run_files(
         let Some(qname) = name else { continue };
         let qdir = run_dir.join("queries").join(qid.to_string());
         let stem = sanitize_stem(&qname);
-        push_artifact(&mut files, &qdir.join("genes_coverage.tsv"), "Genes coverage table", &format!("{stem}_genes_coverage.tsv"));
-        push_artifact(&mut files, &qdir.join("unaligned_gaps.tsv"), "Unaligned gaps table", &format!("{stem}_unaligned_gaps.tsv"));
-        push_artifact(&mut files, &qdir.join("panel_recheck.tsv"), "Gene panel recheck table", &format!("{stem}_panel_recheck.tsv"));
-        push_artifact(&mut files, &qdir.join("dnadiff.report"), "Overall alignment report", &format!("{stem}_dnadiff.report"));
+        push_artifact(
+            &mut files,
+            &qdir.join("genes_coverage.tsv"),
+            "Genes coverage table",
+            &format!("{stem}_genes_coverage.tsv"),
+        );
+        push_artifact(
+            &mut files,
+            &qdir.join("unaligned_gaps.tsv"),
+            "Unaligned gaps table",
+            &format!("{stem}_unaligned_gaps.tsv"),
+        );
+        push_artifact(
+            &mut files,
+            &qdir.join("panel_recheck.tsv"),
+            "Gene panel recheck table",
+            &format!("{stem}_panel_recheck.tsv"),
+        );
+        push_artifact(
+            &mut files,
+            &qdir.join("dnadiff.report"),
+            "Overall alignment report",
+            &format!("{stem}_dnadiff.report"),
+        );
     }
-    if query_ids.len() >= 1 {
-        push_artifact(&mut files, &run_dir.join("matrix.tsv"), "Presence/absence table (all queries)", "presence_absence_matrix.tsv");
+    if !query_ids.is_empty() {
+        push_artifact(
+            &mut files,
+            &run_dir.join("matrix.tsv"),
+            "Presence/absence table (all queries)",
+            "presence_absence_matrix.tsv",
+        );
     }
     Ok(axum::Json(json!({
         "run_id": run_id,
@@ -53,13 +85,27 @@ pub async fn list_run_files(
 }
 
 fn sanitize_stem(name: &str) -> String {
-    let stem = name.trim_end_matches(".fasta").trim_end_matches(".fa").trim_end_matches(".fna");
+    let stem = name
+        .trim_end_matches(".fasta")
+        .trim_end_matches(".fa")
+        .trim_end_matches(".fna");
     stem.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
-fn push_artifact(out: &mut Vec<serde_json::Value>, path: &std::path::Path, friendly: &str, name: &str) {
+fn push_artifact(
+    out: &mut Vec<serde_json::Value>,
+    path: &std::path::Path,
+    friendly: &str,
+    name: &str,
+) {
     if let Ok(meta) = std::fs::metadata(path) {
         if meta.is_file() {
             out.push(json!({
@@ -85,8 +131,8 @@ pub async fn get_run_file(
         return Err(ApiError::NotFound("This file does not exist.".into()));
     };
     let path: PathBuf = path.clone();
-    let bytes = std::fs::read(&path)
-        .map_err(|_| ApiError::NotFound("This file does not exist.".into()))?;
+    let bytes =
+        std::fs::read(&path).map_err(|_| ApiError::NotFound("This file does not exist.".into()))?;
     let mut headers = HeaderMap::new();
     let mime = if fname.ends_with(".json") {
         "application/json"
@@ -132,10 +178,7 @@ fn scan_dirs(run_dir: &std::path::Path, query_ids: &[i64]) -> ApiResult<Vec<(Pat
     if let Ok(entries) = std::fs::read_dir(&queries_dir) {
         for e in entries.flatten() {
             let qdir = e.path();
-            let qid = e
-                .file_name()
-                .to_string_lossy()
-                .to_string();
+            let qid = e.file_name().to_string_lossy().to_string();
             if !query_ids.iter().any(|q| q.to_string() == qid) {
                 continue;
             }
@@ -146,10 +189,22 @@ fn scan_dirs(run_dir: &std::path::Path, query_ids: &[i64]) -> ApiResult<Vec<(Pat
                 .and_then(|v| v["query_name"].as_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| format!("query_{qid}"));
             let stem = sanitize_stem(&name);
-            out.push((qdir.join("genes_coverage.tsv"), format!("{stem}_genes_coverage.tsv")));
-            out.push((qdir.join("unaligned_gaps.tsv"), format!("{stem}_unaligned_gaps.tsv")));
-            out.push((qdir.join("panel_recheck.tsv"), format!("{stem}_panel_recheck.tsv")));
-            out.push((qdir.join("dnadiff.report"), format!("{stem}_dnadiff.report")));
+            out.push((
+                qdir.join("genes_coverage.tsv"),
+                format!("{stem}_genes_coverage.tsv"),
+            ));
+            out.push((
+                qdir.join("unaligned_gaps.tsv"),
+                format!("{stem}_unaligned_gaps.tsv"),
+            ));
+            out.push((
+                qdir.join("panel_recheck.tsv"),
+                format!("{stem}_panel_recheck.tsv"),
+            ));
+            out.push((
+                qdir.join("dnadiff.report"),
+                format!("{stem}_dnadiff.report"),
+            ));
         }
     }
     Ok(out)
@@ -164,7 +219,8 @@ pub async fn export_gene_alignment(
     let (project_id, _, _) = jobs::run_meta(&state, run_id)?;
     let (ref_fa, ref_gff, params, sources) = jobs::msa_sources(&state, project_id, run_id)?;
     let borrowed: Vec<_> = sources.iter().map(|s| s.borrow()).collect();
-    let detail = bactiment_engine::pipeline::gene_detail(&ref_fa, &ref_gff, &params, &locus, &borrowed)?;
+    let detail =
+        bactiment_engine::pipeline::gene_detail(&ref_fa, &ref_gff, &params, &locus, &borrowed)?;
     let clustal = q.format.as_deref() == Some("clustal");
     let (body, ext, mime) = if clustal {
         (clustal_format(&detail), "aln", "text/plain; charset=utf-8")
@@ -203,10 +259,6 @@ fn fasta_format(d: &bactiment_types::GeneDetail) -> String {
     // Walk block by block; queries missing a block get gaps.
     let mut ref_row: Vec<u8> = Vec::new();
     let mut qry_rows: Vec<Vec<u8>> = vec![Vec::new(); d.queries.len()];
-    let mut offsets = vec![0usize; d.queries.len()];
-    for qi in 0..d.queries.len() {
-        offsets[qi] = 0;
-    }
     // Collect all block boundaries in reference order across queries:
     // simpler approach: concatenate each query's blocks independently,
     // since blocks are per query.
@@ -262,7 +314,10 @@ fn clustal_format(d: &bactiment_types::GeneDetail) -> String {
     for q in &d.queries {
         for b in &q.blocks {
             block_no += 1;
-            out.push_str(&format!("Alignment block {} (reference {}-{}, identity {:.1}%)\n", block_no, b.ref_start, b.ref_end, b.identity));
+            out.push_str(&format!(
+                "Alignment block {} (reference {}-{}, identity {:.1}%)\n",
+                block_no, b.ref_start, b.ref_end, b.identity
+            ));
             let rows = [
                 (format!("{}_reference", d.locus_tag), b.ref_seq.clone()),
                 (q.query_name.clone(), b.qry_seq.clone()),
@@ -271,7 +326,12 @@ fn clustal_format(d: &bactiment_types::GeneDetail) -> String {
             while pos < b.ref_seq.len() {
                 let end = (pos + 60).min(b.ref_seq.len());
                 for (name, seq) in &rows {
-                    out.push_str(&format!("{:<width$}{}\n", name, &seq[pos..end], width = max_name));
+                    out.push_str(&format!(
+                        "{:<width$}{}\n",
+                        name,
+                        &seq[pos..end],
+                        width = max_name
+                    ));
                 }
                 out.push('\n');
                 pos = end;
