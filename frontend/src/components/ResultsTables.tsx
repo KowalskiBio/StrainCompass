@@ -779,7 +779,7 @@ function GenePreview({
   }, [runId, locus, cache]);
   if (!detail) return null;
   return (
-    <div className="fixed right-4 top-56 bottom-6 z-40 w-72 flex flex-col bg-white border border-zinc-200 rounded-xl shadow-xl p-4 pointer-events-auto overflow-y-auto thin-scroll dark:bg-zinc-900 dark:border-zinc-800">
+    <div className="fixed right-4 top-56 z-40 w-72 max-h-[calc(100vh-15.5rem)] flex flex-col bg-white border border-zinc-200 rounded-xl shadow-xl p-4 pointer-events-auto overflow-y-auto thin-scroll dark:bg-zinc-900 dark:border-zinc-800">
       <div className="flex items-start justify-between gap-2">
         <p className="font-semibold truncate" title={detail.locus_tag}>
           {detail.locus_tag}
