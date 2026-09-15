@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { GeneDetail } from "../types";
+import { nuccoreRangeUrl } from "../types";
 import { CallBadge, Modal, Spinner } from "./ui";
 
 /**
@@ -56,8 +57,16 @@ export function GeneMsaDialog({
             <span className="text-sm font-normal text-zinc-500 dark:text-zinc-400">
               {detail.locus_tag}
               {detail.symbol ? ` (${detail.symbol})` : ""} - {detail.biotype} -{" "}
-              {detail.seqid}:{detail.start.toLocaleString("en-US")}-
-              {detail.end.toLocaleString("en-US")} ({detail.strand > 0 ? "+" : "-"} strand)
+              <a
+                href={nuccoreRangeUrl(detail.seqid, detail.start, detail.end)}
+                target="_blank"
+                rel="noreferrer"
+                className="underline hover:text-zinc-900 dark:hover:text-zinc-100"
+              >
+                {detail.seqid}:{detail.start.toLocaleString("en-US")}-
+                {detail.end.toLocaleString("en-US")}
+              </a>{" "}
+              ({detail.strand > 0 ? "+" : "-"} strand)
               {detail.protein_id && (
                 <>
                   {" - "}

@@ -12,6 +12,7 @@ import type {
   Run,
   TableQuery,
 } from "../types";
+import { nuccoreRangeUrl } from "../types";
 import { CallBadge, Spinner } from "./ui";
 
 export type TableKind = "genes_coverage" | "unaligned_gaps" | "panel_recheck" | "matrix";
@@ -575,6 +576,20 @@ function Cell({
       </a>
     );
   }
+  if (col === "seqid" && v && typeof row["start"] === "number" && typeof row["end"] === "number") {
+    return (
+      <a
+        href={nuccoreRangeUrl(v as string, row["start"] as number, row["end"] as number)}
+        target="_blank"
+        rel="noreferrer"
+        title={`View ${v} on NCBI, zoomed to this range`}
+        className="truncate underline text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {v as string}
+      </a>
+    );
+  }
   if (col === "genes") {
     const genes = v as string[];
     if (!genes || genes.length === 0) return <span className="text-zinc-300 dark:text-zinc-700">-</span>;
@@ -796,8 +811,15 @@ function GenePreview({
         {detail.symbol ? `${detail.symbol} - ` : ""}
         {detail.biotype}
         <br />
-        {detail.seqid}:{detail.start.toLocaleString("en-US")}-
-        {detail.end.toLocaleString("en-US")}
+        <a
+          href={nuccoreRangeUrl(detail.seqid, detail.start, detail.end)}
+          target="_blank"
+          rel="noreferrer"
+          className="underline hover:text-zinc-900 dark:hover:text-zinc-100"
+        >
+          {detail.seqid}:{detail.start.toLocaleString("en-US")}-
+          {detail.end.toLocaleString("en-US")}
+        </a>
         {detail.protein_id && (
           <>
             <br />

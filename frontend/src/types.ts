@@ -207,6 +207,11 @@ export interface TableQuery {
   cols?: string;
 }
 
+/** NCBI's nucleotide record for a sequence, scrolled/zoomed to one range. */
+export function nuccoreRangeUrl(seqid: string, start: number, end: number): string {
+  return `https://www.ncbi.nlm.nih.gov/nuccore/${encodeURIComponent(seqid)}?report=graph&from=${start}&to=${end}`;
+}
+
 export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
