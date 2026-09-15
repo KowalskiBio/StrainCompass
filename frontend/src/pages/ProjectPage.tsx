@@ -38,19 +38,32 @@ export default function ProjectPage() {
   const runId = params.get("run") ? Number(params.get("run")) : null;
   const gene = params.get("gene");
 
-  const setParam = useCallback(
-    (key: string, value: string | null) => {
+  // Applies every key in `updates` to the URL in one history entry. Calling
+  // setParams multiple times in a row (once per key) is unsafe: each call
+  // starts from the searchParams snapshot of when it was made, so a later
+  // call in the same tick can clobber an earlier one's change instead of
+  // building on it - this is how switching a table's query used to silently
+  // revert an unrelated "which sub-table is active" param.
+  const setParams2 = useCallback(
+    (updates: Record<string, string | null>) => {
       setParams(
         (prev) => {
           const next = new URLSearchParams(prev);
-          if (value === null || value === "") next.delete(key);
-          else next.set(key, value);
+          for (const [key, value] of Object.entries(updates)) {
+            if (value === null || value === "") next.delete(key);
+            else next.set(key, value);
+          }
           return next;
         },
         { replace: true },
       );
     },
     [setParams],
+  );
+
+  const setParam = useCallback(
+    (key: string, value: string | null) => setParams2({ [key]: value }),
+    [setParams2],
   );
 
   const reload = useCallback(() => {
@@ -259,8 +272,10 @@ export default function ProjectPage() {
               params.get("q") ? Number(params.get("q")) : undefined
             }
             onStateChange={(table, queryId) => {
-              setParam("table", table === "genes_coverage" ? null : table);
-              setParam("q", queryId ? String(queryId) : null);
+              setParams2({
+                table: table === "genes_coverage" ? null : table,
+                q: queryId ? String(queryId) : null,
+              });
             }}
             onOpenGene={(locus) => setParam("gene", locus)}
           />
@@ -280,9 +295,11 @@ export default function ProjectPage() {
             }
             onOpenGene={(locus) => setParam("gene", locus)}
             onRangeChange={(r) => {
-              setParam("gseq", r.seqid);
-              setParam("gstart", String(Math.round(r.start)));
-              setParam("gend", String(Math.round(r.end)));
+              setParams2({
+                gseq: r.seqid,
+                gstart: String(Math.round(r.start)),
+                gend: String(Math.round(r.end)),
+              });
             }}
           />
         )}

@@ -58,6 +58,7 @@ const PANEL_COLUMNS: Column[] = [
 ];
 
 const PAGE_SIZE = 200;
+const COL_WIDTHS_KEY = "bactiment-col-widths";
 
 export function ResultsTables({
   run,
@@ -89,6 +90,23 @@ export function ResultsTables({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pinnedGene, setPinnedGene] = useState<string | null>(null);
+  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(COL_WIDTHS_KEY) ?? "{}");
+    } catch {
+      return {};
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(COL_WIDTHS_KEY, JSON.stringify(colWidths));
+    } catch {}
+  }, [colWidths]);
+
+  function resizeColumn(key: string, width: number) {
+    setColWidths((prev) => ({ ...prev, [`${table}:${key}`]: width }));
+  }
 
   useEffect(() => {
     setTable(safeInitialTable);
@@ -314,6 +332,8 @@ export function ResultsTables({
             onPinGene={setPinnedGene}
             onOpenGene={onOpenGene}
             run={run}
+            colWidths={colWidths}
+            onResizeColumn={resizeColumn}
           />
         </div>
         {/* pagination */}
@@ -365,6 +385,8 @@ function VirtualTable({
   onPinGene,
   onOpenGene,
   run,
+  colWidths,
+  onResizeColumn,
 }: {
   columns: Column[];
   rows: (GapRow | GeneCoverageRow | PanelRow | MatrixRow)[];
@@ -375,6 +397,8 @@ function VirtualTable({
   onPinGene: (locus: string | null) => void;
   onOpenGene: (locus: string) => void;
   run: Run;
+  colWidths: Record<string, number>;
+  onResizeColumn: (key: string, width: number) => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -384,22 +408,62 @@ function VirtualTable({
     overscan: 12,
   });
 
+  // A manually resized column locks to its exact width (flex-shrink/grow 0);
+  // an untouched one keeps stretching to fill the table, as before.
+  function flexStyleFor(c: Column): React.CSSProperties {
+    const baseWidth = c.width ?? 120;
+    const override = colWidths[`${table}:${c.key}`];
+    const width = override ?? baseWidth;
+    return {
+      flex: override != null ? `0 0 ${width}px` : `${baseWidth} 1 ${baseWidth}px`,
+      minWidth: width,
+    };
+  }
+
+  function startResize(e: React.MouseEvent<HTMLDivElement>, key: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    // Start from the column's actual on-screen width (it may currently be
+    // stretched by flex-grow beyond its configured base width), not the
+    // logical base width, so the column doesn't jump under the cursor.
+    const startWidth = e.currentTarget.parentElement!.getBoundingClientRect().width;
+    const startX = e.clientX;
+    function onMove(ev: MouseEvent) {
+      onResizeColumn(key, Math.max(50, Math.round(startWidth + (ev.clientX - startX))));
+    }
+    function onUp() {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
   return (
     <div className="min-w-full">
       {/* header */}
       <div className="flex bg-zinc-50 border-b border-zinc-200 sticky top-0 z-10 dark:bg-zinc-900 dark:border-zinc-800">
         {columns.map((c) => (
-          <button
+          <div
             key={c.key}
-            onClick={() => onSort(c.key)}
-            className={`flex items-center gap-1 px-3 h-11 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-900 border-r border-zinc-200 last:border-r-0 dark:text-zinc-400 dark:hover:text-zinc-100 dark:border-zinc-800 ${c.numeric ? "justify-end" : ""}`}
-            style={{ flex: `${c.width ?? 120} 1 ${c.width ?? 120}px`, minWidth: c.width ?? 120 }}
+            className="relative flex items-stretch border-r border-zinc-200 last:border-r-0 dark:border-zinc-800"
+            style={flexStyleFor(c)}
           >
-            <span className="truncate">{c.label}</span>
-            {sortBy === c.key && (
-              <span className="text-zinc-900 dark:text-zinc-100">{sortDir === "asc" ? "\u2191" : "\u2193"}</span>
-            )}
-          </button>
+            <button
+              onClick={() => onSort(c.key)}
+              className={`flex-1 min-w-0 flex items-center gap-1 px-3 h-11 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 ${c.numeric ? "justify-end" : ""}`}
+            >
+              <span className="truncate">{c.label}</span>
+              {sortBy === c.key && (
+                <span className="text-zinc-900 dark:text-zinc-100">{sortDir === "asc" ? "\u2191" : "\u2193"}</span>
+              )}
+            </button>
+            <div
+              onMouseDown={(e) => startResize(e, c.key)}
+              title="Drag to resize"
+              className="w-1.5 shrink-0 cursor-col-resize hover:bg-blue-400/60 active:bg-blue-500"
+            />
+          </div>
         ))}
       </div>
       {/* rows */}
@@ -440,7 +504,7 @@ function VirtualTable({
                     className={`px-3 flex items-center truncate border-r border-zinc-100 last:border-r-0 dark:border-zinc-800 ${
                       c.numeric ? "justify-end font-mono text-sm tabular-nums" : ""
                     }`}
-                    style={{ flex: `${c.width ?? 120} 1 ${c.width ?? 120}px`, minWidth: c.width ?? 120 }}
+                    style={flexStyleFor(c)}
                   >
                     <Cell
                       col={c.key}
@@ -505,6 +569,27 @@ function Cell({
   return <span className="truncate">{String(v)}</span>;
 }
 
+/** Closes an open popover on Escape or on any click outside `ref`'s subtree. */
+function usePopoverDismiss(open: boolean, onClose: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open, onClose]);
+  return ref;
+}
+
 function ColumnPicker({
   columns,
   selected,
@@ -515,8 +600,9 @@ function ColumnPicker({
   onChange: (keys: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const ref = usePopoverDismiss(open, () => setOpen(false));
   return (
-    <div className="relative">
+    <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen(!open)}
         className="h-11 px-3 rounded-lg border border-zinc-300 bg-white text-[15px] hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
