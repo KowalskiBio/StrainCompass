@@ -70,15 +70,15 @@ export function RunDrawer({
   const running = run?.status === "queued" || run?.status === "running";
 
   return (
-    <div className="fixed bottom-0 right-0 left-0 sm:left-auto sm:right-6 sm:bottom-6 z-40 w-full sm:w-[420px] bg-white border border-zinc-200 rounded-t-xl sm:rounded-xl shadow-2xl overflow-hidden">
-      <div className="flex items-center justify-between px-5 h-14 border-b border-zinc-200">
+    <div className="fixed bottom-0 right-0 left-0 sm:left-auto sm:right-6 sm:bottom-6 z-40 w-full sm:w-[420px] bg-white border border-zinc-200 rounded-t-xl sm:rounded-xl shadow-2xl overflow-hidden dark:bg-zinc-900 dark:border-zinc-800">
+      <div className="flex items-center justify-between px-5 h-14 border-b border-zinc-200 dark:border-zinc-800">
         <div className="flex items-center gap-3 min-w-0">
           {running ? (
-            <Spinner className="text-zinc-500" />
+            <Spinner className="text-zinc-500 dark:text-zinc-400" />
           ) : run?.status === "succeeded" ? (
-            <span className="text-emerald-600">{"\u2713"}</span>
+            <span className="text-emerald-600 dark:text-emerald-400">{"\u2713"}</span>
           ) : run?.status === "failed" ? (
-            <span className="text-red-600">{"\u2715"}</span>
+            <span className="text-red-600 dark:text-red-400">{"\u2715"}</span>
           ) : null}
           <span className="font-medium truncate">
             {run
@@ -90,14 +90,14 @@ export function RunDrawer({
               : "Starting..."}
           </span>
           {run && running && (
-            <span className="text-sm text-zinc-400 whitespace-nowrap">
+            <span className="text-sm text-zinc-400 whitespace-nowrap dark:text-zinc-500">
               {formatDuration(run.started_at, null)} elapsed
             </span>
           )}
         </div>
         <button
           onClick={onClose}
-          className="w-9 h-9 grid place-items-center rounded-md text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100"
+          className="w-9 h-9 grid place-items-center rounded-md text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 dark:text-zinc-500 dark:hover:text-zinc-100 dark:hover:bg-zinc-800"
           aria-label="Close"
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
@@ -107,19 +107,19 @@ export function RunDrawer({
       </div>
       <div className="px-5 py-3 max-h-56 overflow-y-auto thin-scroll" ref={logRef}>
         {run?.step && running && (
-          <p className="text-[15px] text-zinc-800 mb-2 flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-zinc-900 animate-pulse" />
+          <p className="text-[15px] text-zinc-800 mb-2 flex items-center gap-2 dark:text-zinc-200">
+            <span className="w-1.5 h-1.5 rounded-full bg-zinc-900 animate-pulse dark:bg-zinc-100" />
             {run.step}
           </p>
         )}
         {run?.status === "failed" && run.error && (
-          <p className="text-[15px] text-red-700 mb-2">{run.error}</p>
+          <p className="text-[15px] text-red-700 mb-2 dark:text-red-400">{run.error}</p>
         )}
         {logs.length === 0 && (
-          <p className="text-sm text-zinc-400">Waiting for the first log line...</p>
+          <p className="text-sm text-zinc-400 dark:text-zinc-500">Waiting for the first log line...</p>
         )}
         {logs.map((l, i) => (
-          <p key={i} className="text-xs text-zinc-500 font-mono leading-relaxed">
+          <p key={i} className="text-xs text-zinc-500 font-mono leading-relaxed dark:text-zinc-400">
             {l}
           </p>
         ))}
@@ -140,17 +140,17 @@ export function FilesPanel({ runId }: { runId: number }) {
       .catch((e) => setError((e as Error).message));
   }, [runId]);
 
-  if (error) return <p className="text-red-700 text-[15px]">{error}</p>;
+  if (error) return <p className="text-red-700 text-[15px] dark:text-red-400">{error}</p>;
   if (files.length === 0)
-    return <p className="text-zinc-500 text-[15px]">No files yet.</p>;
+    return <p className="text-zinc-500 text-[15px] dark:text-zinc-400">No files yet.</p>;
 
   return (
-    <ul className="divide-y divide-zinc-100 border border-zinc-200 rounded-lg">
+    <ul className="divide-y divide-zinc-100 border border-zinc-200 rounded-lg dark:divide-zinc-800 dark:border-zinc-800">
       {files.map((f) => (
         <li key={f.name} className="flex items-center justify-between px-4 py-3">
           <div className="min-w-0 mr-4">
             <p className="font-medium text-[15px]">{f.friendly}</p>
-            <p className="text-xs text-zinc-400 mt-0.5">
+            <p className="text-xs text-zinc-400 mt-0.5 dark:text-zinc-500">
               {f.name} - {f.human_size}
             </p>
           </div>
@@ -159,13 +159,13 @@ export function FilesPanel({ runId }: { runId: number }) {
               href={api.runFileUrl(runId, f.name, false)}
               target="_blank"
               rel="noreferrer"
-              className="h-10 px-3 inline-flex items-center rounded-lg border border-zinc-300 text-[15px] hover:bg-zinc-100"
+              className="h-10 px-3 inline-flex items-center rounded-lg border border-zinc-300 text-[15px] hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
             >
               View
             </a>
             <a
               href={api.runFileUrl(runId, f.name, true)}
-              className="h-10 px-3 inline-flex items-center rounded-lg border border-zinc-300 text-[15px] hover:bg-zinc-100"
+              className="h-10 px-3 inline-flex items-center rounded-lg border border-zinc-300 text-[15px] hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
             >
               Download
             </a>

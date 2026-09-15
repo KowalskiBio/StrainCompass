@@ -53,7 +53,7 @@ export function GeneMsaDialog({
         <span className="flex items-baseline gap-3 flex-wrap">
           Gene alignment
           {detail && (
-            <span className="text-sm font-normal text-zinc-500">
+            <span className="text-sm font-normal text-zinc-500 dark:text-zinc-400">
               {detail.locus_tag}
               {detail.symbol ? ` (${detail.symbol})` : ""} - {detail.biotype} -{" "}
               {detail.seqid}:{detail.start.toLocaleString("en-US")}-
@@ -63,9 +63,9 @@ export function GeneMsaDialog({
         </span>
       }
     >
-      {error && <p className="text-red-700">{error}</p>}
+      {error && <p className="text-red-700 dark:text-red-400">{error}</p>}
       {!detail && !error && (
-        <div className="flex items-center gap-3 text-zinc-500 py-8 justify-center">
+        <div className="flex items-center gap-3 text-zinc-500 py-8 justify-center dark:text-zinc-400">
           <Spinner /> Preparing the alignment...
         </div>
       )}
@@ -74,26 +74,26 @@ export function GeneMsaDialog({
           <div className="flex flex-wrap gap-2">
             <a
               href={api.geneExportUrl(runId, detail.locus_tag, "fasta")}
-              className="h-11 px-4 inline-flex items-center rounded-lg border border-zinc-300 hover:bg-zinc-100 text-[15px]"
+              className="h-11 px-4 inline-flex items-center rounded-lg border border-zinc-300 hover:bg-zinc-100 text-[15px] dark:border-zinc-700 dark:hover:bg-zinc-800"
             >
               Export FASTA
             </a>
             <a
               href={api.geneExportUrl(runId, detail.locus_tag, "clustal")}
-              className="h-11 px-4 inline-flex items-center rounded-lg border border-zinc-300 hover:bg-zinc-100 text-[15px]"
+              className="h-11 px-4 inline-flex items-center rounded-lg border border-zinc-300 hover:bg-zinc-100 text-[15px] dark:border-zinc-700 dark:hover:bg-zinc-800"
             >
               Export Clustal
             </a>
             <button
               onClick={() => onShowInGenome(detail.locus_tag)}
-              className="h-11 px-4 inline-flex items-center rounded-lg border border-zinc-300 hover:bg-zinc-100 text-[15px]"
+              className="h-11 px-4 inline-flex items-center rounded-lg border border-zinc-300 hover:bg-zinc-100 text-[15px] dark:border-zinc-700 dark:hover:bg-zinc-800"
             >
               Show in genome view
             </button>
           </div>
 
           {detail.queries.length === 0 && (
-            <p className="text-zinc-500">
+            <p className="text-zinc-500 dark:text-zinc-400">
               This gene has no alignment data (the run may not have finished).
             </p>
           )}
@@ -102,7 +102,7 @@ export function GeneMsaDialog({
             <QueryAlignment key={q.query_id} q={q} />
           ))}
 
-          <p className="text-xs text-zinc-400">
+          <p className="text-xs text-zinc-400 dark:text-zinc-500">
             Reference row on top, query below. Highlighted letters are
             mismatches; dashes mark insertions or deletions. Blocks appear in
             reference order; unaligned stretches between blocks are listed
@@ -121,24 +121,24 @@ function QueryAlignment({ q }: { q: GeneDetail["queries"][number] }) {
     q.best_identity > 0 ? `, ${q.best_identity.toFixed(1)}% identity` : ", no alignment"
   }, ${q.mismatches} mismatches, ${q.indels} indel bases`;
   return (
-    <div className="border border-zinc-200 rounded-lg overflow-hidden">
-      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 bg-zinc-50 border-b border-zinc-200">
+    <div className="border border-zinc-200 rounded-lg overflow-hidden dark:border-zinc-800">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 bg-zinc-50 border-b border-zinc-200 dark:bg-zinc-800/60 dark:border-zinc-800">
         <div className="flex items-center gap-3 min-w-0">
           <span className="font-medium truncate max-w-64" title={q.query_name}>
             {q.query_name}
           </span>
           <CallBadge call={q.call} />
           {q.premature_stops.length > 0 && (
-            <span className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-full px-2 py-0.5 font-medium">
+            <span className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-full px-2 py-0.5 font-medium dark:text-red-400 dark:bg-red-950/40 dark:border-red-900">
               {q.premature_stops.length} premature stop
               {q.premature_stops.length > 1 ? "s" : ""}
             </span>
           )}
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-xs text-zinc-500 font-mono">{stats}</span>
+          <span className="text-xs text-zinc-500 font-mono dark:text-zinc-400">{stats}</span>
           <button
-            className="h-9 px-2 rounded-md text-sm text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100"
+            className="h-9 px-2 rounded-md text-sm text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800"
             onClick={() => setExpanded(!expanded)}
           >
             {expanded ? "Hide" : "Show"}
@@ -148,7 +148,7 @@ function QueryAlignment({ q }: { q: GeneDetail["queries"][number] }) {
       {expanded && (
         <div className="p-4 space-y-4 thin-scroll max-h-96 overflow-y-auto">
           {q.premature_stops.length > 0 && (
-            <p className="text-xs text-red-700">
+            <p className="text-xs text-red-700 dark:text-red-400">
               Premature stop codons at amino acid position
               {q.premature_stops.length > 1 ? "s" : ""}{" "}
               {q.premature_stops.map((s) => s.aa_position).join(", ")} (of{" "}
@@ -156,7 +156,7 @@ function QueryAlignment({ q }: { q: GeneDetail["queries"][number] }) {
             </p>
           )}
           {q.blocks.length === 0 && (
-            <p className="text-sm text-zinc-400">
+            <p className="text-sm text-zinc-400 dark:text-zinc-500">
               No part of this gene is aligned to this query.
             </p>
           )}
@@ -164,11 +164,11 @@ function QueryAlignment({ q }: { q: GeneDetail["queries"][number] }) {
             <AlignmentBlock key={i} block={b} />
           ))}
           {q.unaligned.length > 0 && (
-            <div className="text-xs text-zinc-500">
+            <div className="text-xs text-zinc-500 dark:text-zinc-400">
               {q.unaligned.map(([s, e], i) => (
                 <p
                   key={i}
-                  className="font-mono bg-zinc-50 border border-zinc-200 rounded px-2 py-1 my-1 inline-block mr-2"
+                  className="font-mono bg-zinc-50 border border-zinc-200 rounded px-2 py-1 my-1 inline-block mr-2 dark:bg-zinc-800/60 dark:border-zinc-800"
                 >
                   unaligned reference bases {s.toLocaleString("en-US")} -{" "}
                   {e.toLocaleString("en-US")} ({(e - s + 1).toLocaleString("en-US")} bp)
@@ -190,7 +190,7 @@ function AlignmentBlock({ block }: { block: GeneDetail["queries"][number]["block
   const nCols = Math.min(ref.length, qry.length);
   return (
     <div>
-      <p className="text-xs text-zinc-500 mb-1 font-mono">
+      <p className="text-xs text-zinc-500 mb-1 font-mono dark:text-zinc-400">
         block {block.ref_start.toLocaleString("en-US")} -{" "}
         {block.ref_end.toLocaleString("en-US")} in the reference
         {block.qry_rev ? ", query aligned on the reverse strand" : ""}, identity{" "}
@@ -199,19 +199,19 @@ function AlignmentBlock({ block }: { block: GeneDetail["queries"][number]["block
       <div className="font-mono text-xs leading-5 overflow-x-auto thin-scroll">
         {chunk(nCols, COLS).map(([, colStart]) => (
           <div key={colStart} className="whitespace-pre">
-            <span className="text-zinc-300 select-none inline-block w-16 text-right pr-2">
+            <span className="text-zinc-300 select-none inline-block w-16 text-right pr-2 dark:text-zinc-700">
               {colStart + 1}
             </span>
             <Row seq={ref.slice(colStart, colStart + COLS)} kind="ref" other={qry.slice(colStart, colStart + COLS)} />
             {"\n"}
-            <span className="text-zinc-300 select-none inline-block w-16 text-right pr-2">
+            <span className="text-zinc-300 select-none inline-block w-16 text-right pr-2 dark:text-zinc-700">
               {" "}
             </span>
             <Row seq={qry.slice(colStart, colStart + COLS)} kind="qry" other={ref.slice(colStart, colStart + COLS)} />
           </div>
         ))}
       </div>
-      <p className="text-xs text-zinc-400 mt-1">{nCols} alignment columns</p>
+      <p className="text-xs text-zinc-400 mt-1 dark:text-zinc-500">{nCols} alignment columns</p>
     </div>
   );
 }
@@ -227,9 +227,9 @@ function Row({ seq, kind, other }: { seq: string; kind: "ref" | "qry"; other: st
     const o = other[i];
     let cls = "";
     if (c === "-" || o === "-") {
-      cls = kind === "qry" ? "bg-amber-100 text-amber-900" : "";
+      cls = kind === "qry" ? "bg-amber-100 text-amber-900 dark:bg-amber-950/50 dark:text-amber-300" : "";
     } else if (kind === "qry" && c !== o) {
-      cls = "bg-red-100 text-red-800";
+      cls = "bg-red-100 text-red-800 dark:bg-red-950/50 dark:text-red-300";
     }
     out.push(
       cls ? (
@@ -241,7 +241,7 @@ function Row({ seq, kind, other }: { seq: string; kind: "ref" | "qry"; other: st
       ),
     );
   }
-  return <span className={kind === "qry" ? "text-zinc-800" : "text-zinc-500"}>{out}</span>;
+  return <span className={kind === "qry" ? "text-zinc-800 dark:text-zinc-300" : "text-zinc-500 dark:text-zinc-500"}>{out}</span>;
 }
 
 function chunk(total: number, n: number): [number, number][] {

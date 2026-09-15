@@ -85,10 +85,10 @@ export function GenomeView({
       }
     }
   }, [initialRange, data]);
-  if (error) return <p className="text-red-700 py-4">{error}</p>;
+  if (error) return <p className="text-red-700 py-4 dark:text-red-400">{error}</p>;
   if (!data || !range || !seqid)
     return (
-      <div className="flex items-center gap-3 text-zinc-500 py-16 justify-center">
+      <div className="flex items-center gap-3 text-zinc-500 py-16 justify-center dark:text-zinc-400">
         <Spinner /> Loading the genome view...
       </div>
     );
@@ -152,7 +152,7 @@ export function GenomeView({
             const len = data.reference.find((r) => r[0] === e.target.value)?.[1] ?? 0;
             setRange({ start: 1, end: len });
           }}
-          className="h-11 px-3 rounded-lg border border-zinc-300 bg-white text-[15px]"
+          className="h-11 px-3 rounded-lg border border-zinc-300 bg-white text-[15px] dark:border-zinc-700 dark:bg-zinc-900"
           disabled={data.reference.length <= 1}
         >
           {data.reference.map(([id, len]) => (
@@ -166,30 +166,30 @@ export function GenomeView({
           seqLength={seqLength}
           onChange={(r) => setRange(r)}
         />
-        <div className="flex rounded-lg border border-zinc-300 overflow-hidden h-11">
+        <div className="flex rounded-lg border border-zinc-300 overflow-hidden h-11 dark:border-zinc-700">
           <button
-            className="px-3 bg-white hover:bg-zinc-100 text-[15px]"
+            className="px-3 bg-white hover:bg-zinc-100 text-[15px] dark:bg-zinc-900 dark:hover:bg-zinc-800"
             onClick={() => zoom(0.5, (range.start + range.end) / 2)}
             title="Zoom in"
           >
             +
           </button>
           <button
-            className="px-3 bg-white hover:bg-zinc-100 text-[15px] border-l border-zinc-300"
+            className="px-3 bg-white hover:bg-zinc-100 text-[15px] border-l border-zinc-300 dark:bg-zinc-900 dark:hover:bg-zinc-800 dark:border-zinc-700"
             onClick={() => zoom(2, (range.start + range.end) / 2)}
             title="Zoom out"
           >
             &minus;
           </button>
           <button
-            className="px-3 bg-white hover:bg-zinc-100 text-[15px] border-l border-zinc-300"
+            className="px-3 bg-white hover:bg-zinc-100 text-[15px] border-l border-zinc-300 dark:bg-zinc-900 dark:hover:bg-zinc-800 dark:border-zinc-700"
             onClick={() => setRange({ start: 1, end: seqLength })}
             title="Whole sequence"
           >
             Whole
           </button>
         </div>
-        <span className="text-sm text-zinc-400">
+        <span className="text-sm text-zinc-400 dark:text-zinc-500">
           {Math.round(range.start).toLocaleString("en-US")} -{" "}
           {Math.round(range.end).toLocaleString("en-US")} bp ({(
             (range.end - range.start) /
@@ -199,7 +199,7 @@ export function GenomeView({
       </div>
 
       <div
-        className="border border-zinc-200 rounded-xl bg-white overflow-x-auto"
+        className="border border-zinc-200 rounded-xl bg-white overflow-x-auto dark:border-zinc-800 dark:bg-zinc-900"
         onMouseLeave={() => setPopup(null)}
       >
         <svg
@@ -235,7 +235,13 @@ export function GenomeView({
         >
           {/* ruler */}
           <g>
-            <line x1={0} x2={width} y1={rulerH - 8} y2={rulerH - 8} stroke="#e4e4e7" />
+            <line
+              x1={0}
+              x2={width}
+              y1={rulerH - 8}
+              y2={rulerH - 8}
+              style={{ stroke: "var(--gv-ruler-line)" }}
+            />
             {ticks.map((t) => (
               <g key={t}>
                 <line
@@ -243,13 +249,13 @@ export function GenomeView({
                   x2={bpToX(t)}
                   y1={rulerH - 14}
                   y2={rulerH - 8}
-                  stroke="#a1a1aa"
+                  style={{ stroke: "var(--gv-tick)" }}
                 />
                 <text
                   x={bpToX(t)}
                   y={rulerH - 17}
                   fontSize="10"
-                  fill="#71717a"
+                  style={{ fill: "var(--gv-tick-label)" }}
                   textAnchor="middle"
                   className="font-mono"
                 >
@@ -275,7 +281,7 @@ export function GenomeView({
                     width={w}
                     height={geneTrackH - 14}
                     rx={1.5}
-                    fill={geneColor(g)}
+                    style={{ fill: geneColor(g) }}
                     className="cursor-pointer"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -289,7 +295,7 @@ export function GenomeView({
                   />
                 );
               })}
-            <text x={4} y={rulerH + 2} fontSize="10" fill="#a1a1aa">
+            <text x={4} y={rulerH + 2} fontSize="10" style={{ fill: "var(--gv-track-label)" }}>
               genes
             </text>
           </g>
@@ -299,8 +305,14 @@ export function GenomeView({
             const y = rulerH + geneTrackH + i * trackH + 4;
             return (
               <g key={q.name}>
-                <rect x={0} y={y} width={width} height={trackH - 10} fill="#fafafa" />
-                <text x={4} y={y + 9} fontSize="10" fill="#a1a1aa">
+                <rect
+                  x={0}
+                  y={y}
+                  width={width}
+                  height={trackH - 10}
+                  style={{ fill: "var(--gv-track-bg)" }}
+                />
+                <text x={4} y={y + 9} fontSize="10" style={{ fill: "var(--gv-track-label)" }}>
                   {i === 0 ? "alignments: " : ""}
                 </text>
                 {q.blocks
@@ -332,7 +344,7 @@ export function GenomeView({
                             x={x + w / 2}
                             y={y + 10}
                             fontSize="8"
-                            fill="#71717a"
+                            style={{ fill: "var(--gv-tick-label)" }}
                             textAnchor="middle"
                           >
                             rev
@@ -348,7 +360,7 @@ export function GenomeView({
       </div>
 
       {/* legend */}
-      <div className="flex flex-wrap items-center gap-4 text-xs text-zinc-500">
+      <div className="flex flex-wrap items-center gap-4 text-xs text-zinc-500 dark:text-zinc-400">
         <span className="inline-flex items-center gap-1.5">
           <span className="w-3 h-3 rounded-sm" style={{ background: identityColor(100) }} />
           high identity
@@ -362,7 +374,7 @@ export function GenomeView({
           low identity
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-sm" style={{ background: "#e4e4e7" }} />
+          <span className="w-3 h-3 rounded-sm" style={{ background: "var(--gv-ruler-line)" }} />
           not aligned
         </span>
         <span>Scroll to zoom, drag to pan. Click a gene or a block for details.</span>
@@ -406,23 +418,23 @@ function GenePopup({
   return (
     <div
       ref={ref}
-      className="absolute z-30 bg-white border border-zinc-200 rounded-lg shadow-lg p-3 w-72"
+      className="absolute z-30 bg-white border border-zinc-200 rounded-lg shadow-lg p-3 w-72 dark:bg-zinc-900 dark:border-zinc-800"
       style={{ left: Math.min(popup.x, 800), top: popup.y + 40 }}
     >
       {popup.gene && (
         <>
           <p className="font-semibold text-[15px]">{popup.gene.locus_tag}</p>
-          <p className="text-xs text-zinc-500 mt-1">
+          <p className="text-xs text-zinc-500 mt-1 dark:text-zinc-400">
             {popup.gene.symbol ? `${popup.gene.symbol} - ` : ""}
             {popup.gene.biotype} on {popup.gene.seqid}
           </p>
-          <p className="text-xs text-zinc-500 mt-1 font-mono">
+          <p className="text-xs text-zinc-500 mt-1 font-mono dark:text-zinc-400">
             {popup.gene.start.toLocaleString("en-US")} -{" "}
             {popup.gene.end.toLocaleString("en-US")} (
             {popup.gene.strand > 0 ? "+" : "-"} strand)
           </p>
           <button
-            className="mt-3 w-full h-10 rounded-md bg-zinc-900 text-white text-sm hover:bg-zinc-700"
+            className="mt-3 w-full h-10 rounded-md bg-zinc-900 text-white text-sm hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
             onClick={() => onOpenGene(popup.gene!.locus_tag)}
           >
             Show alignment
@@ -432,18 +444,18 @@ function GenePopup({
       {popup.block && (
         <>
           <p className="font-semibold text-[15px]">Alignment block</p>
-          <p className="text-xs text-zinc-500 mt-1">Query: {popup.block.queryName}</p>
-          <p className="text-xs text-zinc-500 mt-1 font-mono">
+          <p className="text-xs text-zinc-500 mt-1 dark:text-zinc-400">Query: {popup.block.queryName}</p>
+          <p className="text-xs text-zinc-500 mt-1 font-mono dark:text-zinc-400">
             reference {popup.block.ref_start.toLocaleString("en-US")} -{" "}
             {popup.block.ref_end.toLocaleString("en-US")}
           </p>
-          <p className="text-xs text-zinc-500 mt-1 font-mono">
+          <p className="text-xs text-zinc-500 mt-1 font-mono dark:text-zinc-400">
             query {popup.block.qry_seqid}:{" "}
             {popup.block.qry_start.toLocaleString("en-US")} -{" "}
             {popup.block.qry_end.toLocaleString("en-US")}
             {popup.block.qry_rev ? " (reverse strand)" : ""}
           </p>
-          <p className="text-xs text-zinc-500 mt-1 font-mono">
+          <p className="text-xs text-zinc-500 mt-1 font-mono dark:text-zinc-400">
             identity {popup.block.identity.toFixed(2)}%
           </p>
         </>
@@ -478,21 +490,21 @@ function RangeInput({
       }}
     >
       <input
-        className="h-11 w-24 px-2 rounded-lg border border-zinc-300 font-mono text-sm"
+        className="h-11 w-24 px-2 rounded-lg border border-zinc-300 font-mono text-sm dark:border-zinc-700 dark:bg-zinc-900"
         value={start}
         onChange={(e) => setStart(e.target.value)}
         aria-label="Range start"
       />
-      <span className="text-zinc-400">-</span>
+      <span className="text-zinc-400 dark:text-zinc-600">-</span>
       <input
-        className="h-11 w-24 px-2 rounded-lg border border-zinc-300 font-mono text-sm"
+        className="h-11 w-24 px-2 rounded-lg border border-zinc-300 font-mono text-sm dark:border-zinc-700 dark:bg-zinc-900"
         value={end}
         onChange={(e) => setEnd(e.target.value)}
         aria-label="Range end"
       />
       <button
         type="submit"
-        className="h-11 px-3 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-100 text-sm"
+        className="h-11 px-3 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-100 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
       >
         Go
       </button>
@@ -508,10 +520,10 @@ function niceStep(span: number): number {
 }
 
 function geneColor(g: WgaGene): string {
-  if (g.biotype === "tRNA" || g.biotype === "tmRNA") return "#b45309";
-  if (g.biotype === "rRNA") return "#7c3aed";
-  if (g.biotype.startsWith("pseudo")) return "#a1a1aa";
-  return "#3f3f46";
+  if (g.biotype === "tRNA" || g.biotype === "tmRNA") return "var(--gv-gene-trna)";
+  if (g.biotype === "rRNA") return "var(--gv-gene-rrna)";
+  if (g.biotype.startsWith("pseudo")) return "var(--gv-gene-pseudo)";
+  return "var(--gv-gene-cds)";
 }
 
 /** Sequential single-hue scale for identity 0-100. */

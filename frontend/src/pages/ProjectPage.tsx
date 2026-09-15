@@ -125,7 +125,7 @@ export default function ProjectPage() {
 
   if (loading)
     return (
-      <div className="flex items-center gap-3 text-zinc-500 py-24 justify-center">
+      <div className="flex items-center gap-3 text-zinc-500 py-24 justify-center dark:text-zinc-400">
         <Spinner /> Loading the project...
       </div>
     );
@@ -162,7 +162,7 @@ export default function ProjectPage() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-6">
+    <div className="max-w-[1600px] mx-auto px-4 py-6">
       {/* header */}
       <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
         <div className="min-w-0">
@@ -170,9 +170,9 @@ export default function ProjectPage() {
             <h1 className="text-2xl font-semibold tracking-tight truncate">
               {project.name}
             </h1>
-            <span className="text-xs text-zinc-400 font-mono">#{project.id}</span>
+            <span className="text-xs text-zinc-400 font-mono dark:text-zinc-500">#{project.id}</span>
           </div>
-          <p className="text-zinc-500 mt-1 text-[15px]">
+          <p className="text-zinc-500 mt-1 text-[15px] dark:text-zinc-400">
             {project.organism && project.organism !== "bacteria"
               ? `${project.organism} - `
               : ""}
@@ -363,7 +363,7 @@ function InputsTab({
       <section>
         <h2 className="text-lg font-medium mb-2">Reference genome</h2>
         {refFasta && refGff ? (
-          <ul className="divide-y divide-zinc-100 border border-zinc-200 rounded-xl bg-white">
+          <ul className="divide-y divide-zinc-100 border border-zinc-200 rounded-xl bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
             {[refFasta, refGff].map((f) => (
               <FileRow key={f.id} file={f} projectId={projectId} onChanged={onChanged} />
             ))}
@@ -382,7 +382,7 @@ function InputsTab({
           Query genomes ({queries.length})
         </h2>
         {queries.length > 0 ? (
-          <ul className="divide-y divide-zinc-100 border border-zinc-200 rounded-xl bg-white">
+          <ul className="divide-y divide-zinc-100 border border-zinc-200 rounded-xl bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
             {queries.map((f) => (
               <FileRow key={f.id} file={f} projectId={projectId} onChanged={onChanged} />
             ))}
@@ -401,11 +401,11 @@ function InputsTab({
           Gene panel (optional, for the strict recheck)
         </h2>
         {panel ? (
-          <ul className="divide-y divide-zinc-100 border border-zinc-200 rounded-xl bg-white">
+          <ul className="divide-y divide-zinc-100 border border-zinc-200 rounded-xl bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
             <FileRow file={panel} projectId={projectId} onChanged={onChanged} />
           </ul>
         ) : (
-          <p className="text-zinc-500 text-[15px]">
+          <p className="text-zinc-500 text-[15px] dark:text-zinc-400">
             Not used. Add a panel from the setup dialog if you want certain
             genes double-checked with a precise search.
           </p>
@@ -435,12 +435,12 @@ function FileRow({
     <li className="flex items-center justify-between gap-4 px-4 py-3">
       <div className="min-w-0">
         <p className="text-[15px] font-medium truncate">{file.display_name}</p>
-        <p className="text-xs text-zinc-400 mt-0.5">
+        <p className="text-xs text-zinc-400 mt-0.5 dark:text-zinc-500">
           {formatSize(file.size)} - added {formatDate(file.created_at)}
         </p>
       </div>
       <button
-        className="text-sm text-zinc-400 hover:text-red-600 h-9 px-2 rounded-md hover:bg-red-50 shrink-0"
+        className="text-sm text-zinc-400 hover:text-red-600 h-9 px-2 rounded-md hover:bg-red-50 shrink-0 dark:text-zinc-500 dark:hover:text-red-400 dark:hover:bg-red-950/40"
         disabled={busy}
         onClick={async () => {
           if (
@@ -474,8 +474,8 @@ function EmptyInline({
   onClick: () => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 border border-dashed border-zinc-300 rounded-xl px-4 py-3">
-      <p className="text-zinc-500 text-[15px]">{text}</p>
+    <div className="flex items-center justify-between gap-4 border border-dashed border-zinc-300 rounded-xl px-4 py-3 dark:border-zinc-700">
+      <p className="text-zinc-500 text-[15px] dark:text-zinc-400">{text}</p>
       <Button variant="secondary" onClick={onClick}>
         {action}
       </Button>
@@ -512,7 +512,7 @@ function RunsTab({
 
   if (runs.length === 0)
     return (
-      <p className="text-zinc-500 text-[15px]">
+      <p className="text-zinc-500 text-[15px] dark:text-zinc-400">
         No comparisons have been run yet. Set up the inputs and run the first
         one.
       </p>
@@ -520,7 +520,7 @@ function RunsTab({
 
   return (
     <div className="space-y-4">
-      <ul className="divide-y divide-zinc-100 border border-zinc-200 rounded-xl bg-white">
+      <ul className="divide-y divide-zinc-100 border border-zinc-200 rounded-xl bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
         {runs.map((r) => (
           <li key={r.id} className="px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -530,13 +530,13 @@ function RunsTab({
                   <p className="text-[15px] font-medium">
                     Run #{r.id}
                     {selectedRun?.id === r.id && (
-                      <span className="text-xs text-zinc-400 font-normal">
+                      <span className="text-xs text-zinc-400 font-normal dark:text-zinc-500">
                         {" "}
                         (currently shown)
                       </span>
                     )}
                   </p>
-                  <p className="text-xs text-zinc-400 mt-0.5">
+                  <p className="text-xs text-zinc-400 mt-0.5 dark:text-zinc-500">
                     {formatDate(r.created_at)}
                     {r.finished_at
                       ? ` - took ${formatDuration(r.started_at, r.finished_at)}`
@@ -579,10 +579,10 @@ function RunsTab({
               </div>
             </div>
             {r.status === "failed" && r.error && (
-              <p className="text-sm text-red-700 mt-2">{r.error}</p>
+              <p className="text-sm text-red-700 mt-2 dark:text-red-400">{r.error}</p>
             )}
             {paramsOf[r.id] && (
-              <p className="text-xs text-zinc-400 mt-2 font-mono">
+              <p className="text-xs text-zinc-400 mt-2 font-mono dark:text-zinc-500">
                 present &gt;= {paramsOf[r.id].present_cov}% coverage, partial
                 &gt; {paramsOf[r.id].partial_cov}%, gaps &gt;=
                 {paramsOf[r.id].min_gap} bp
@@ -593,7 +593,7 @@ function RunsTab({
         ))}
       </ul>
       {showFiles !== null && (
-        <div className="border border-zinc-200 rounded-xl bg-white p-4">
+        <div className="border border-zinc-200 rounded-xl bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
           <h3 className="font-medium mb-3">Files of run #{showFiles}</h3>
           <FilesPanel runId={showFiles} />
         </div>
@@ -627,8 +627,8 @@ function RenameDialog({
   const [error, setError] = useState<string | null>(null);
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-zinc-900/40 p-4">
-      <div className="bg-white rounded-xl shadow-xl border border-zinc-200 w-full max-w-md mt-24">
-        <div className="px-6 py-4 border-b border-zinc-200">
+      <div className="bg-white rounded-xl shadow-xl border border-zinc-200 w-full max-w-md mt-24 dark:bg-zinc-900 dark:border-zinc-800">
+        <div className="px-6 py-4 border-b border-zinc-200 dark:border-zinc-800">
           <h2 className="text-lg font-semibold">Rename project</h2>
         </div>
         <div className="p-6 space-y-4">
@@ -637,7 +637,7 @@ function RenameDialog({
             autoFocus
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="w-full h-11 px-3 rounded-lg border border-zinc-300 text-[15px] focus:border-zinc-500 outline-none"
+            className="w-full h-11 px-3 rounded-lg border border-zinc-300 text-[15px] focus:border-zinc-500 outline-none dark:border-zinc-700 dark:bg-zinc-900"
             onKeyDown={(e) => {
               if (e.key === "Enter" && name.trim()) {
                 api
@@ -683,26 +683,26 @@ function DeleteProjectDialog({
   const [busy, setBusy] = useState(false);
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-zinc-900/40 p-4">
-      <div className="bg-white rounded-xl shadow-xl border border-zinc-200 w-full max-w-md mt-24">
-        <div className="px-6 py-4 border-b border-zinc-200">
+      <div className="bg-white rounded-xl shadow-xl border border-zinc-200 w-full max-w-md mt-24 dark:bg-zinc-900 dark:border-zinc-800">
+        <div className="px-6 py-4 border-b border-zinc-200 dark:border-zinc-800">
           <h2 className="text-lg font-semibold">Delete project</h2>
         </div>
         <div className="p-6 space-y-4">
           {error && <ErrorBox message={error} />}
-          <p className="text-[15px] text-zinc-600">
+          <p className="text-[15px] text-zinc-600 dark:text-zinc-400">
             This deletes the project <strong>{project.name}</strong>, its{" "}
             {project.n_runs} run{project.n_runs === 1 ? "" : "s"} and all
             uploaded files ({formatSize(project.usage_bytes)}). This cannot be
             undone.
           </p>
-          <p className="text-sm text-zinc-500">
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
             Type the project name to confirm:
           </p>
           <input
             autoFocus
             value={confirmName}
             onChange={(e) => setConfirmName(e.target.value)}
-            className="w-full h-11 px-3 rounded-lg border border-zinc-300 text-[15px] focus:border-zinc-500 outline-none"
+            className="w-full h-11 px-3 rounded-lg border border-zinc-300 text-[15px] focus:border-zinc-500 outline-none dark:border-zinc-700 dark:bg-zinc-900"
           />
           <div className="flex justify-end gap-3">
             <Button variant="ghost" onClick={onClose}>

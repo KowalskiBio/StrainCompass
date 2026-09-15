@@ -41,13 +41,13 @@ export default function ProjectsPage() {
       <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
-          <p className="text-zinc-500 mt-1">
+          <p className="text-zinc-500 mt-1 dark:text-zinc-400">
             Each project holds one annotated reference genome and the query
             genomes you compare against it.
           </p>
         </div>
         <button
-          className="h-11 px-5 rounded-lg bg-zinc-900 text-white text-[15px] hover:bg-zinc-700"
+          className="h-11 px-5 rounded-lg bg-zinc-900 text-white text-[15px] hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
           onClick={() => setNewOpen(true)}
         >
           New project
@@ -60,10 +60,10 @@ export default function ProjectsPage() {
           placeholder="Search projects"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="h-11 w-72 px-3 rounded-lg border border-zinc-300 bg-white text-[15px]"
+          className="h-11 w-72 px-3 rounded-lg border border-zinc-300 bg-white text-[15px] dark:border-zinc-700 dark:bg-zinc-900"
         />
         <button
-          className="text-sm text-zinc-500 hover:text-zinc-900 whitespace-nowrap"
+          className="text-sm text-zinc-500 hover:text-zinc-900 whitespace-nowrap dark:text-zinc-400 dark:hover:text-zinc-100"
           onClick={() => setSortDesc(!sortDesc)}
         >
           Sorted by date {sortDesc ? "(newest first)" : "(oldest first)"}
@@ -71,7 +71,7 @@ export default function ProjectsPage() {
       </div>
 
       {loading && projects.length === 0 ? (
-        <div className="flex items-center gap-3 text-zinc-500 py-16 justify-center">
+        <div className="flex items-center gap-3 text-zinc-500 py-16 justify-center dark:text-zinc-400">
           <Spinner /> Loading projects...
         </div>
       ) : filtered.length === 0 ? (
@@ -91,21 +91,21 @@ export default function ProjectsPage() {
           }
         />
       ) : (
-        <ul className="divide-y divide-zinc-200 border border-zinc-200 rounded-xl bg-white">
+        <ul className="divide-y divide-zinc-200 border border-zinc-200 rounded-xl bg-white dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
           {filtered.map((p) => (
             <li
               key={p.id}
-              className="flex items-center justify-between gap-4 px-5 py-4 hover:bg-zinc-50 cursor-pointer"
+              className="flex items-center justify-between gap-4 px-5 py-4 hover:bg-zinc-50 cursor-pointer dark:hover:bg-zinc-800/60"
               onClick={() => navigate(`/projects/${p.id}`)}
             >
               <div className="min-w-0">
                 <p className="font-medium truncate">{p.name}</p>
-                <p className="text-sm text-zinc-500 truncate">
+                <p className="text-sm text-zinc-500 truncate dark:text-zinc-400">
                   {p.organism && p.organism !== "bacteria" ? `${p.organism} - ` : ""}
                   {p.has_reference ? "reference ready" : "no reference yet"}
                 </p>
               </div>
-              <div className="flex items-center gap-6 shrink-0 text-sm text-zinc-500">
+              <div className="flex items-center gap-6 shrink-0 text-sm text-zinc-500 dark:text-zinc-400">
                 <span>
                   {p.n_queries} quer{p.n_queries === 1 ? "y" : "ies"}
                 </span>

@@ -2,6 +2,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import App from "./App";
+import { ThemeProvider } from "./theme";
 import "./index.css";
 
 /** A crash shows this card instead of a white screen. */
@@ -55,13 +56,15 @@ class ErrorBoundary extends React.Component<
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <BrowserRouter>
-        <Routes>
-          {/* App renders the header/footer and resolves the real routes
-              (/, /projects/:id, /settings) in its own Routes */}
-          <Route path="/*" element={<App />} />
-        </Routes>
-      </BrowserRouter>
+      <ThemeProvider>
+        <BrowserRouter>
+          <Routes>
+            {/* App renders the header/footer and resolves the real routes
+                (/, /projects/:id, /settings) in its own Routes */}
+            <Route path="/*" element={<App />} />
+          </Routes>
+        </BrowserRouter>
+      </ThemeProvider>
     </ErrorBoundary>
   </React.StrictMode>,
 );

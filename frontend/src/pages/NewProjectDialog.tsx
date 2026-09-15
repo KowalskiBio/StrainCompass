@@ -40,29 +40,29 @@ export function NewProjectDialog({
       <div className="space-y-4">
         {error && <ErrorBox message={error} />}
         <label className="block">
-          <span className="text-sm font-medium text-zinc-700">Project name</span>
+          <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Project name</span>
           <input
             autoFocus
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && create()}
             placeholder="e.g. Listeria monocytogenes comparison"
-            className="mt-1.5 w-full h-11 px-3 rounded-lg border border-zinc-300 text-[15px] focus:border-zinc-500 outline-none"
+            className="mt-1.5 w-full h-11 px-3 rounded-lg border border-zinc-300 text-[15px] focus:border-zinc-500 outline-none dark:border-zinc-700 dark:bg-zinc-900"
           />
         </label>
         <label className="block">
-          <span className="text-sm font-medium text-zinc-700">
-            Organism <span className="text-zinc-400 font-normal">(optional)</span>
+          <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+            Organism <span className="text-zinc-400 font-normal dark:text-zinc-500">(optional)</span>
           </span>
           <input
             value={organism}
             onChange={(e) => setOrganism(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && create()}
             placeholder="e.g. L. monocytogenes EGD-e"
-            className="mt-1.5 w-full h-11 px-3 rounded-lg border border-zinc-300 text-[15px] focus:border-zinc-500 outline-none"
+            className="mt-1.5 w-full h-11 px-3 rounded-lg border border-zinc-300 text-[15px] focus:border-zinc-500 outline-none dark:border-zinc-700 dark:bg-zinc-900"
           />
         </label>
-        <p className="text-sm text-zinc-500">
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">
           After creating the project you will add the reference genome and the
           query genomes.
         </p>

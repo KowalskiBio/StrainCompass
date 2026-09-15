@@ -190,7 +190,7 @@ export function ResultsTables({
     <div>
       {/* toolbar */}
       <div className="flex flex-wrap items-center gap-2 py-3">
-        <div className="flex rounded-lg border border-zinc-300 overflow-hidden h-11">
+        <div className="flex rounded-lg border border-zinc-300 overflow-hidden h-11 dark:border-zinc-700">
           {(
             [
               ["genes_coverage", "Genes coverage"],
@@ -206,8 +206,8 @@ export function ResultsTables({
               onClick={() => setTable(k)}
               className={`px-4 text-[15px] font-medium transition-colors ${
                 table === k
-                  ? "bg-zinc-900 text-white"
-                  : "bg-white text-zinc-600 hover:bg-zinc-100"
+                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                  : "bg-white text-zinc-600 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
               }`}
             >
               {label}
@@ -220,7 +220,7 @@ export function ResultsTables({
             <select
               value={queryId ?? ""}
               onChange={(e) => setQueryId(Number(e.target.value) || undefined)}
-              className="h-11 px-3 rounded-lg border border-zinc-300 bg-white text-[15px]"
+              className="h-11 px-3 rounded-lg border border-zinc-300 bg-white text-[15px] dark:border-zinc-700 dark:bg-zinc-900"
             >
               {run.queries.map((q) => (
                 <option key={q.file_id} value={q.file_id}>
@@ -234,11 +234,11 @@ export function ResultsTables({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search genes..."
-          className="h-11 px-3 rounded-lg border border-zinc-300 text-[15px] w-56"
+          className="h-11 px-3 rounded-lg border border-zinc-300 text-[15px] w-56 dark:border-zinc-700 dark:bg-zinc-900"
         />
 
         {table === "genes_coverage" && (
-          <div className="flex rounded-lg border border-zinc-300 overflow-hidden h-11">
+          <div className="flex rounded-lg border border-zinc-300 overflow-hidden h-11 dark:border-zinc-700">
             {[
               ["", "All"],
               ["present", "Present"],
@@ -250,8 +250,8 @@ export function ResultsTables({
                 onClick={() => setCall(v)}
                 className={`px-3 text-sm font-medium transition-colors ${
                   call === v
-                    ? "bg-zinc-900 text-white"
-                    : "bg-white text-zinc-600 hover:bg-zinc-100"
+                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : "bg-white text-zinc-600 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
                 }`}
               >
                 {label}
@@ -261,7 +261,7 @@ export function ResultsTables({
         )}
 
         {table === "matrix" && run.queries.length > 1 && (
-          <div className="flex rounded-lg border border-zinc-300 overflow-hidden h-11">
+          <div className="flex rounded-lg border border-zinc-300 overflow-hidden h-11 dark:border-zinc-700">
             {[
               ["", "All genes"],
               ["not_present", "Not present everywhere"],
@@ -271,8 +271,8 @@ export function ResultsTables({
                 onClick={() => setCall(v)}
                 className={`px-3 text-sm font-medium transition-colors ${
                   call === v
-                    ? "bg-zinc-900 text-white"
-                    : "bg-white text-zinc-600 hover:bg-zinc-100"
+                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : "bg-white text-zinc-600 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
                 }`}
               >
                 {label}
@@ -297,11 +297,11 @@ export function ResultsTables({
       </div>
 
       {error && (
-        <p className="text-red-700 text-[15px] py-2">{error}</p>
+        <p className="text-red-700 text-[15px] py-2 dark:text-red-400">{error}</p>
       )}
 
       {/* table */}
-      <div className="border border-zinc-200 rounded-xl bg-white overflow-hidden">
+      <div className="border border-zinc-200 rounded-xl bg-white overflow-hidden dark:border-zinc-800 dark:bg-zinc-900">
         <div className="overflow-x-auto">
           <VirtualTable
             columns={visibleColumns}
@@ -316,7 +316,7 @@ export function ResultsTables({
           />
         </div>
         {/* pagination */}
-        <div className="flex items-center justify-between px-4 h-12 border-t border-zinc-200 text-sm text-zinc-500">
+        <div className="flex items-center justify-between px-4 h-12 border-t border-zinc-200 text-sm text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
           <span>
             {total === 0
               ? "No rows match the current filters"
@@ -326,14 +326,14 @@ export function ResultsTables({
             <button
               disabled={page === 0}
               onClick={() => setPage(page - 1)}
-              className="h-9 px-3 rounded-md border border-zinc-300 disabled:opacity-40 hover:bg-zinc-100"
+              className="h-9 px-3 rounded-md border border-zinc-300 disabled:opacity-40 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
             >
               Previous
             </button>
             <button
               disabled={to >= total}
               onClick={() => setPage(page + 1)}
-              className="h-9 px-3 rounded-md border border-zinc-300 disabled:opacity-40 hover:bg-zinc-100"
+              className="h-9 px-3 rounded-md border border-zinc-300 disabled:opacity-40 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
             >
               Next
             </button>
@@ -379,19 +379,19 @@ function VirtualTable({
   });
 
   return (
-    <div style={{ minWidth: columns.reduce((a, c) => a + (c.width ?? 120), 0) }}>
+    <div className="min-w-full">
       {/* header */}
-      <div className="flex bg-zinc-50 border-b border-zinc-200 sticky top-0 z-10">
+      <div className="flex bg-zinc-50 border-b border-zinc-200 sticky top-0 z-10 dark:bg-zinc-900 dark:border-zinc-800">
         {columns.map((c) => (
           <button
             key={c.key}
             onClick={() => onSort(c.key)}
-            className={`flex items-center gap-1 px-3 h-11 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-900 border-r border-zinc-200 last:border-r-0 ${c.numeric ? "justify-end" : ""}`}
-            style={{ width: c.width ?? 120, minWidth: c.width ?? 120 }}
+            className={`flex items-center gap-1 px-3 h-11 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-900 border-r border-zinc-200 last:border-r-0 dark:text-zinc-400 dark:hover:text-zinc-100 dark:border-zinc-800 ${c.numeric ? "justify-end" : ""}`}
+            style={{ flex: `${c.width ?? 120} 1 ${c.width ?? 120}px`, minWidth: c.width ?? 120 }}
           >
             <span className="truncate">{c.label}</span>
             {sortBy === c.key && (
-              <span className="text-zinc-900">{sortDir === "asc" ? "\u2191" : "\u2193"}</span>
+              <span className="text-zinc-900 dark:text-zinc-100">{sortDir === "asc" ? "\u2191" : "\u2193"}</span>
             )}
           </button>
         ))}
@@ -404,9 +404,9 @@ function VirtualTable({
             return (
               <div
                 key={v.key}
-                className={`flex items-center border-b border-zinc-100 text-[15px] ${
-                  v.index % 2 ? "bg-zinc-50/60" : "bg-white"
-                } hover:bg-blue-50/50`}
+                className={`flex items-center border-b border-zinc-100 text-[15px] dark:border-zinc-800 ${
+                  v.index % 2 ? "bg-zinc-50/60 dark:bg-zinc-800/30" : "bg-white dark:bg-zinc-900"
+                } hover:bg-blue-50/50 dark:hover:bg-blue-950/30`}
                 style={{
                   position: "absolute",
                   top: v.start,
@@ -431,10 +431,10 @@ function VirtualTable({
                 {columns.map((c) => (
                   <div
                     key={c.key}
-                    className={`px-3 flex items-center truncate border-r border-zinc-100 last:border-r-0 ${
+                    className={`px-3 flex items-center truncate border-r border-zinc-100 last:border-r-0 dark:border-zinc-800 ${
                       c.numeric ? "justify-end font-mono text-sm tabular-nums" : ""
                     }`}
-                    style={{ width: c.width ?? 120, minWidth: c.width ?? 120 }}
+                    style={{ flex: `${c.width ?? 120} 1 ${c.width ?? 120}px`, minWidth: c.width ?? 120 }}
                   >
                     <Cell
                       col={c.key}
@@ -468,12 +468,12 @@ function Cell({
   if (col === "call") return <CallBadge call={v as Call} />;
   if (col === "genes") {
     const genes = v as string[];
-    if (!genes || genes.length === 0) return <span className="text-zinc-300">-</span>;
+    if (!genes || genes.length === 0) return <span className="text-zinc-300 dark:text-zinc-700">-</span>;
     return (
       <span className="truncate">
         {genes.slice(0, 6).join(", ")}
         {genes.length > 6 && (
-          <span className="text-zinc-400"> +{genes.length - 6} more</span>
+          <span className="text-zinc-400 dark:text-zinc-500"> +{genes.length - 6} more</span>
         )}
       </span>
     );
@@ -495,7 +495,7 @@ function Cell({
       return <span>{v.toFixed(2)}</span>;
     return <span>{v.toLocaleString("en-US")}</span>;
   }
-  if (v === null || v === undefined || v === "") return <span className="text-zinc-300">-</span>;
+  if (v === null || v === undefined || v === "") return <span className="text-zinc-300 dark:text-zinc-700">-</span>;
   return <span className="truncate">{String(v)}</span>;
 }
 
@@ -513,16 +513,16 @@ function ColumnPicker({
     <div className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="h-11 px-3 rounded-lg border border-zinc-300 bg-white text-[15px] hover:bg-zinc-100"
+        className="h-11 px-3 rounded-lg border border-zinc-300 bg-white text-[15px] hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
       >
         Columns
       </button>
       {open && (
-        <div className="absolute right-0 top-12 z-30 bg-white border border-zinc-200 rounded-lg shadow-lg p-3 w-64">
-          <p className="text-xs font-semibold text-zinc-400 uppercase mb-2">Visible columns</p>
+        <div className="absolute right-0 top-12 z-30 bg-white border border-zinc-200 rounded-lg shadow-lg p-3 w-64 dark:bg-zinc-900 dark:border-zinc-800">
+          <p className="text-xs font-semibold text-zinc-400 uppercase mb-2 dark:text-zinc-500">Visible columns</p>
           <div className="space-y-1 max-h-80 overflow-y-auto">
             {columns.map((c) => (
-              <label key={c.key} className="flex items-center gap-2 h-9 px-2 rounded hover:bg-zinc-50 cursor-pointer">
+              <label key={c.key} className="flex items-center gap-2 h-9 px-2 rounded hover:bg-zinc-50 cursor-pointer dark:hover:bg-zinc-800">
                 <input
                   type="checkbox"
                   className="w-4 h-4 accent-zinc-900"
@@ -546,7 +546,7 @@ function ColumnPicker({
           </div>
           {selected.length > 0 && (
             <button
-              className="mt-2 w-full h-9 text-sm text-zinc-500 hover:text-zinc-900"
+              className="mt-2 w-full h-9 text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
               onClick={() => onChange([])}
             >
               Show all columns
@@ -573,7 +573,7 @@ function ExportButton({
     <div className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="h-11 px-4 rounded-lg bg-zinc-900 text-white text-[15px] font-medium hover:bg-zinc-700 inline-flex items-center gap-2"
+        className="h-11 px-4 rounded-lg bg-zinc-900 text-white text-[15px] font-medium hover:bg-zinc-700 inline-flex items-center gap-2 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
       >
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
           <path d="M8 2v8m0 0l-3-3m3 3l3-3M3 13h10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
@@ -581,16 +581,16 @@ function ExportButton({
         Export
       </button>
       {open && (
-        <div className="absolute right-0 top-12 z-30 bg-white border border-zinc-200 rounded-lg shadow-lg p-2 w-72">
+        <div className="absolute right-0 top-12 z-30 bg-white border border-zinc-200 rounded-lg shadow-lg p-2 w-72 dark:bg-zinc-900 dark:border-zinc-800">
           {["tsv", "csv"].map((format) => (
             <a
               key={format}
               href={api.exportUrl(run.id, table, query, format)}
               onClick={() => setOpen(false)}
-              className="flex items-center justify-between px-3 h-11 rounded-md hover:bg-zinc-100 text-[15px]"
+              className="flex items-center justify-between px-3 h-11 rounded-md hover:bg-zinc-100 text-[15px] dark:hover:bg-zinc-800"
             >
               <span>{format.toUpperCase()}</span>
-              <span className="text-xs text-zinc-400">current view</span>
+              <span className="text-xs text-zinc-400 dark:text-zinc-500">current view</span>
             </a>
           ))}
           {table === "genes_coverage" &&
@@ -599,10 +599,10 @@ function ExportButton({
                 key={`all-${format}`}
                 href={api.exportUrl(run.id, table, { ...query, cols: allCols }, format)}
                 onClick={() => setOpen(false)}
-                className="flex items-center justify-between px-3 h-11 rounded-md hover:bg-zinc-100 text-[15px]"
+                className="flex items-center justify-between px-3 h-11 rounded-md hover:bg-zinc-100 text-[15px] dark:hover:bg-zinc-800"
               >
                 <span>{format.toUpperCase()}</span>
-                <span className="text-xs text-zinc-400">all columns</span>
+                <span className="text-xs text-zinc-400 dark:text-zinc-500">all columns</span>
               </a>
             ))}
         </div>
@@ -641,11 +641,11 @@ function GenePreview({
   }, [runId, locus, cache]);
   if (!detail) return null;
   return (
-    <div className="fixed bottom-4 left-4 z-40 bg-white border border-zinc-200 rounded-xl shadow-xl p-4 w-96 pointer-events-auto">
+    <div className="fixed bottom-4 left-4 z-40 bg-white border border-zinc-200 rounded-xl shadow-xl p-4 w-96 pointer-events-auto dark:bg-zinc-900 dark:border-zinc-800">
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="font-semibold">{detail.locus_tag}</p>
-          <p className="text-xs text-zinc-400 mt-0.5">
+          <p className="text-xs text-zinc-400 mt-0.5 dark:text-zinc-500">
             {detail.symbol ? `${detail.symbol} - ` : ""}
             {detail.biotype} - {detail.seqid}:{detail.start.toLocaleString("en-US")}-
             {detail.end.toLocaleString("en-US")}
@@ -653,14 +653,14 @@ function GenePreview({
         </div>
         <button
           onClick={onOpen}
-          className="h-9 px-3 rounded-md bg-zinc-900 text-white text-sm hover:bg-zinc-700"
+          className="h-9 px-3 rounded-md bg-zinc-900 text-white text-sm hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
         >
           Show alignment
         </button>
       </div>
       <table className="w-full mt-3 text-sm">
         <thead>
-          <tr className="text-left text-zinc-400">
+          <tr className="text-left text-zinc-400 dark:text-zinc-500">
             <th className="font-medium py-1">Query</th>
             <th className="font-medium py-1">Coverage</th>
             <th className="font-medium py-1">Identity</th>
@@ -669,7 +669,7 @@ function GenePreview({
         </thead>
         <tbody>
           {detail.queries.map((q) => (
-            <tr key={q.query_id} className="border-t border-zinc-100">
+            <tr key={q.query_id} className="border-t border-zinc-100 dark:border-zinc-800">
               <td className="py-1.5 truncate max-w-32" title={q.query_name}>
                 {q.query_name}
               </td>
