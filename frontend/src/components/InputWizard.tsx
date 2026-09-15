@@ -41,6 +41,7 @@ export function InputWizard({
   const [step, setStep] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [geneList, setGeneList] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [accession, setAccession] = useState("");
   const [schema, setSchema] = useState<ParamSpecLike[]>([]);
@@ -126,29 +127,56 @@ export function InputWizard({
     setError(null);
     setNotice(null);
     try {
+      let r: { found: string[]; from_ncbi: string[]; missing: string[] };
       if (/\.(csv|tsv|txt)$/i.test(f.name)) {
-        const r = await api.uploadPanelIds(projectId, f);
-        onFilesChanged();
-        if (r.missing.length > 0) {
-          setNotice(
-            `The panel was built with ${r.found.length} of ${
-              r.found.length + r.missing.length
-            } genes. Not found in the reference: ${r.missing.join(", ")}.`,
-          );
-        } else {
-          setNotice(
-            `The panel was built from all ${r.found.length} genes of the list.`,
-          );
-        }
+        r = await api.uploadPanelIds(projectId, f);
       } else {
         await api.uploadPanel(projectId, f);
-        onFilesChanged();
+        r = { found: [], from_ncbi: [], missing: [] };
       }
+      onFilesChanged();
+      showPanelNotice(r);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(null);
     }
+  }
+
+  async function buildPanelFromText() {
+    if (!geneList.trim()) {
+      setError("Please type the gene names first.");
+      return;
+    }
+    setBusy("Building the gene panel (genes not in the reference are fetched from NCBI)...");
+    setError(null);
+    setNotice(null);
+    try {
+      const r = await api.buildPanelFromText(projectId, geneList);
+      onFilesChanged();
+      showPanelNotice(r);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function showPanelNotice(r: {
+    found: string[];
+    from_ncbi: string[];
+    missing: string[];
+  }) {
+    if (r.found.length === 0 && r.from_ncbi.length === 0) return;
+    const parts = [`${r.found.length} from the reference`];
+    if (r.from_ncbi.length > 0)
+      parts.push(`${r.from_ncbi.length} from NCBI`);
+    let msg = `The panel was built with ${r.found.length + r.from_ncbi.length} genes: ${parts.join(", ")}.`;
+    if (r.from_ncbi.length > 0)
+      msg += ` Fetched: ${r.from_ncbi.join(", ")}.`;
+    if (r.missing.length > 0)
+      msg += ` Not found anywhere: ${r.missing.join(", ")} (add these via a FASTA file if you need them).`;
+    setNotice(msg);
   }
 
   const steps = [
@@ -321,11 +349,26 @@ export function InputWizard({
                 optional.
               </p>
               <p className="text-[15px] text-zinc-600">
-                Drop a list of genes (CSV/TSV, one per line: locus tags like
-                lmo0444, symbols like inlA, or {"\"pva (lmo0446)\""} ) and the
-                gene sequences are collected from the reference automatically.
-                A ready-made FASTA panel works too.
+                Paste a list of genes (separated by commas or new lines:
+                symbols like inlA, locus tags like lmo0444) or drop a CSV
+                file, and the sequences are collected automatically: from
+                your reference genome, and for genes it does not carry,
+                from NCBI. A ready-made FASTA panel also works.
               </p>
+              <div className="flex gap-2">
+                <textarea
+                  className="flex-1 min-h-24 border border-zinc-300 rounded-lg px-3 py-2 text-[15px] font-mono text-sm focus:outline-none focus:border-zinc-500"
+                  placeholder="inlA, inlB, qacH, lmo0444, ..."
+                  value={geneList}
+                  onChange={(e) => setGeneList(e.target.value)}
+                />
+                <button
+                  className="self-start h-11 px-4 rounded-lg bg-zinc-900 text-white text-[15px] hover:bg-zinc-700 whitespace-nowrap"
+                  onClick={buildPanelFromText}
+                >
+                  Build panel
+                </button>
+              </div>
               {notice && (
                 <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-[15px] text-zinc-700">
                   {notice}

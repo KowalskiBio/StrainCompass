@@ -213,11 +213,14 @@ pub async fn upload_panel(
 pub struct PanelFromIdsDto {
     pub file: FileDto,
     pub found: Vec<String>,
+    /// Genes fetched from NCBI because the reference lacks them.
+    pub from_ncbi: Vec<String>,
     pub missing: Vec<String>,
 }
 
-/// POST /projects/{id}/panel/from_ids : a CSV/TSV/list of gene identifiers.
-/// The panel FASTA is generated automatically from the reference genome.
+/// POST /projects/{id}/panel/from_ids : a CSV/TSV file of gene identifiers.
+/// The panel FASTA is generated automatically: genes present in the
+/// reference are extracted from it, the rest are looked up on NCBI.
 pub async fn upload_panel_ids(
     State(state): State<SharedState>,
     Path(project_id): Path<i64>,
@@ -248,36 +251,139 @@ pub async fn upload_panel_ids(
             "This file appears to be empty. Please check the file and try again.".into(),
         ));
     }
+    build_panel(state, project_id, &ids_text, &name).await
+}
+
+#[derive(serde::Deserialize)]
+pub struct PanelTextBody {
+    pub text: String,
+}
+
+/// POST /projects/{id}/panel/from_text : gene identifiers pasted as text
+/// (commas, spaces or new lines as separators).
+pub async fn upload_panel_text(
+    State(state): State<SharedState>,
+    Path(project_id): Path<i64>,
+    Json(body): Json<PanelTextBody>,
+) -> ApiResult<Json<PanelFromIdsDto>> {
+    ensure_project(&state, project_id).await?;
+    if body.text.trim().is_empty() {
+        return Err(ApiError::BadRequest(
+            "The gene list is empty. Enter gene names separated by commas or new lines.".into(),
+        ));
+    }
+    build_panel(state, project_id, &body.text, "gene list").await
+}
+
+async fn build_panel(
+    state: SharedState,
+    project_id: i64,
+    ids_text: &str,
+    source_name: &str,
+) -> ApiResult<Json<PanelFromIdsDto>> {
     let Some((ref_fasta, ref_gff)) = reference_paths(&state, project_id)? else {
         return Err(ApiError::BadRequest(
             "Please add the reference genome (FASTA + GFF) first: the gene panel is built from it."
                 .into(),
         ));
     };
+    let ids_text = ids_text.to_string();
     let panel = tokio::task::spawn_blocking(move || {
         bactiment_engine::panel::panel_from_ids(&ref_fasta, &ref_gff, &ids_text)
     })
     .await
     .map_err(|e| ApiError::Internal(format!("The panel could not be built. ({e})")))??;
 
-    if panel.found.is_empty() {
+    // Genes the reference does not carry: fetch them from NCBI by name.
+    let mut fasta = panel.fasta;
+    let mut from_ncbi = Vec::new();
+    let mut missing = panel.missing.clone();
+    if !missing.is_empty() {
+        let (organism, api_key) = {
+            let conn = state.db.lock().unwrap();
+            let organism: String = conn
+                .query_row(
+                    "SELECT organism FROM projects WHERE id = ?1",
+                    [project_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or_default();
+            let key = crate::db::get_setting(&conn, "ncbi_api_key")?;
+            (organism, key)
+        };
+        let genus = organism.split_whitespace().next().unwrap_or("").to_string();
+        if !genus.is_empty() {
+            let c = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .connect_timeout(std::time::Duration::from_secs(20))
+                .user_agent("bactiment/0.1")
+                .build()
+                .map_err(|e| ApiError::Internal(format!("NCBI could not be reached. ({e})")))?;
+            let mut unresolved: Vec<String> = Vec::new();
+            for line in &missing {
+                let mut got_one = false;
+                // "pva (lmo0446)": try the parenthesized locus tag first
+                // (a specific genome), then the bare symbol as fallback
+                let mut tokens: Vec<String> = Vec::new();
+                for part in line.split([',', '\t', ';']) {
+                    for tok in part.split_whitespace() {
+                        let bare = tok
+                            .trim_start_matches(['(', '['])
+                            .trim_end_matches([')', ']']);
+                        if bare.is_empty() || bare.starts_with('#') {
+                            continue;
+                        }
+                        if tok.starts_with('(') || tok.starts_with('[') {
+                            tokens.insert(0, bare.to_string());
+                        } else {
+                            tokens.push(bare.to_string());
+                        }
+                    }
+                }
+                for name in tokens {
+                    if let Some(g) = crate::routes::ncbi::fetch_gene(
+                        &c,
+                        api_key.as_deref(),
+                        &organism,
+                        &genus,
+                        &name,
+                    )
+                    .await
+                    {
+                        fasta.push_str(&g.record);
+                        from_ncbi.push(format!("{} ({})", name, g.source));
+                        got_one = true;
+                        break;
+                    }
+                }
+                if !got_one {
+                    unresolved.push(line.clone());
+                }
+            }
+            missing = unresolved;
+        }
+    }
+
+    if panel.found.is_empty() && from_ncbi.is_empty() {
         return Err(ApiError::BadRequest(format!(
-            "None of the entries in \u{201c}{name}\u{201d} match a gene in the reference annotation. Check that the identifiers are locus tags or gene symbols of this reference."
+            "None of the entries in \u{201c}{source_name}\u{201d} match a gene in the reference annotation, and none could be fetched from NCBI. Check the spelling of the gene names."
         )));
     }
+
     delete_role(&state, project_id, "panel").await?;
     let dto = store_upload(
         &state,
         project_id,
         "panel",
         "genes_of_interest.fasta",
-        panel.fasta.into_bytes(),
+        fasta.into_bytes(),
     )
     .await?;
     Ok(Json(PanelFromIdsDto {
         file: dto,
         found: panel.found,
-        missing: panel.missing,
+        from_ncbi,
+        missing,
     }))
 }
 

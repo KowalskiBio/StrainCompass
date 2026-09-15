@@ -52,67 +52,73 @@ pub fn panel_from_ids(ref_fasta: &Path, ref_gff: &Path, ids_text: &str) -> Resul
     let mut missing = Vec::new();
     let mut found = Vec::new();
     let mut used: Vec<String> = Vec::new();
+    let mut any_entry = false;
 
+    // Lines hold either one gene (one-per-line list/CSV) or several
+    // comma-separated genes (pasted text: "inlA, hly, qacH").
     for raw_line in ids_text.lines() {
         let line = raw_line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
         // skip a header row on the first line
-        if used.is_empty() && missing.is_empty() && is_header_line(line) {
+        if !any_entry && is_header_line(line) {
             continue;
         }
-        let mut resolved: Option<(&Gene, String)> = None;
-        // parenthesized locus tags first: "pva (lmo0446)"
-        for m in parentheses(line) {
-            if let Some(g) = by_locus.get(m.as_str()) {
-                resolved = Some((g, g.locus_tag.clone()));
-                break;
+        for cell in line.split([',', ';']) {
+            let cell = cell.trim().trim_matches('"').trim();
+            if cell.is_empty() || cell.starts_with('#') {
+                continue;
             }
-        }
-        if resolved.is_none() {
-            // then each whitespace/comma/tab-separated token
-            for tok in line
-                .split(|c: char| c == ',' || c == '\t' || c == ';' || c.is_whitespace())
-                .map(str::trim)
-                .filter(|t| !t.is_empty() && !t.starts_with('#'))
-            {
-                let bare = tok
-                    .trim_start_matches(['(', '['])
-                    .trim_end_matches([')', ']']);
-                if let Some(g) = by_locus.get(bare) {
+            any_entry = true;
+            let mut resolved: Option<(&Gene, String)> = None;
+            // parenthesized locus tags first: "pva (lmo0446)"
+            for m in parentheses(cell) {
+                if let Some(g) = by_locus.get(m.as_str()) {
                     resolved = Some((g, g.locus_tag.clone()));
                     break;
                 }
-                if let Some(g) = by_old_locus.get(bare) {
-                    // re-annotated genome: keep the user's (old) spelling
-                    resolved = Some((g, bare.to_string()));
-                    break;
-                }
-                if let Some(g) = by_symbol.get(&bare.to_lowercase()) {
-                    // keep the user's spelling as the FASTA header
-                    resolved = Some((g, bare.to_string()));
-                    break;
+            }
+            if resolved.is_none() {
+                // then each whitespace-separated token of the cell
+                for tok in cell.split_whitespace().filter(|t| !t.starts_with('#')) {
+                    let bare = tok
+                        .trim_start_matches(['(', '['])
+                        .trim_end_matches([')', ']']);
+                    if let Some(g) = by_locus.get(bare) {
+                        resolved = Some((g, g.locus_tag.clone()));
+                        break;
+                    }
+                    if let Some(g) = by_old_locus.get(bare) {
+                        // re-annotated genome: keep the user's (old) spelling
+                        resolved = Some((g, bare.to_string()));
+                        break;
+                    }
+                    if let Some(g) = by_symbol.get(&bare.to_lowercase()) {
+                        // keep the user's spelling as the FASTA header
+                        resolved = Some((g, bare.to_string()));
+                        break;
+                    }
                 }
             }
-        }
-        match resolved {
-            Some((gene, header)) => {
-                if used.contains(&header) {
-                    continue; // same gene listed twice
-                }
-                used.push(header.clone());
-                found.push(header.clone());
-                let seq = gene_sequence(ref_fasta, gene)?;
-                fasta.push('>');
-                fasta.push_str(&header);
-                fasta.push('\n');
-                for chunk in seq.chunks(60) {
-                    fasta.push_str(std::str::from_utf8(chunk).unwrap_or(""));
+            match resolved {
+                Some((gene, header)) => {
+                    if used.contains(&header) {
+                        continue; // same gene listed twice
+                    }
+                    used.push(header.clone());
+                    found.push(header.clone());
+                    let seq = gene_sequence(ref_fasta, gene)?;
+                    fasta.push('>');
+                    fasta.push_str(&header);
                     fasta.push('\n');
+                    for chunk in seq.chunks(60) {
+                        fasta.push_str(std::str::from_utf8(chunk).unwrap_or(""));
+                        fasta.push('\n');
+                    }
                 }
+                None => missing.push(cell.to_string()),
             }
-            None => missing.push(line.to_string()),
         }
     }
 

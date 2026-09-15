@@ -50,6 +50,10 @@ fn routes() -> Router<SharedState> {
             post(routes::uploads::upload_panel_ids),
         )
         .route(
+            "/projects/{id}/panel/from_text",
+            post(routes::uploads::upload_panel_text),
+        )
+        .route(
             "/projects/{id}/runs",
             post(routes::runs::start).get(routes::runs::list_for_project),
         )

@@ -99,11 +99,20 @@ export const api = {
   uploadPanelIds: (projectId: number, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return request<{ file: ProjectFile; found: string[]; missing: string[] }>(
+    return request<{ file: ProjectFile; found: string[]; from_ncbi: string[]; missing: string[] }>(
       `/projects/${projectId}/panel/from_ids`,
       { method: "POST", body: form },
     );
   },
+  buildPanelFromText: (projectId: number, text: string) =>
+    request<{ file: ProjectFile; found: string[]; from_ncbi: string[]; missing: string[] }>(
+      `/projects/${projectId}/panel/from_text`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text }),
+      },
+    ),
   deleteFile: (projectId: number, fileId: number) =>
     request<string>(`/projects/${projectId}/files/${fileId}`, {
       method: "DELETE",
