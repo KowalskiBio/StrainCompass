@@ -343,25 +343,13 @@ export function InputWizard({
 
           {!busy && step === 3 && (
             <div className="space-y-4">
-              <p className="text-[15px] text-zinc-600 dark:text-zinc-400">
-                A gene panel is a set of genes checked extra strictly (a
-                precise search, in addition to the genome comparison). This is
-                optional.
-              </p>
-              <p className="text-[15px] text-zinc-600 dark:text-zinc-400">
-                Paste a list of genes (separated by commas or new lines:
-                symbols like inlA, locus tags like lmo0444) or drop a CSV
-                file, and the sequences are collected automatically: from
-                your reference genome, and for genes it does not carry,
-                from NCBI. A ready-made FASTA panel also works.
-              </p>
-              <p className="text-[15px] text-zinc-600 dark:text-zinc-400">
-                For genes NCBI cannot find by name, pin the GenBank
-                record: {"\"qacH (HF565366.1)\""} uses the record's own
-                annotation, and {"\"emrC (CP038643.1:1496-1882 rev)\""}
-                {" "}pinpoints the exact spot when the record does not
-                name the gene.
-              </p>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-[15px] text-zinc-600 dark:text-zinc-400">
+                  A gene panel is a set of genes checked extra strictly, in
+                  addition to the genome comparison. Optional.
+                </p>
+                <PanelHelp />
+              </div>
               <div className="flex gap-2">
                 <textarea
                   className="flex-1 min-h-24 border border-zinc-300 rounded-lg px-3 py-2 text-[15px] font-mono text-sm focus:outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900"
@@ -497,6 +485,46 @@ export function InputWizard({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Click-to-open tutorial for the gene panel step, kept out of the way until asked for. */
+function PanelHelp() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="text-sm font-medium text-zinc-500 hover:text-zinc-900 underline underline-offset-2 whitespace-nowrap dark:text-zinc-400 dark:hover:text-zinc-100"
+      >
+        How does this work?
+      </button>
+      {open && (
+        <div className="absolute right-0 top-8 z-30 w-96 max-w-[80vw] bg-white border border-zinc-200 rounded-lg shadow-lg p-4 space-y-3 text-[15px] text-zinc-600 dark:bg-zinc-900 dark:border-zinc-800 dark:text-zinc-400">
+          <p>
+            Paste a list of genes (separated by commas or new lines: symbols
+            like inlA, locus tags like lmo0444) or drop a CSV file, and the
+            sequences are collected automatically: from your reference
+            genome, and for genes it does not carry, from NCBI. A
+            ready-made FASTA panel also works.
+          </p>
+          <p>
+            For genes NCBI cannot find by name, pin the GenBank record:{" "}
+            {"\"qacH (HF565366.1)\""} uses the record's own annotation, and
+            {" "}{"\"emrC (CP038643.1:1496-1882 rev)\""} pinpoints the exact
+            spot when the record does not name the gene.
+          </p>
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            className="text-sm font-medium text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+          >
+            Got it
+          </button>
+        </div>
+      )}
     </div>
   );
 }
