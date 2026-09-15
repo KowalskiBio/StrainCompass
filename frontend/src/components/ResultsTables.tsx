@@ -761,6 +761,19 @@ function GenePreview({
         <br />
         {detail.seqid}:{detail.start.toLocaleString("en-US")}-
         {detail.end.toLocaleString("en-US")}
+        {detail.protein_id && (
+          <>
+            <br />
+            <a
+              href={`https://www.ncbi.nlm.nih.gov/protein/${detail.protein_id}`}
+              target="_blank"
+              rel="noreferrer"
+              className="underline hover:text-zinc-900 dark:hover:text-zinc-100"
+            >
+              {detail.protein_id}
+            </a>
+          </>
+        )}
       </p>
       <button
         onClick={onOpen}

@@ -58,6 +58,19 @@ export function GeneMsaDialog({
               {detail.symbol ? ` (${detail.symbol})` : ""} - {detail.biotype} -{" "}
               {detail.seqid}:{detail.start.toLocaleString("en-US")}-
               {detail.end.toLocaleString("en-US")} ({detail.strand > 0 ? "+" : "-"} strand)
+              {detail.protein_id && (
+                <>
+                  {" - "}
+                  <a
+                    href={`https://www.ncbi.nlm.nih.gov/protein/${detail.protein_id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline hover:text-zinc-900 dark:hover:text-zinc-100"
+                  >
+                    {detail.protein_id}
+                  </a>
+                </>
+              )}
             </span>
           )}
         </span>

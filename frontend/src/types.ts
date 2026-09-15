@@ -177,6 +177,7 @@ export interface GeneQueryAlignment {
 export interface GeneDetail {
   locus_tag: string;
   symbol: string;
+  protein_id: string;
   biotype: string;
   seqid: string;
   start: number;
