@@ -88,7 +88,7 @@ export function ResultsTables({
   const [data, setData] = useState<Page<GapRow | GeneCoverageRow | PanelRow | MatrixRow> | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [hoverGene, setHoverGene] = useState<string | null>(null);
+  const [pinnedGene, setPinnedGene] = useState<string | null>(null);
 
   useEffect(() => {
     setTable(safeInitialTable);
@@ -311,7 +311,7 @@ export function ResultsTables({
             sortBy={sortBy}
             sortDir={sortDir}
             onSort={toggleSort}
-            onHoverGene={setHoverGene}
+            onPinGene={setPinnedGene}
             onOpenGene={onOpenGene}
             run={run}
           />
@@ -342,9 +342,14 @@ export function ResultsTables({
         </div>
       </div>
 
-      {/* hover preview */}
-      {hoverGene && table === "genes_coverage" && (
-        <GenePreview runId={run.id} locus={hoverGene} onOpen={() => onOpenGene(hoverGene)} />
+      {/* right-click preview, pinned until another row is right-clicked or this is closed */}
+      {pinnedGene && table === "genes_coverage" && (
+        <GenePreview
+          runId={run.id}
+          locus={pinnedGene}
+          onOpen={() => onOpenGene(pinnedGene)}
+          onClose={() => setPinnedGene(null)}
+        />
       )}
     </div>
   );
@@ -357,7 +362,7 @@ function VirtualTable({
   sortBy,
   sortDir,
   onSort,
-  onHoverGene,
+  onPinGene,
   onOpenGene,
   run,
 }: {
@@ -367,7 +372,7 @@ function VirtualTable({
   sortBy: string | null;
   sortDir: "asc" | "desc";
   onSort: (key: string) => void;
-  onHoverGene: (locus: string | null) => void;
+  onPinGene: (locus: string | null) => void;
   onOpenGene: (locus: string) => void;
   run: Run;
 }) {
@@ -415,13 +420,13 @@ function VirtualTable({
                   width: "100%",
                   height: v.size,
                 }}
-                onMouseEnter={() => {
+                onContextMenu={(e) => {
                   if (table === "genes_coverage") {
+                    e.preventDefault();
                     const locus = row["locus_tag"] as string;
-                    onHoverGene(locus);
+                    onPinGene(locus);
                   }
                 }}
-                onMouseLeave={() => onHoverGene(null)}
                 onClick={() => {
                   if (table === "genes_coverage" || table === "matrix") {
                     const locus = row["locus_tag"] as string;
@@ -612,15 +617,17 @@ function ExportButton({
   );
 }
 
-/** Hover preview: quick stats for each query, fetched once per gene. */
+/** Right-click preview: quick stats for each query, fetched once per gene. */
 function GenePreview({
   runId,
   locus,
   onOpen,
+  onClose,
 }: {
   runId: number;
   locus: string;
   onOpen: () => void;
+  onClose: () => void;
 }) {
   const cache = GenePreviewCache.get(runId, locus);
   const [detail, setDetail] = useState<GeneDetail | null>(cache);
@@ -643,9 +650,25 @@ function GenePreview({
   if (!detail) return null;
   return (
     <div className="fixed right-4 top-56 bottom-6 z-40 w-72 flex flex-col bg-white border border-zinc-200 rounded-xl shadow-xl p-4 pointer-events-auto overflow-y-auto thin-scroll dark:bg-zinc-900 dark:border-zinc-800">
-      <p className="font-semibold truncate" title={detail.locus_tag}>
-        {detail.locus_tag}
-      </p>
+      <div className="flex items-start justify-between gap-2">
+        <p className="font-semibold truncate" title={detail.locus_tag}>
+          {detail.locus_tag}
+        </p>
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="shrink-0 w-6 h-6 grid place-items-center rounded text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 dark:text-zinc-500 dark:hover:text-zinc-100 dark:hover:bg-zinc-800"
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+            <path
+              d="M3 3l10 10M13 3L3 13"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+      </div>
       <p className="text-xs text-zinc-400 mt-0.5 dark:text-zinc-500">
         {detail.symbol ? `${detail.symbol} - ` : ""}
         {detail.biotype}
