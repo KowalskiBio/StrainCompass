@@ -27,6 +27,7 @@ const COVERAGE_COLUMNS: Column[] = [
   { key: "locus_tag", label: "Locus tag", width: 150 },
   { key: "symbol", label: "Symbol", width: 120 },
   { key: "biotype", label: "Biotype", width: 130 },
+  { key: "protein_id", label: "Protein", width: 140 },
   { key: "seqid", label: "Sequence", width: 120 },
   { key: "start", label: "Start", numeric: true, width: 90 },
   { key: "end", label: "End", numeric: true, width: 90 },
@@ -560,6 +561,20 @@ function Cell({
 }) {
   const v = row[col];
   if (col === "call") return <CallBadge call={v as Call} />;
+  if (col === "protein_id" && v) {
+    return (
+      <a
+        href={`https://www.ncbi.nlm.nih.gov/protein/${v}`}
+        target="_blank"
+        rel="noreferrer"
+        title={v as string}
+        className="truncate underline text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {v as string}
+      </a>
+    );
+  }
   if (col === "genes") {
     const genes = v as string[];
     if (!genes || genes.length === 0) return <span className="text-zinc-300 dark:text-zinc-700">-</span>;

@@ -46,6 +46,7 @@ export interface RunWithLogs {
 export interface GeneCoverageRow {
   locus_tag: string;
   symbol: string;
+  protein_id: string;
   biotype: string;
   seqid: string;
   start: number;
