@@ -74,7 +74,9 @@ pub fn file_hash(path: &Path) -> std::io::Result<String> {
 }
 
 /// The alignment cache key: reference content + query content + align
-/// layer parameters.
+/// layer parameters. Versioned so that engine changes to the alignment
+/// strategy (e.g. the nucmer matcher mode) invalidate stale deltas.
+const ALIGN_ALGO_VERSION: &str = "v2";
 pub fn align_cache_key(ref_hash: &str, qry_hash: &str, params: &RunParams) -> String {
     let mut h = Sha256::new();
     h.update(ref_hash.as_bytes());
@@ -82,6 +84,8 @@ pub fn align_cache_key(ref_hash: &str, qry_hash: &str, params: &RunParams) -> St
     h.update(qry_hash.as_bytes());
     h.update(b"|");
     h.update(params.align_signature().as_bytes());
+    h.update(b"|");
+    h.update(ALIGN_ALGO_VERSION.as_bytes());
     format!("{:x}", h.finalize())
 }
 

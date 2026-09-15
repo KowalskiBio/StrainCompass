@@ -88,8 +88,9 @@ impl ToolPaths {
             }
         }
         let mut cmd = Command::new(&self.nucmer);
-        cmd.arg("--mum")
-            .arg("-p")
+        // no matcher flag: nucmer default (--mumreference) matches the R
+        // pipeline; --mum would lose alignments in query-repetitive regions
+        cmd.arg("-p")
             .arg(out_dir.join(prefix))
             .arg(ref_fasta)
             .arg(qry_fasta);

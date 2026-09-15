@@ -91,16 +91,15 @@ pub fn parse_gff_str(text: &str) -> Result<Vec<Gene>> {
         let attrs = parse_attrs(cols[8]);
 
         match ftype {
-            "gene" | "pseudogene" => {
+            // feature type "gene" only, same as the R pipeline: GFFs mark
+            // pseudogenes with their own feature type and R excluded them
+            "gene" => {
                 let locus_tag = attrs
                     .get("locus_tag")
                     .cloned()
                     .unwrap_or_else(|| format!("{}_{}_{}_gene", seqid, start, end));
-                let symbol = attrs
-                    .get("gene")
-                    .or_else(|| attrs.get("Name"))
-                    .cloned()
-                    .unwrap_or_default();
+                // R parity: symbol comes from the gene= attribute only
+                let symbol = attrs.get("gene").cloned().unwrap_or_default();
                 let biotype = attrs
                     .get("gene_biotype")
                     .cloned()

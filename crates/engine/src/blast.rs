@@ -39,6 +39,9 @@ pub fn panel_recheck(
         )));
     }
 
+    // Parse hits. R parity: the best hit per panel gene is the single
+    // row with the highest bitscore; identity and coverage are that
+    // row's pident and qcovs, not a merge over all HSPs.
     let out = workdir.join("hits.tsv");
     let blast = Command::new(&tools.blastn)
         .args(["-query"])
@@ -47,7 +50,7 @@ pub fn panel_recheck(
         .arg(&db)
         .args([
             "-outfmt",
-            "6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue qlen slen",
+            "6 qseqid sseqid pident length qlen qcovs evalue bitscore",
         ])
         .arg("-evalue")
         .arg(format!("{}", blast_evalue.max(1e-300)))
@@ -63,41 +66,42 @@ pub fn panel_recheck(
         )));
     }
 
-    // Parse hits: per panel gene, merge query intervals for coverage,
-    // identity weighted by aligned length.
-    struct HitAcc {
+    struct Best {
         qlen: u64,
-        ivs: Vec<(u64, u64)>,
-        weighted_pid: f64,
-        aligned: u64,
-        best_evalue: f64,
+        qcovs: f64,
+        pident: f64,
+        evalue: f64,
+        bitscore: f64,
     }
-    let mut hits: HashMap<String, HitAcc> = HashMap::new();
+    let mut hits: HashMap<String, Best> = HashMap::new();
     let mut text = String::new();
     std::fs::File::open(&out)?.read_to_string(&mut text)?;
     for line in text.lines() {
         let f: Vec<&str> = line.split('\t').collect();
-        if f.len() < 13 {
+        if f.len() < 8 {
             continue;
         }
         let gene_id = f[0].to_string();
         let pident: f64 = f[2].parse().unwrap_or(0.0);
-        let length: u64 = f[3].parse().unwrap_or(0);
-        let qstart: u64 = f[6].parse().unwrap_or(1);
-        let qend: u64 = f[7].parse().unwrap_or(1);
-        let evalue: f64 = f[10].parse().unwrap_or(f64::INFINITY);
-        let qlen: u64 = f[11].parse().unwrap_or(0);
-        let acc = hits.entry(gene_id).or_insert(HitAcc {
-            qlen,
-            ivs: Vec::new(),
-            weighted_pid: 0.0,
-            aligned: 0,
-            best_evalue: f64::INFINITY,
-        });
-        acc.ivs.push((qstart.min(qend), qend.max(qstart)));
-        acc.weighted_pid += pident * length as f64;
-        acc.aligned += length;
-        acc.best_evalue = acc.best_evalue.min(evalue);
+        let qlen: u64 = f[4].parse().unwrap_or(0);
+        let qcovs: f64 = f[5].parse().unwrap_or(0.0);
+        let evalue: f64 = f[6].parse().unwrap_or(f64::INFINITY);
+        let bitscore: f64 = f[7].parse().unwrap_or(0.0);
+        match hits.get_mut(&gene_id) {
+            Some(b) if b.bitscore >= bitscore => {}
+            _ => {
+                hits.insert(
+                    gene_id,
+                    Best {
+                        qlen,
+                        qcovs,
+                        pident,
+                        evalue,
+                        bitscore,
+                    },
+                );
+            }
+        }
     }
 
     let mut rows = Vec::new();
@@ -105,47 +109,30 @@ pub fn panel_recheck(
     ids.sort();
     for id in ids {
         let h = &hits[&id];
-        let mut ivs = h.ivs.clone();
-        ivs.sort();
-        let mut merged: Vec<(u64, u64)> = Vec::new();
-        for (s, e) in ivs {
-            match merged.last_mut() {
-                Some(last) if s <= last.1 + 1 => last.1 = last.1.max(e),
-                _ => merged.push((s, e)),
-            }
-        }
-        let cov_bp: u64 = merged.iter().map(|(s, e)| e - s + 1).sum();
-        let cov_pct = if h.qlen > 0 {
-            100.0 * cov_bp.min(h.qlen) as f64 / h.qlen as f64
-        } else {
-            0.0
-        };
-        let identity = if h.aligned > 0 {
-            h.weighted_pid / h.aligned as f64
-        } else {
-            0.0
-        };
-        let call = if cov_pct >= blast_cov && identity >= blast_pid {
+        // R: qcovs >= blast_cov AND pident >= blast_pid -> Present,
+        // any other hit -> Fragment/low identity (PARTIAL here)
+        let call = if h.qcovs >= blast_cov && h.pident >= blast_pid {
             Call::Present
         } else {
-            Call::Absent
+            Call::Partial
         };
         rows.push(PanelRow {
             gene_id: id,
             qlen: h.qlen,
-            cov_pct,
-            identity,
-            best_evalue: format_evalue(h.best_evalue),
+            cov_pct: h.qcovs,
+            identity: h.pident,
+            best_evalue: format_evalue(h.evalue),
             call,
         });
     }
-    // Panel genes without any hit: read the panel fasta for the id list.
-    let panel_ids = panel_gene_ids(panel_fasta)?;
-    for pid in panel_ids {
-        if !hits.contains_key(&pid) {
+    // Panel genes without any hit: read the panel fasta for the id list
+    // (and their real lengths).
+    let panel_recs = crate::fasta::parse_fasta(panel_fasta)?;
+    for rec in panel_recs {
+        if !hits.contains_key(&rec.id) {
             rows.push(PanelRow {
-                gene_id: pid,
-                qlen: 0,
+                gene_id: rec.id,
+                qlen: rec.seq.len() as u64,
                 cov_pct: 0.0,
                 identity: 0.0,
                 best_evalue: "-".into(),
@@ -167,9 +154,4 @@ fn format_evalue(e: f64) -> String {
     } else {
         format!("{e:.1e}")
     }
-}
-
-fn panel_gene_ids(path: &Path) -> Result<Vec<String>> {
-    let recs = crate::fasta::parse_fasta(path)?;
-    Ok(recs.into_iter().map(|r| r.id).collect())
 }
