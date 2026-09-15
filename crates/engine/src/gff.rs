@@ -13,6 +13,8 @@ pub struct Gene {
     pub end: u64,
     pub strand: i8,
     pub locus_tag: String,
+    /// Older tag kept in `old_locus_tag` by re-annotated genomes.
+    pub old_locus_tag: String,
     pub symbol: String,
     pub biotype: String,
 }
@@ -110,6 +112,7 @@ pub fn parse_gff_str(text: &str) -> Result<Vec<Gene>> {
                     end,
                     strand,
                     locus_tag,
+                    old_locus_tag: attrs.get("old_locus_tag").cloned().unwrap_or_default(),
                     symbol,
                     biotype,
                 });
@@ -157,6 +160,7 @@ pub fn parse_gff_str(text: &str) -> Result<Vec<Gene>> {
                 end,
                 strand,
                 locus_tag: locus_tag.clone(),
+                old_locus_tag: attrs.get("old_locus_tag").cloned().unwrap_or_default(),
                 symbol: attrs
                     .get("gene")
                     .or_else(|| attrs.get("Name"))

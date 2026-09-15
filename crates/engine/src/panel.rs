@@ -36,9 +36,13 @@ pub fn panel_from_ids(ref_fasta: &Path, ref_gff: &Path, ids_text: &str) -> Resul
         ));
     }
     let mut by_locus: HashMap<&str, &Gene> = HashMap::new();
+    let mut by_old_locus: HashMap<&str, &Gene> = HashMap::new();
     let mut by_symbol: HashMap<String, &Gene> = HashMap::new();
     for g in &genes {
         by_locus.insert(g.locus_tag.as_str(), g);
+        if !g.old_locus_tag.is_empty() {
+            by_old_locus.insert(g.old_locus_tag.as_str(), g);
+        }
         if !g.symbol.is_empty() {
             by_symbol.insert(g.symbol.to_lowercase(), g);
         }
@@ -78,6 +82,11 @@ pub fn panel_from_ids(ref_fasta: &Path, ref_gff: &Path, ids_text: &str) -> Resul
                     .trim_end_matches([')', ']']);
                 if let Some(g) = by_locus.get(bare) {
                     resolved = Some((g, g.locus_tag.clone()));
+                    break;
+                }
+                if let Some(g) = by_old_locus.get(bare) {
+                    // re-annotated genome: keep the user's (old) spelling
+                    resolved = Some((g, bare.to_string()));
                     break;
                 }
                 if let Some(g) = by_symbol.get(&bare.to_lowercase()) {
