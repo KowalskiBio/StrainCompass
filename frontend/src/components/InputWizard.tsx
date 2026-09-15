@@ -355,6 +355,13 @@ export function InputWizard({
                 your reference genome, and for genes it does not carry,
                 from NCBI. A ready-made FASTA panel also works.
               </p>
+              <p className="text-[15px] text-zinc-600">
+                For genes NCBI cannot find by name, pin the GenBank
+                record: {"\"qacH (HF565366.1)\""} uses the record's own
+                annotation, and {"\"emrC (CP038643.1:1496-1882 rev)\""}
+                {" "}pinpoints the exact spot when the record does not
+                name the gene.
+              </p>
               <div className="flex gap-2">
                 <textarea
                   className="flex-1 min-h-24 border border-zinc-300 rounded-lg px-3 py-2 text-[15px] font-mono text-sm focus:outline-none focus:border-zinc-500"

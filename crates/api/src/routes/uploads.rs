@@ -322,6 +322,25 @@ async fn build_panel(
             let mut unresolved: Vec<String> = Vec::new();
             for line in &missing {
                 let mut got_one = false;
+                // a GenBank accession pinned in the list itself:
+                // "qacH (HF565366.1)" or "emrC (CP038643.1:1496-1882 rev)"
+                if let Some(spec) = crate::routes::ncbi::parse_accession_spec(line) {
+                    if let Some(g) =
+                        crate::routes::ncbi::fetch_gene_by_accession(&c, api_key.as_deref(), &spec)
+                            .await
+                    {
+                        fasta.push_str(&g.record);
+                        from_ncbi.push(format!(
+                            "{} ({})",
+                            spec.name.clone().unwrap_or_else(|| spec.accession.clone()),
+                            g.source
+                        ));
+                        got_one = true;
+                    }
+                }
+                if got_one {
+                    continue;
+                }
                 // "pva (lmo0446)": try the parenthesized locus tag first
                 // (a specific genome), then the bare symbol as fallback
                 let mut tokens: Vec<String> = Vec::new();
