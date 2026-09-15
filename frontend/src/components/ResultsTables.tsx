@@ -103,7 +103,8 @@ export function ResultsTables({
 
   useEffect(() => {
     onStateChange(table, queryId);
-  }, [table, queryId, onStateChange]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [table, queryId]);
 
   const columns: Column[] = useMemo(() => {
     if (table === "genes_coverage") return COVERAGE_COLUMNS;
