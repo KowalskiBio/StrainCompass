@@ -59,6 +59,13 @@ const PANEL_COLUMNS: Column[] = [
 
 const PAGE_SIZE = 200;
 const COL_WIDTHS_KEY = "bactiment-col-widths";
+const HIDDEN_COLS_KEY = "bactiment-hidden-cols";
+
+// Columns hidden by default per table, until the user changes it via the
+// Columns picker (then their choice is remembered instead).
+const DEFAULT_HIDDEN_COLS: Partial<Record<TableKind, string[]>> = {
+  genes_coverage: ["start", "end", "length", "cov_bp"],
+};
 
 export function ResultsTables({
   run,
@@ -85,7 +92,13 @@ export function ResultsTables({
   const [sortBy, setSortBy] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(0);
-  const [cols, setCols] = useState<string[]>([]); // visible column keys, empty = all
+  const [hiddenCols, setHiddenCols] = useState<Record<string, string[]>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(HIDDEN_COLS_KEY) ?? "{}");
+    } catch {
+      return {};
+    }
+  });
   const [data, setData] = useState<Page<GapRow | GeneCoverageRow | PanelRow | MatrixRow> | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -104,8 +117,19 @@ export function ResultsTables({
     } catch {}
   }, [colWidths]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(HIDDEN_COLS_KEY, JSON.stringify(hiddenCols));
+    } catch {}
+  }, [hiddenCols]);
+
   function resizeColumn(key: string, width: number) {
     setColWidths((prev) => ({ ...prev, [`${table}:${key}`]: width }));
+  }
+
+  const hidden = hiddenCols[table] ?? DEFAULT_HIDDEN_COLS[table] ?? [];
+  function setHiddenForTable(next: string[]) {
+    setHiddenCols((prev) => ({ ...prev, [table]: next }));
   }
 
   useEffect(() => {
@@ -142,8 +166,8 @@ export function ResultsTables({
   }, [table, run]);
 
   const visibleColumns = useMemo(
-    () => (cols.length ? columns.filter((c) => cols.includes(c.key)) : columns),
-    [columns, cols],
+    () => columns.filter((c) => !hidden.includes(c.key)),
+    [columns, hidden],
   );
 
   const query: TableQuery = useMemo(
@@ -302,8 +326,8 @@ export function ResultsTables({
 
         <ColumnPicker
           columns={columns}
-          selected={cols}
-          onChange={setCols}
+          hidden={hidden}
+          onChange={setHiddenForTable}
         />
 
         <ExportButton
@@ -592,12 +616,12 @@ function usePopoverDismiss(open: boolean, onClose: () => void) {
 
 function ColumnPicker({
   columns,
-  selected,
+  hidden,
   onChange,
 }: {
   columns: Column[];
-  selected: string[];
-  onChange: (keys: string[]) => void;
+  hidden: string[];
+  onChange: (hidden: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = usePopoverDismiss(open, () => setOpen(false));
@@ -613,30 +637,28 @@ function ColumnPicker({
         <div className="absolute right-0 top-12 z-30 bg-white border border-zinc-200 rounded-lg shadow-lg p-3 w-64 dark:bg-zinc-900 dark:border-zinc-800">
           <p className="text-xs font-semibold text-zinc-400 uppercase mb-2 dark:text-zinc-500">Visible columns</p>
           <div className="space-y-1 max-h-80 overflow-y-auto">
-            {columns.map((c) => (
-              <label key={c.key} className="flex items-center gap-2 h-9 px-2 rounded hover:bg-zinc-50 cursor-pointer dark:hover:bg-zinc-800">
-                <input
-                  type="checkbox"
-                  className="w-4 h-4 accent-zinc-900"
-                  checked={selected.length === 0 || selected.includes(c.key)}
-                  onChange={(e) => {
-                    if (selected.length === 0) {
-                      // currently all visible: unchecking hides this one
-                      onChange(columns.filter((x) => x.key !== c.key).map((x) => x.key));
-                    } else if (e.target.checked) {
-                      const next = [...selected, c.key];
-                      // all selected = show all
-                      onChange(next.length === columns.length ? [] : next);
-                    } else {
-                      onChange(selected.filter((k) => k !== c.key));
-                    }
-                  }}
-                />
-                <span className="text-sm">{c.label}</span>
-              </label>
-            ))}
+            {columns.map((c) => {
+              const checked = !hidden.includes(c.key);
+              return (
+                <label key={c.key} className="flex items-center gap-2 h-9 px-2 rounded hover:bg-zinc-50 cursor-pointer dark:hover:bg-zinc-800">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 accent-zinc-900"
+                    checked={checked}
+                    onChange={() => {
+                      onChange(
+                        checked
+                          ? [...hidden, c.key]
+                          : hidden.filter((k) => k !== c.key),
+                      );
+                    }}
+                  />
+                  <span className="text-sm">{c.label}</span>
+                </label>
+              );
+            })}
           </div>
-          {selected.length > 0 && (
+          {hidden.length > 0 && (
             <button
               className="mt-2 w-full h-9 text-sm text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
               onClick={() => onChange([])}
