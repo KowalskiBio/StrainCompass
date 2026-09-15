@@ -162,7 +162,29 @@ async fn main() {
                 .fallback(tower_http::services::ServeFile::new(
                     dist.join("index.html"),
                 )),
-        );
+        )
+        // the SPA shell must always be revalidated so a new deploy is
+        // picked up on reload; hashed assets cache fine on their own
+        .layer(axum::middleware::from_fn(
+            |req: axum::extract::Request,
+             next: axum::middleware::Next| async move {
+                let resp = next.run(req).await;
+                let html = resp
+                    .headers()
+                    .get(axum::http::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .is_some_and(|v| v.starts_with("text/html"));
+                if html {
+                    let (mut parts, body) = resp.into_parts();
+                    parts.headers.insert(
+                        axum::http::header::CACHE_CONTROL,
+                        axum::http::HeaderValue::from_static("no-cache"),
+                    );
+                    return axum::response::Response::from_parts(parts, body);
+                }
+                resp
+            },
+        ));
 
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
