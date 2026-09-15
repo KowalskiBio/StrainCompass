@@ -642,49 +642,44 @@ function GenePreview({
   }, [runId, locus, cache]);
   if (!detail) return null;
   return (
-    <div className="fixed bottom-4 left-4 z-40 bg-white border border-zinc-200 rounded-xl shadow-xl p-4 w-96 pointer-events-auto dark:bg-zinc-900 dark:border-zinc-800">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <p className="font-semibold">{detail.locus_tag}</p>
-          <p className="text-xs text-zinc-400 mt-0.5 dark:text-zinc-500">
-            {detail.symbol ? `${detail.symbol} - ` : ""}
-            {detail.biotype} - {detail.seqid}:{detail.start.toLocaleString("en-US")}-
-            {detail.end.toLocaleString("en-US")}
-          </p>
-        </div>
-        <button
-          onClick={onOpen}
-          className="h-9 px-3 rounded-md bg-zinc-900 text-white text-sm hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-        >
-          Show alignment
-        </button>
-      </div>
-      <table className="w-full mt-3 text-sm">
-        <thead>
-          <tr className="text-left text-zinc-400 dark:text-zinc-500">
-            <th className="font-medium py-1">Query</th>
-            <th className="font-medium py-1">Coverage</th>
-            <th className="font-medium py-1">Identity</th>
-            <th className="font-medium py-1 text-right">Mism./indels</th>
-          </tr>
-        </thead>
-        <tbody>
-          {detail.queries.map((q) => (
-            <tr key={q.query_id} className="border-t border-zinc-100 dark:border-zinc-800">
-              <td className="py-1.5 truncate max-w-32" title={q.query_name}>
-                {q.query_name}
-              </td>
-              <td className="py-1.5 font-mono">{q.cov_pct.toFixed(1)}%</td>
-              <td className="py-1.5 font-mono">
+    <div className="fixed right-4 top-56 bottom-6 z-40 w-72 flex flex-col bg-white border border-zinc-200 rounded-xl shadow-xl p-4 pointer-events-auto overflow-y-auto thin-scroll dark:bg-zinc-900 dark:border-zinc-800">
+      <p className="font-semibold truncate" title={detail.locus_tag}>
+        {detail.locus_tag}
+      </p>
+      <p className="text-xs text-zinc-400 mt-0.5 dark:text-zinc-500">
+        {detail.symbol ? `${detail.symbol} - ` : ""}
+        {detail.biotype}
+        <br />
+        {detail.seqid}:{detail.start.toLocaleString("en-US")}-
+        {detail.end.toLocaleString("en-US")}
+      </p>
+      <button
+        onClick={onOpen}
+        className="mt-3 h-9 w-full rounded-md bg-zinc-900 text-white text-sm hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+      >
+        Show alignment
+      </button>
+      <div className="mt-3 space-y-3">
+        {detail.queries.map((q) => (
+          <div key={q.query_id} className="pt-2 border-t border-zinc-100 text-sm dark:border-zinc-800">
+            <p className="font-medium truncate" title={q.query_name}>
+              {q.query_name}
+            </p>
+            <div className="mt-1 grid grid-cols-2 gap-x-2 gap-y-0.5 text-xs">
+              <span className="text-zinc-400 dark:text-zinc-500">Coverage</span>
+              <span className="text-right font-mono">{q.cov_pct.toFixed(1)}%</span>
+              <span className="text-zinc-400 dark:text-zinc-500">Identity</span>
+              <span className="text-right font-mono">
                 {q.best_identity > 0 ? `${q.best_identity.toFixed(1)}%` : "-"}
-              </td>
-              <td className="py-1.5 font-mono text-right">
+              </span>
+              <span className="text-zinc-400 dark:text-zinc-500">Mism. / indels</span>
+              <span className="text-right font-mono">
                 {q.mismatches} / {q.indels}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
