@@ -29,6 +29,7 @@ pub fn all_projects(
 #[derive(Deserialize)]
 pub struct CreateProject {
     pub name: String,
+    pub organism: Option<String>,
 }
 
 pub async fn create(
@@ -46,15 +47,25 @@ pub async fn create(
             "The project name is too long (more than 200 characters).".into(),
         ));
     }
+    let organism = body
+        .organism
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("bacteria")
+        .to_string();
     let conn = state.db.lock().unwrap();
-    conn.execute("INSERT INTO projects (name, organism) VALUES (?1, 'bacteria')", [&name])?;
+    conn.execute(
+        "INSERT INTO projects (name, organism) VALUES (?1, ?2)",
+        (&name, &organism),
+    )?;
     let id = conn.last_insert_rowid();
     drop(conn);
     std::fs::create_dir_all(state.project_dir(id))?;
     let dto = ProjectDto {
         id,
         name,
-        organism: "bacteria".into(),
+        organism,
         created_at: crate::db::now_rfc3339(),
         n_runs: 0,
         n_queries: 0,

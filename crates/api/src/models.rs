@@ -35,6 +35,7 @@ pub struct RunDto {
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub queries: Vec<RunQueryDto>,
+    pub has_panel: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

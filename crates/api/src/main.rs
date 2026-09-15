@@ -92,11 +92,17 @@ async fn main() {
         cpu_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(slots)),
     });
 
-    // SPA static serving from frontend/dist when present
-    let dist = data_dir
-        .parent()
-        .map(|p| p.join("frontend").join("dist"))
+    // SPA static serving: explicit BACTIMENT_STATIC_DIR, then frontend/dist
+    // next to the data dir, then ./frontend/dist
+    let dist = std::env::var_os("BACTIMENT_STATIC_DIR")
+        .map(std::path::PathBuf::from)
         .filter(|p| p.exists())
+        .or_else(|| {
+            data_dir
+                .parent()
+                .map(|p| p.join("frontend").join("dist"))
+                .filter(|p| p.exists())
+        })
         .or_else(|| {
             let cwd_dist = std::path::PathBuf::from("frontend/dist");
             cwd_dist.exists().then_some(cwd_dist)

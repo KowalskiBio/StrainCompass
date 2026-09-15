@@ -1,0 +1,251 @@
+import { useEffect, useState } from "react";
+import { api } from "../api";
+import type { GeneDetail } from "../types";
+import { CallBadge, Modal, Spinner } from "./ui";
+
+/**
+ * The gene alignment viewer: pairwise alignment of the reference gene
+ * against every query, with mismatch and indel highlighting, a coordinate
+ * ruler and premature stop flags. Also exports FASTA / Clustal.
+ */
+export function GeneMsaDialog({
+  runId,
+  locus,
+  onClose,
+  onShowInGenome,
+}: {
+  runId: number;
+  locus: string | null;
+  onClose: () => void;
+  onShowInGenome: (locus: string) => void;
+}) {
+  const [detail, setDetail] = useState<GeneDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!locus) {
+      setDetail(null);
+      setError(null);
+      return;
+    }
+    let cancelled = false;
+    setDetail(null);
+    setError(null);
+    api
+      .geneDetail(runId, locus)
+      .then((d) => {
+        if (!cancelled) setDetail(d);
+      })
+      .catch((e) => {
+        if (!cancelled) setError((e as Error).message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runId, locus]);
+
+  return (
+    <Modal
+      open={Boolean(locus)}
+      onClose={onClose}
+      wide
+      title={
+        <span className="flex items-baseline gap-3 flex-wrap">
+          Gene alignment
+          {detail && (
+            <span className="text-sm font-normal text-zinc-500">
+              {detail.locus_tag}
+              {detail.symbol ? ` (${detail.symbol})` : ""} - {detail.biotype} -{" "}
+              {detail.seqid}:{detail.start.toLocaleString("en-US")}-
+              {detail.end.toLocaleString("en-US")} ({detail.strand > 0 ? "+" : "-"} strand)
+            </span>
+          )}
+        </span>
+      }
+    >
+      {error && <p className="text-red-700">{error}</p>}
+      {!detail && !error && (
+        <div className="flex items-center gap-3 text-zinc-500 py-8 justify-center">
+          <Spinner /> Preparing the alignment...
+        </div>
+      )}
+      {detail && (
+        <div className="space-y-6">
+          <div className="flex flex-wrap gap-2">
+            <a
+              href={api.geneExportUrl(runId, detail.locus_tag, "fasta")}
+              className="h-11 px-4 inline-flex items-center rounded-lg border border-zinc-300 hover:bg-zinc-100 text-[15px]"
+            >
+              Export FASTA
+            </a>
+            <a
+              href={api.geneExportUrl(runId, detail.locus_tag, "clustal")}
+              className="h-11 px-4 inline-flex items-center rounded-lg border border-zinc-300 hover:bg-zinc-100 text-[15px]"
+            >
+              Export Clustal
+            </a>
+            <button
+              onClick={() => onShowInGenome(detail.locus_tag)}
+              className="h-11 px-4 inline-flex items-center rounded-lg border border-zinc-300 hover:bg-zinc-100 text-[15px]"
+            >
+              Show in genome view
+            </button>
+          </div>
+
+          {detail.queries.length === 0 && (
+            <p className="text-zinc-500">
+              This gene has no alignment data (the run may not have finished).
+            </p>
+          )}
+
+          {detail.queries.map((q) => (
+            <QueryAlignment key={q.query_id} q={q} />
+          ))}
+
+          <p className="text-xs text-zinc-400">
+            Reference row on top, query below. Highlighted letters are
+            mismatches; dashes mark insertions or deletions. Blocks appear in
+            reference order; unaligned stretches between blocks are listed
+            below the blocks.
+          </p>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function QueryAlignment({ q }: { q: GeneDetail["queries"][number] }) {
+  const [expanded, setExpanded] = useState(true);
+  const alignedLen = q.blocks.reduce((a, b) => a + b.qry_seq.replace(/-/g, "").length, 0);
+  const stats = `${q.cov_pct.toFixed(1)}% covered${
+    q.best_identity > 0 ? `, ${q.best_identity.toFixed(1)}% identity` : ", no alignment"
+  }, ${q.mismatches} mismatches, ${q.indels} indel bases`;
+  return (
+    <div className="border border-zinc-200 rounded-lg overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 bg-zinc-50 border-b border-zinc-200">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="font-medium truncate max-w-64" title={q.query_name}>
+            {q.query_name}
+          </span>
+          <CallBadge call={q.call} />
+          {q.premature_stops.length > 0 && (
+            <span className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-full px-2 py-0.5 font-medium">
+              {q.premature_stops.length} premature stop
+              {q.premature_stops.length > 1 ? "s" : ""}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-zinc-500 font-mono">{stats}</span>
+          <button
+            className="h-9 px-2 rounded-md text-sm text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100"
+            onClick={() => setExpanded(!expanded)}
+          >
+            {expanded ? "Hide" : "Show"}
+          </button>
+        </div>
+      </div>
+      {expanded && (
+        <div className="p-4 space-y-4 thin-scroll max-h-96 overflow-y-auto">
+          {q.premature_stops.length > 0 && (
+            <p className="text-xs text-red-700">
+              Premature stop codons at amino acid position
+              {q.premature_stops.length > 1 ? "s" : ""}{" "}
+              {q.premature_stops.map((s) => s.aa_position).join(", ")} (of{" "}
+              {Math.floor(alignedLen / 3)}).
+            </p>
+          )}
+          {q.blocks.length === 0 && (
+            <p className="text-sm text-zinc-400">
+              No part of this gene is aligned to this query.
+            </p>
+          )}
+          {q.blocks.map((b, i) => (
+            <AlignmentBlock key={i} block={b} />
+          ))}
+          {q.unaligned.length > 0 && (
+            <div className="text-xs text-zinc-500">
+              {q.unaligned.map(([s, e], i) => (
+                <p
+                  key={i}
+                  className="font-mono bg-zinc-50 border border-zinc-200 rounded px-2 py-1 my-1 inline-block mr-2"
+                >
+                  unaligned reference bases {s.toLocaleString("en-US")} -{" "}
+                  {e.toLocaleString("en-US")} ({(e - s + 1).toLocaleString("en-US")} bp)
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const COLS = 60;
+
+function AlignmentBlock({ block }: { block: GeneDetail["queries"][number]["blocks"][number] }) {
+  const ref = block.ref_seq;
+  const qry = block.qry_seq;
+  const nCols = Math.min(ref.length, qry.length);
+  return (
+    <div>
+      <p className="text-xs text-zinc-500 mb-1 font-mono">
+        block {block.ref_start.toLocaleString("en-US")} -{" "}
+        {block.ref_end.toLocaleString("en-US")} in the reference
+        {block.qry_rev ? ", query aligned on the reverse strand" : ""}, identity{" "}
+        {block.identity.toFixed(1)}%
+      </p>
+      <div className="font-mono text-xs leading-5 overflow-x-auto thin-scroll">
+        {chunk(nCols, COLS).map(([, colStart]) => (
+          <div key={colStart} className="whitespace-pre">
+            <span className="text-zinc-300 select-none inline-block w-16 text-right pr-2">
+              {colStart + 1}
+            </span>
+            <Row seq={ref.slice(colStart, colStart + COLS)} kind="ref" other={qry.slice(colStart, colStart + COLS)} />
+            {"\n"}
+            <span className="text-zinc-300 select-none inline-block w-16 text-right pr-2">
+              {" "}
+            </span>
+            <Row seq={qry.slice(colStart, colStart + COLS)} kind="qry" other={ref.slice(colStart, colStart + COLS)} />
+          </div>
+        ))}
+      </div>
+      <p className="text-xs text-zinc-400 mt-1">{nCols} alignment columns</p>
+    </div>
+  );
+}
+
+/**
+ * One monospace row. Mismatches are tinted red; gaps (dashes) amber.
+ * The reference row is plain so the eye is drawn to query differences.
+ */
+function Row({ seq, kind, other }: { seq: string; kind: "ref" | "qry"; other: string }) {
+  const out: React.ReactNode[] = [];
+  for (let i = 0; i < seq.length; i++) {
+    const c = seq[i];
+    const o = other[i];
+    let cls = "";
+    if (c === "-" || o === "-") {
+      cls = kind === "qry" ? "bg-amber-100 text-amber-900" : "";
+    } else if (kind === "qry" && c !== o) {
+      cls = "bg-red-100 text-red-800";
+    }
+    out.push(
+      cls ? (
+        <span key={i} className={cls}>
+          {c}
+        </span>
+      ) : (
+        <span key={i}>{c}</span>
+      ),
+    );
+  }
+  return <span className={kind === "qry" ? "text-zinc-800" : "text-zinc-500"}>{out}</span>;
+}
+
+function chunk(total: number, n: number): [number, number][] {
+  const out: [number, number][] = [];
+  for (let i = 0; i < total; i += n) out.push([i, i]);
+  return out;
+}

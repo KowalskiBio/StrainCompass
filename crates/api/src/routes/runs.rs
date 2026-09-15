@@ -34,6 +34,13 @@ fn run_dto(
         return Ok(None);
     };
     let (id, project_id, status, step, error, created_at, started_at, finished_at, query_ids) = row;
+    let has_panel: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM files WHERE project_id = ?1 AND role = 'panel')",
+            [project_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(false);
     let ids: Vec<i64> = serde_json::from_str(&query_ids).unwrap_or_default();
     let mut queries = Vec::new();
     for qid in ids {
@@ -58,6 +65,7 @@ fn run_dto(
         started_at,
         finished_at,
         queries,
+        has_panel,
     }))
 }
 
