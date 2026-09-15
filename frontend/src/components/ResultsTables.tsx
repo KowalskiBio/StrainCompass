@@ -59,7 +59,9 @@ const PANEL_COLUMNS: Column[] = [
   { key: "call", label: "Call", width: 120 },
 ];
 
-const PAGE_SIZE = 200;
+// The backend caps page_size at 1000 per request; to show the whole table
+// (no pagination UI) we fetch every page at this size and concatenate them.
+const FETCH_PAGE_SIZE = 1000;
 const COL_WIDTHS_KEY = "bactiment-col-widths";
 const HIDDEN_COLS_KEY = "bactiment-hidden-cols";
 
@@ -93,7 +95,6 @@ export function ResultsTables({
   const [call, setCall] = useState<string>("");
   const [sortBy, setSortBy] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  const [page, setPage] = useState(0);
   const [hiddenCols, setHiddenCols] = useState<Record<string, string[]>>(() => {
     try {
       return JSON.parse(localStorage.getItem(HIDDEN_COLS_KEY) ?? "{}");
@@ -175,18 +176,15 @@ export function ResultsTables({
   const query: TableQuery = useMemo(
     () => ({
       query_id: queryId,
-      page,
-      page_size: PAGE_SIZE,
       sort_by: sortBy ?? undefined,
       sort_dir: sortBy ? sortDir : undefined,
       search: debouncedSearch || undefined,
       call: call || undefined,
     }),
-    [queryId, page, sortBy, sortDir, debouncedSearch, call],
+    [queryId, sortBy, sortDir, debouncedSearch, call],
   );
 
   useEffect(() => {
-    setPage(0);
     setSortBy(null);
     setCall("");
   }, [table]);
@@ -195,18 +193,34 @@ export function ResultsTables({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    const fetcher =
-      table === "genes_coverage"
-        ? api.genesCoverage(run.id, query)
-        : table === "unaligned_gaps"
-          ? api.unalignedGaps(run.id, query)
-          : table === "panel_recheck"
-            ? api.panelRecheck(run.id, query)
-            : api.matrix(run.id, query);
-    fetcher
-      .then((d) => {
-        if (!cancelled) setData(d);
-      })
+
+    function fetchPage(page: number) {
+      const q: TableQuery = { ...query, page, page_size: FETCH_PAGE_SIZE };
+      if (table === "genes_coverage") return api.genesCoverage(run.id, q);
+      if (table === "unaligned_gaps") return api.unalignedGaps(run.id, q);
+      if (table === "panel_recheck") return api.panelRecheck(run.id, q);
+      return api.matrix(run.id, q);
+    }
+
+    // The backend paginates at up to FETCH_PAGE_SIZE rows per request; fetch
+    // every page and concatenate so the whole filtered/sorted table renders
+    // in one virtualized scroll instead of behind Previous/Next.
+    async function fetchAll() {
+      const rows: (GapRow | GeneCoverageRow | PanelRow | MatrixRow)[] = [];
+      let total = 0;
+      let page = 0;
+      for (;;) {
+        const d = await fetchPage(page);
+        if (cancelled) return;
+        rows.push(...d.rows);
+        total = d.total;
+        if (d.rows.length === 0 || rows.length >= total) break;
+        page++;
+      }
+      if (!cancelled) setData({ rows, total });
+    }
+
+    fetchAll()
       .catch((e) => {
         if (!cancelled) setError((e as Error).message);
       })
@@ -219,8 +233,6 @@ export function ResultsTables({
   }, [run.id, table, JSON.stringify(query)]);
 
   const total = data?.total ?? 0;
-  const from = total === 0 ? 0 : page * PAGE_SIZE + 1;
-  const to = Math.min(total, (page + 1) * PAGE_SIZE);
 
   function toggleSort(key: string) {
     if (sortBy === key) {
@@ -332,11 +344,7 @@ export function ResultsTables({
           onChange={setHiddenForTable}
         />
 
-        <ExportButton
-          run={run}
-          table={table}
-          query={{ ...query, page: undefined, page_size: undefined }}
-        />
+        <ExportButton run={run} table={table} query={query} />
 
         {loading && <Spinner className="text-zinc-400" />}
       </div>
@@ -362,29 +370,13 @@ export function ResultsTables({
             onResizeColumn={resizeColumn}
           />
         </div>
-        {/* pagination */}
-        <div className="flex items-center justify-between px-4 h-12 border-t border-zinc-200 text-sm text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+        {/* row count */}
+        <div className="flex items-center px-4 h-12 border-t border-zinc-200 text-sm text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
           <span>
             {total === 0
               ? "No rows match the current filters"
-              : `Showing ${from}-${to} of ${total}`}
+              : `Showing all ${total.toLocaleString("en-US")} row${total === 1 ? "" : "s"}`}
           </span>
-          <div className="flex gap-2">
-            <button
-              disabled={page === 0}
-              onClick={() => setPage(page - 1)}
-              className="h-9 px-3 rounded-md border border-zinc-300 disabled:opacity-40 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-            >
-              Previous
-            </button>
-            <button
-              disabled={to >= total}
-              onClick={() => setPage(page + 1)}
-              className="h-9 px-3 rounded-md border border-zinc-300 disabled:opacity-40 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
-            >
-              Next
-            </button>
-          </div>
         </div>
       </div>
 
