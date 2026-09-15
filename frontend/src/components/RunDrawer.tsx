@@ -21,6 +21,12 @@ export function RunDrawer({
   const [logs, setLogs] = useState<string[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
   const finishedRef = useRef(false);
+  // keep the callback in a ref: the effect below must not restart when the
+  // parent re-renders, or a finished run would re-fire onFinished forever
+  const onFinishedRef = useRef(onFinished);
+  useEffect(() => {
+    onFinishedRef.current = onFinished;
+  });
 
   useEffect(() => {
     if (runId === null) return;
@@ -39,7 +45,7 @@ export function RunDrawer({
             !finishedRef.current
           ) {
             finishedRef.current = true;
-            onFinished?.(data.run);
+            onFinishedRef.current?.(data.run);
           }
           if (data.run.status === "succeeded" || data.run.status === "failed") {
             return;
@@ -54,7 +60,7 @@ export function RunDrawer({
     return () => {
       stop = true;
     };
-  }, [runId, onFinished]);
+  }, [runId]);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });

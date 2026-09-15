@@ -9,6 +9,7 @@ pub mod fasta;
 pub mod gaps;
 pub mod gff;
 pub mod msa;
+pub mod panel;
 pub mod pipeline;
 pub mod tools;
 

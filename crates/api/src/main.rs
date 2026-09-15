@@ -46,6 +46,10 @@ fn routes() -> Router<SharedState> {
         )
         .route("/projects/{id}/panel", post(routes::uploads::upload_panel))
         .route(
+            "/projects/{id}/panel/from_ids",
+            post(routes::uploads::upload_panel_ids),
+        )
+        .route(
             "/projects/{id}/runs",
             post(routes::runs::start).get(routes::runs::list_for_project),
         )
@@ -166,8 +170,7 @@ async fn main() {
         // the SPA shell must always be revalidated so a new deploy is
         // picked up on reload; hashed assets cache fine on their own
         .layer(axum::middleware::from_fn(
-            |req: axum::extract::Request,
-             next: axum::middleware::Next| async move {
+            |req: axum::extract::Request, next: axum::middleware::Next| async move {
                 let resp = next.run(req).await;
                 let html = resp
                     .headers()

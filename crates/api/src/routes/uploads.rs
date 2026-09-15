@@ -209,6 +209,78 @@ pub async fn upload_panel(
     Ok(Json(dto))
 }
 
+#[derive(serde::Serialize)]
+pub struct PanelFromIdsDto {
+    pub file: FileDto,
+    pub found: Vec<String>,
+    pub missing: Vec<String>,
+}
+
+/// POST /projects/{id}/panel/from_ids : a CSV/TSV/list of gene identifiers.
+/// The panel FASTA is generated automatically from the reference genome.
+pub async fn upload_panel_ids(
+    State(state): State<SharedState>,
+    Path(project_id): Path<i64>,
+    mut multipart: Multipart,
+) -> ApiResult<Json<PanelFromIdsDto>> {
+    ensure_project(&state, project_id).await?;
+    let mut got: Option<(String, Vec<u8>)> = None;
+    while let Some(field) = multipart.next_field().await.map_err(|_| {
+        ApiError::BadRequest("The upload could not be read. Please try again.".into())
+    })? {
+        let filename = field.file_name().unwrap_or("genes.txt").to_string();
+        let data = field.bytes().await.map_err(|_| {
+            ApiError::BadRequest("The upload was interrupted. Please try again.".into())
+        })?;
+        if filename.is_empty() {
+            continue;
+        }
+        got = Some((filename, data.to_vec()));
+    }
+    let (name, data) = got.ok_or_else(|| {
+        ApiError::BadRequest(
+            "No gene list file was received. Please choose a CSV or TSV file.".into(),
+        )
+    })?;
+    let ids_text = String::from_utf8_lossy(&data).to_string();
+    if ids_text.lines().all(|l| l.trim().is_empty()) {
+        return Err(ApiError::BadRequest(
+            "This file appears to be empty. Please check the file and try again.".into(),
+        ));
+    }
+    let Some((ref_fasta, ref_gff)) = reference_paths(&state, project_id)? else {
+        return Err(ApiError::BadRequest(
+            "Please add the reference genome (FASTA + GFF) first: the gene panel is built from it."
+                .into(),
+        ));
+    };
+    let panel = tokio::task::spawn_blocking(move || {
+        bactiment_engine::panel::panel_from_ids(&ref_fasta, &ref_gff, &ids_text)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("The panel could not be built. ({e})")))??;
+
+    if panel.found.is_empty() {
+        return Err(ApiError::BadRequest(format!(
+            "None of the entries in \u{201c}{name}\u{201d} match a gene in the reference annotation. Check that the identifiers are locus tags or gene symbols of this reference."
+        )));
+    }
+    delete_role(&state, project_id, "panel").await?;
+    let dto = store_upload(
+        &state,
+        project_id,
+        "panel",
+        "genes_of_interest.fasta",
+        panel.fasta.into_bytes(),
+    )
+    .await?;
+    Ok(Json(PanelFromIdsDto {
+        file: dto,
+        found: panel.found,
+        missing: panel.missing,
+    }))
+}
+
 /// GET /projects/{id}/files
 pub async fn list_files(
     State(state): State<SharedState>,

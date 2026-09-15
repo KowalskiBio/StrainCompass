@@ -40,6 +40,7 @@ export function InputWizard({
 }) {
   const [step, setStep] = useState(1);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [accession, setAccession] = useState("");
   const [schema, setSchema] = useState<ParamSpecLike[]>([]);
@@ -52,6 +53,7 @@ export function InputWizard({
     if (open) {
       setStep(1);
       setError(null);
+      setNotice(null);
       ranRef.current = false;
       api
         .getPresets()
@@ -122,9 +124,26 @@ export function InputWizard({
   async function uploadPanel(f: File) {
     setBusy("Adding the gene panel...");
     setError(null);
+    setNotice(null);
     try {
-      await api.uploadPanel(projectId, f);
-      onFilesChanged();
+      if (/\.(csv|tsv|txt)$/i.test(f.name)) {
+        const r = await api.uploadPanelIds(projectId, f);
+        onFilesChanged();
+        if (r.missing.length > 0) {
+          setNotice(
+            `The panel was built with ${r.found.length} of ${
+              r.found.length + r.missing.length
+            } genes. Not found in the reference: ${r.missing.join(", ")}.`,
+          );
+        } else {
+          setNotice(
+            `The panel was built from all ${r.found.length} genes of the list.`,
+          );
+        }
+      } else {
+        await api.uploadPanel(projectId, f);
+        onFilesChanged();
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -301,6 +320,17 @@ export function InputWizard({
                 precise search, in addition to the genome comparison). This is
                 optional.
               </p>
+              <p className="text-[15px] text-zinc-600">
+                Drop a list of genes (CSV/TSV, one per line: locus tags like
+                lmo0444, symbols like inlA, or {"\"pva (lmo0446)\""} ) and the
+                gene sequences are collected from the reference automatically.
+                A ready-made FASTA panel works too.
+              </p>
+              {notice && (
+                <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-[15px] text-zinc-700">
+                  {notice}
+                </div>
+              )}
               {panel ? (
                 <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 flex items-center justify-between">
                   <div>
@@ -316,6 +346,7 @@ export function InputWizard({
                     onClick={async () => {
                       await api.deleteFile(projectId, panel.id);
                       onFilesChanged();
+                      setNotice(null);
                     }}
                   >
                     Remove
@@ -324,7 +355,8 @@ export function InputWizard({
               ) : (
                 <DropZone
                   compact
-                  hint="Genes to recheck (FASTA), optional"
+                  hint="Gene list (CSV/TSV) or gene panel (FASTA), optional"
+                  accept=".fasta,.fa,.fna,.fsa,.csv,.tsv,.txt"
                   onFiles={(fs) => uploadPanel(fs[0])}
                 />
               )}

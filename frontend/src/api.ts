@@ -96,6 +96,14 @@ export const api = {
       body: form,
     });
   },
+  uploadPanelIds: (projectId: number, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<{ file: ProjectFile; found: string[]; missing: string[] }>(
+      `/projects/${projectId}/panel/from_ids`,
+      { method: "POST", body: form },
+    );
+  },
   deleteFile: (projectId: number, fileId: number) =>
     request<string>(`/projects/${projectId}/files/${fileId}`, {
       method: "DELETE",
