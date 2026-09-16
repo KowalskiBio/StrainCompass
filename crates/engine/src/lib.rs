@@ -12,6 +12,7 @@ pub mod msa;
 pub mod panel;
 pub mod pipeline;
 pub mod tools;
+pub mod variants;
 
 /// Errors that carry a user-facing, plain language message.
 #[derive(Debug, thiserror::Error)]

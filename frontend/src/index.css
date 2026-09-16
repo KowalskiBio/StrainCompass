@@ -16,10 +16,15 @@
   --gv-tick-label: #71717a;
   --gv-track-label: #a1a1aa;
   --gv-track-bg: #fafafa;
+  --gv-map-bg: #ffffff;
+  --gv-gene-label: #18181b;
   --gv-gene-trna: #b45309;
   --gv-gene-rrna: #7c3aed;
   --gv-gene-pseudo: #a1a1aa;
   --gv-gene-cds: #3f3f46;
+  --gv-call-present: #22c55e;
+  --gv-call-partial: #eab308;
+  --gv-call-absent: #b6b6bd;
 }
 
 .dark {
@@ -29,10 +34,15 @@
   --gv-tick-label: #a1a1aa;
   --gv-track-label: #71717a;
   --gv-track-bg: #27272a;
+  --gv-map-bg: #18181b;
+  --gv-gene-label: #f4f4f5;
   --gv-gene-trna: #d68a3e;
   --gv-gene-rrna: #a78bfa;
   --gv-gene-pseudo: #71717a;
   --gv-gene-cds: #a1a1aa;
+  --gv-call-present: #4ade80;
+  --gv-call-partial: #facc15;
+  --gv-call-absent: #52525b;
 }
 
 html {

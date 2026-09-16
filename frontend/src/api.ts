@@ -1,4 +1,5 @@
 import type {
+  AlignmentData,
   GeneDetail,
   GapRow,
   GeneCoverageRow,
@@ -7,6 +8,7 @@ import type {
   PanelRow,
   Project,
   ProjectFile,
+  RefseqWindow,
   Run,
   RunFile,
   RunParams,
@@ -147,6 +149,12 @@ export const api = {
   matrix: (runId: number, q: TableQuery) =>
     request<Page<MatrixRow>>(`/runs/${runId}/matrix${qs(q)}`),
   wga: (runId: number) => request<WgaData>(`/runs/${runId}/wga`),
+  alignment: (runId: number) =>
+    request<AlignmentData>(`/runs/${runId}/alignment`),
+  refseq: (runId: number, seqid: string, start: number, end: number) =>
+    request<RefseqWindow>(
+      `/runs/${runId}/refseq?seqid=${encodeURIComponent(seqid)}&start=${start}&end=${end}`,
+    ),
   geneDetail: (runId: number, locus: string) =>
     request<GeneDetail>(
       `/runs/${runId}/gene/${encodeURIComponent(locus)}`,

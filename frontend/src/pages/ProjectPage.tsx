@@ -13,9 +13,11 @@ import { FilesPanel, RunDrawer } from "../components/RunDrawer";
 import { InputWizard } from "../components/InputWizard";
 import { ResultsTables, type TableKind } from "../components/ResultsTables";
 import { GenomeView } from "../components/GenomeView";
+import { AlignmentView } from "../components/AlignmentView";
 import { GeneMsaDialog } from "../components/GeneMsaDialog";
 
 type Tab = "inputs" | "runs" | "table" | "genome";
+type GenomeMode = "strain" | "align";
 
 export default function ProjectPage() {
   const { id } = useParams();
@@ -35,6 +37,7 @@ export default function ProjectPage() {
   const [drawerRunId, setDrawerRunId] = useState<number | null>(null);
 
   const tab = (params.get("tab") as Tab) ?? "inputs";
+  const genomeMode = (params.get("gv") as GenomeMode) ?? "strain";
   const runId = params.get("run") ? Number(params.get("run")) : null;
   const gene = params.get("gene");
 
@@ -281,27 +284,88 @@ export default function ProjectPage() {
           />
         )}
         {tab === "genome" && selectedRun && (
-          <GenomeView
-            run={selectedRun}
-            initialGene={params.get("ggene")}
-            initialRange={
-              params.get("gstart") && params.get("gend")
-                ? {
-                    seqid: params.get("gseq") ?? "",
-                    start: Number(params.get("gstart")),
-                    end: Number(params.get("gend")),
-                  }
-                : null
-            }
-            onOpenGene={(locus) => setParam("gene", locus)}
-            onRangeChange={(r) => {
-              setParams2({
-                gseq: r.seqid,
-                gstart: String(Math.round(r.start)),
-                gend: String(Math.round(r.end)),
-              });
-            }}
-          />
+          <div className="space-y-3">
+            {/* sub-mode selector: StrainMap or Alignment */}
+            <div className="flex items-center gap-2">
+              <div className="flex overflow-hidden rounded-lg border border-zinc-300 dark:border-zinc-700">
+                <button
+                  onClick={() => setParam("gv", genomeMode === "strain" ? null : "align")}
+                  className={`h-9 px-4 text-sm font-medium transition-colors ${
+                    genomeMode === "strain"
+                      ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                      : "bg-white text-zinc-600 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  StrainMap
+                </button>
+                <button
+                  onClick={() => setParam("gv", genomeMode === "align" ? null : "strain")}
+                  className={`h-9 border-l border-zinc-300 px-4 text-sm font-medium transition-colors dark:border-zinc-700 ${
+                    genomeMode === "align"
+                      ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                      : "bg-white text-zinc-600 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  Alignment
+                </button>
+              </div>
+              <p className="text-sm text-zinc-400 dark:text-zinc-500">
+                {genomeMode === "strain"
+                  ? "Reference genes colored by their presence in a query strain."
+                  : "Whole-genome alignment: the reference on top, one row per query."}
+              </p>
+            </div>
+
+            {genomeMode === "align" ? (
+              <AlignmentView
+                key={selectedRun.id}
+                run={selectedRun}
+                initialRange={
+                  params.get("gstart") && params.get("gend")
+                    ? {
+                        seqid: params.get("gseq") ?? "",
+                        start: Number(params.get("gstart")),
+                        end: Number(params.get("gend")),
+                      }
+                    : null
+                }
+                onLocusChange={(r) => {
+                  setParams2({
+                    gseq: r.seqid,
+                    gstart: String(Math.round(r.start)),
+                    gend: String(Math.round(r.end)),
+                  });
+                }}
+              />
+            ) : (
+              <GenomeView
+                key={selectedRun.id}
+                run={selectedRun}
+                initialGene={params.get("ggene")}
+                initialQuery={
+                  params.get("gq") !== null ? Number(params.get("gq")) : undefined
+                }
+                initialRange={
+                  params.get("gstart") && params.get("gend")
+                    ? {
+                        seqid: params.get("gseq") ?? "",
+                        start: Number(params.get("gstart")),
+                        end: Number(params.get("gend")),
+                      }
+                    : null
+                }
+                onOpenGene={(locus) => setParam("gene", locus)}
+                onQueryChange={(qid) => setParam("gq", qid === null ? "0" : String(qid))}
+                onRangeChange={(r) => {
+                  setParams2({
+                    gseq: r.seqid,
+                    gstart: String(Math.round(r.start)),
+                    gend: String(Math.round(r.end)),
+                  });
+                }}
+              />
+            )}
+          </div>
         )}
       </div>
 

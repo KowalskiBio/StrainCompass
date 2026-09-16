@@ -1,25 +1,44 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { Run, WgaBlock, WgaData, WgaGene } from "../types";
+import type { AlignmentData, Call, Run, WgaData, WgaGene } from "../types";
 import { Spinner } from "./ui";
 
+/** Show SNP/indel markers once the visible window is below this span. */
+const VARIANT_SPAN = 20000;
+/** A gene rectangle gets its label once it is this wide in pixels. */
+const LABEL_MIN_W = 42;
+
+/** Variant marker colors, shared with the Alignment view (Oligool palette). */
+const SNP_COLOR = "#dc2626";
+const INS_COLOR = "#3b82f6";
+const DEL_COLOR = "#9333ea";
+
 /**
- * Whole genome alignment view: reference ruler, gene track, and one
- * alignment track per query. Zoom with the wheel, pan by dragging, or
- * set the range by typing coordinates.
+ * Strain map: the reference genome as one continuous line of gene
+ * rectangles (beads on a string), colored by their presence call in
+ * the selected query (green present, yellow partial, gray absent) or
+ * by biotype when "reference annotation" is selected. Zooming in shows
+ * gene names inside the boxes and, below a 20 kb window, SNP/indel
+ * markers of the selected query. Hovering a gene shows its name,
+ * position and function annotation.
  */
 export function GenomeView({
   run,
   initialRange,
   initialGene,
+  initialQuery,
   onOpenGene,
   onRangeChange,
+  onQueryChange,
 }: {
   run: Run;
   initialRange?: { seqid: string; start: number; end: number } | null;
   initialGene?: string | null;
+  /** Query file id whose calls drive the gene colors; 0 = reference mode. */
+  initialQuery?: number | null;
   onOpenGene: (locus: string) => void;
   onRangeChange: (r: { seqid: string; start: number; end: number }) => void;
+  onQueryChange?: (queryId: number | null) => void;
 }) {
   const [data, setData] = useState<WgaData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -33,29 +52,64 @@ export function GenomeView({
     x: number;
     y: number;
     gene?: WgaGene;
-    block?: WgaBlock & { queryName: string };
+    gi?: number;
+    variant?: VariantPopupInfo;
   } | null>(null);
-  const dragRef = useRef<{ x: number; start: number } | null>(null);
+  const dragRef = useRef<{ x: number; start: number; moved: boolean } | null>(null);
+  /** Set on mouseup after a drag, so the click that follows is ignored. */
+  const wasDragRef = useRef(false);
+  /** Query file id whose calls drive the gene colors; null = biotype. */
+  const [colorBy, setColorBy] = useState<number | null>(
+    initialQuery === undefined ? null : initialQuery === 0 ? null : initialQuery,
+  );
+  const [colorByInit, setColorByInit] = useState(initialQuery !== undefined);
+  /** Index into data.genes of the hovered gene. */
+  const [hover, setHover] = useState<number | null>(null);
+
+  // Variant events of the whole run, fetched lazily on first deep zoom.
+  const [alignment, setAlignment] = useState<AlignmentData | null>(null);
+  const [alignmentPending, setAlignmentPending] = useState(false);
+  const alignmentFetched = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
+    alignmentFetched.current = false;
+    setAlignment(null);
     api
       .wga(run.id)
       .then((d) => {
         if (cancelled) return;
         setData(d);
         setSeqid((prev) => prev || (d.reference[0]?.[0] ?? ""));
+        if (!colorByInit) {
+          setColorBy(d.queries[0]?.query_id ?? null);
+          setColorByInit(true);
+        }
       })
       .catch((e) => !cancelled && setError((e as Error).message));
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run.id]);
 
   const seqLength = useMemo(
     () => data?.reference.find((r) => r[0] === seqid)?.[1] ?? 0,
     [data, seqid],
   );
+
+  /** The query whose presence calls drive the gene colors (null = biotype). */
+  const selectedQuery = useMemo(
+    () => data?.queries.find((q) => q.query_id === colorBy) ?? null,
+    [data, colorBy],
+  );
+
+  const callCounts = useMemo(() => {
+    if (!selectedQuery?.calls) return null;
+    const counts = { PRESENT: 0, PARTIAL: 0, ABSENT: 0 } as Record<Call, number>;
+    for (const c of selectedQuery.calls) counts[c]++;
+    return counts;
+  }, [selectedQuery]);
 
   useEffect(() => {
     if (seqLength > 0 && (!range || range.end > seqLength)) {
@@ -85,6 +139,38 @@ export function GenomeView({
       }
     }
   }, [initialRange, data]);
+
+  // Fetch the run's variant events the first time the user zooms deep
+  // enough to see them (computing them can take a moment on old runs).
+  const span = range ? range.end - range.start : Infinity;
+  useEffect(() => {
+    if (!data || !range || span >= VARIANT_SPAN) return;
+    if (alignmentFetched.current) return;
+    alignmentFetched.current = true;
+    let cancelled = false;
+    setAlignmentPending(true);
+    api
+      .alignment(run.id)
+      .then((a) => !cancelled && setAlignment(a))
+      .catch(() => {})
+      .finally(() => !cancelled && setAlignmentPending(false));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [span, data, range, run.id]);
+
+  /** Variant events of the selected query on the visible seqid. */
+  const variantEvents = useMemo(() => {
+    if (!alignment || !colorBy) return null;
+    const q = alignment.queries.find((x) => x.query_id === colorBy);
+    const ev = q?.events[seqid];
+    if (!ev) return null;
+    return ev;
+  }, [alignment, colorBy, seqid]);
+
+  const showMarkers = Boolean(variantEvents) && span < VARIANT_SPAN;
+
   if (error) return <p className="text-red-700 py-4 dark:text-red-400">{error}</p>;
   if (!data || !range || !seqid)
     return (
@@ -93,17 +179,12 @@ export function GenomeView({
       </div>
     );
 
-  const genes = data.genes.filter((g) => g.seqid === seqid);
-  const queries = data.queries.map((q) => ({
-    name: q.query_name,
-    blocks: q.blocks.filter((b) => b.ref_seqid === seqid),
-  }));
-
   const width = 1100;
   const rulerH = 28;
-  const geneTrackH = 34;
-  const trackH = 34;
-  const height = rulerH + geneTrackH + queries.length * trackH + 8;
+  const mapH = 168;
+  const height = rulerH + mapH;
+  const baselineY = rulerH + mapH / 2;
+  const geneH = 46;
   const bpToX = (bp: number) =>
     ((bp - range.start) / Math.max(1, range.end - range.start)) * width;
 
@@ -133,13 +214,51 @@ export function GenomeView({
   };
 
   // ticks for the ruler
-  const span = range.end - range.start;
   const tickStep = niceStep(span);
   const firstTick = Math.ceil(range.start / tickStep) * tickStep;
   const ticks: number[] = [];
   for (let t = firstTick; t <= range.end; t += tickStep) ticks.push(t);
 
   const inRange = (s: number, e: number) => e >= range.start && s <= range.end;
+
+  // Variant markers of the selected query inside the visible range.
+  const markers = showMarkers && variantEvents
+    ? [
+        ...variantEvents.snps
+          .filter((s) => s.pos >= range.start && s.pos <= range.end)
+          .map((s) => ({ kind: "snp" as const, pos: s.pos, r: s.r, q: s.q })),
+        ...variantEvents.dels
+          .filter((d) => d.pos <= range.end && d.pos + d.len - 1 >= range.start)
+          .map((d) => ({ kind: "del" as const, pos: d.pos, len: d.len })),
+        ...variantEvents.ins
+          .filter((i) => i.pos >= range.start - 1 && i.pos <= range.end)
+          .map((i) => ({ kind: "ins" as const, pos: i.pos, seq: i.seq })),
+      ].sort((a, b) => a.pos - b.pos)
+    : [];
+
+  /** Click in the gene area: open the nearest variant marker's popup. */
+  function openVariantPopup(clientX: number) {
+    if (markers.length === 0) return;
+    const bp = bpAt(clientX);
+    const bpPerPx = (range!.end - range!.start) / width;
+    const tol = Math.max(4 * bpPerPx, 1);
+    let best: (typeof markers)[number] | null = null;
+    let bestDist = Infinity;
+    for (const m of markers) {
+      const d = Math.abs(m.pos - bp);
+      if (d < bestDist) {
+        bestDist = d;
+        best = m;
+      }
+    }
+    if (!best || bestDist > Math.max(tol, 8)) return;
+    const rect = svgRef.current!.getBoundingClientRect();
+    setPopup({
+      x: clientX - rect.left,
+      y: baselineY + geneH / 2,
+      variant: { ...best, queryName: selectedQuery?.query_name ?? "" },
+    });
+  }
 
   return (
     <div className="space-y-3">
@@ -161,6 +280,26 @@ export function GenomeView({
             </option>
           ))}
         </select>
+        <label className="flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
+          Genes colored by
+          <select
+            value={colorBy ?? 0}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              const next = v === 0 ? null : v;
+              setColorBy(next);
+              onQueryChange?.(next);
+            }}
+            className="h-11 px-3 rounded-lg border border-zinc-300 bg-white text-[15px] max-w-56 truncate dark:border-zinc-700 dark:bg-zinc-900"
+          >
+            <option value={0}>reference annotation</option>
+            {data.queries.map((q) => (
+              <option key={q.query_id} value={q.query_id}>
+                {q.query_name}
+              </option>
+            ))}
+          </select>
+        </label>
         <RangeInput
           range={range}
           seqLength={seqLength}
@@ -196,11 +335,19 @@ export function GenomeView({
             1000
           ).toFixed(1)} kb shown)
         </span>
+        {alignmentPending && (
+          <span className="inline-flex items-center gap-2 text-sm text-zinc-400 dark:text-zinc-500">
+            <Spinner /> computing variant markers...
+          </span>
+        )}
       </div>
 
       <div
-        className="border border-zinc-200 rounded-xl bg-white overflow-x-auto dark:border-zinc-800 dark:bg-zinc-900"
-        onMouseLeave={() => setPopup(null)}
+        className="relative border border-zinc-200 rounded-xl bg-white overflow-x-auto dark:border-zinc-800 dark:bg-zinc-900"
+        onMouseLeave={() => {
+          setPopup(null);
+          setHover(null);
+        }}
       >
         <svg
           ref={svgRef}
@@ -215,10 +362,13 @@ export function GenomeView({
             zoom(e.deltaY > 0 ? 1.2 : 0.83, bp);
           }}
           onMouseDown={(e) => {
-            dragRef.current = { x: e.clientX, start: range.start };
+            dragRef.current = { x: e.clientX, start: range.start, moved: false };
           }}
           onMouseMove={(e) => {
             if (dragRef.current && svgRef.current) {
+              if (Math.abs(e.clientX - dragRef.current.x) > 3) {
+                dragRef.current.moved = true;
+              }
               const rect = svgRef.current.getBoundingClientRect();
               const shiftBp =
                 ((dragRef.current.x - e.clientX) / rect.width) *
@@ -230,8 +380,19 @@ export function GenomeView({
               setRange({ start, end: start + (range.end - range.start) });
             }
           }}
-          onMouseUp={() => (dragRef.current = null)}
+          onMouseUp={() => {
+            wasDragRef.current = dragRef.current?.moved ?? false;
+            dragRef.current = null;
+          }}
           onMouseLeave={() => (dragRef.current = null)}
+          onClick={(e) => {
+            if (e.defaultPrevented) return;
+            if (wasDragRef.current) {
+              wasDragRef.current = false;
+              return;
+            }
+            openVariantPopup(e.clientX);
+          }}
         >
           {/* ruler */}
           <g>
@@ -265,119 +426,172 @@ export function GenomeView({
             ))}
           </g>
 
-          {/* gene track */}
+          {/* the string: a thin baseline under all the gene beads */}
+          <line
+            x1={0}
+            x2={width}
+            y1={baselineY}
+            y2={baselineY}
+            style={{ stroke: "var(--gv-ruler-line)" }}
+          />
+
+          {/* genes: one continuous line of beads on the string */}
           <g>
-            {genes
-              .filter((g) => inRange(g.start, g.end))
-              .map((g) => {
-                const x = bpToX(Math.max(g.start, range.start));
-                const x2 = bpToX(Math.min(g.end, range.end));
-                const w = Math.max(2, x2 - x);
-                return (
-                  <rect
-                    key={g.locus_tag}
-                    x={x}
-                    y={rulerH + 6}
-                    width={w}
-                    height={geneTrackH - 14}
-                    rx={1.5}
-                    style={{ fill: geneColor(g) }}
-                    className="cursor-pointer"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const rect = svgRef.current!.getBoundingClientRect();
-                      setPopup({
-                        x: e.clientX - rect.left,
-                        y: rulerH + 20,
-                        gene: g,
-                      });
-                    }}
-                  />
-                );
-              })}
-            <text x={4} y={rulerH + 2} fontSize="10" style={{ fill: "var(--gv-track-label)" }}>
-              genes
-            </text>
+            {data.genes.map((g, gi) => {
+              if (g.seqid !== seqid || !inRange(g.start, g.end)) return null;
+              const x = bpToX(Math.max(g.start, range.start));
+              const x2 = bpToX(Math.min(g.end, range.end));
+              const w = Math.max(2, x2 - x);
+              const y = baselineY - geneH / 2;
+              const fill = selectedQuery
+                ? callColor(selectedQuery.calls?.[gi])
+                : geneColor(g);
+              const label = g.symbol || g.locus_tag;
+              return (
+                <g
+                  key={g.locus_tag}
+                  className="cursor-pointer"
+                  onMouseEnter={() => setHover(gi)}
+                  onMouseLeave={() => setHover(null)}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    const rect = svgRef.current!.getBoundingClientRect();
+                    setPopup({
+                      x: e.clientX - rect.left,
+                      y: baselineY + geneH / 2,
+                      gene: g,
+                      gi,
+                    });
+                  }}
+                >
+                  <GeneShape x={x} w={w} y={y} h={geneH} strand={g.strand} fill={fill} />
+                  {w >= LABEL_MIN_W && (
+                    <text
+                      x={x + w / 2}
+                      y={baselineY + 3.5}
+                      fontSize="10"
+                      textAnchor="middle"
+                      className="font-mono pointer-events-none select-none"
+                      style={{
+                        fill: "var(--gv-gene-label)",
+                        stroke: "var(--gv-map-bg)",
+                        strokeWidth: 2.5,
+                        paintOrder: "stroke",
+                      }}
+                    >
+                      {truncateLabel(label, w - 10)}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
           </g>
 
-          {/* query tracks */}
-          {queries.map((q, i) => {
-            const y = rulerH + geneTrackH + i * trackH + 4;
-            return (
-              <g key={q.name}>
-                <rect
-                  x={0}
-                  y={y}
-                  width={width}
-                  height={trackH - 10}
-                  style={{ fill: "var(--gv-track-bg)" }}
+          {/* variant markers of the selected query */}
+          {showMarkers &&
+            markers.map((m, i) => {
+              const x = bpToX(m.kind === "ins" ? m.pos + 0.5 : m.pos);
+              const y1 = baselineY - geneH / 2 - 5;
+              const y2 = baselineY + geneH / 2 + 5;
+              const color =
+                m.kind === "snp" ? SNP_COLOR : m.kind === "del" ? DEL_COLOR : INS_COLOR;
+              return (
+                <line
+                  key={i}
+                  x1={x}
+                  x2={x}
+                  y1={y1}
+                  y2={y2}
+                  stroke={color}
+                  strokeWidth={2}
+                  className="pointer-events-none"
                 />
-                <text x={4} y={y + 9} fontSize="10" style={{ fill: "var(--gv-track-label)" }}>
-                  {i === 0 ? "alignments: " : ""}
-                </text>
-                {q.blocks
-                  .filter((b) => inRange(b.ref_start, b.ref_end))
-                  .map((b, j) => {
-                    const x = bpToX(Math.max(b.ref_start, range.start));
-                    const x2 = bpToX(Math.min(b.ref_end, range.end));
-                    const w = Math.max(2, x2 - x);
-                    return (
-                      <g key={j}>
-                        <rect
-                          x={x}
-                          y={y + 12}
-                          width={w}
-                          height={trackH - 22}
-                          fill={identityColor(b.identity)}
-                          className="cursor-pointer"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setPopup({
-                              x: e.clientX - svgRef.current!.getBoundingClientRect().left,
-                              y: y + trackH,
-                              block: { ...b, queryName: q.name },
-                            });
-                          }}
-                        />
-                        {b.qry_rev && w > 12 && (
-                          <text
-                            x={x + w / 2}
-                            y={y + 10}
-                            fontSize="8"
-                            style={{ fill: "var(--gv-tick-label)" }}
-                            textAnchor="middle"
-                          >
-                            rev
-                          </text>
-                        )}
-                      </g>
-                    );
-                  })}
-              </g>
-            );
-          })}
+              );
+            })}
         </svg>
+
+        {hover !== null && data.genes[hover] && data.genes[hover].seqid === seqid && (
+          <GeneTooltip
+            gene={data.genes[hover]}
+            x={bpToX(
+              (Math.max(data.genes[hover].start, range.start) +
+                Math.min(data.genes[hover].end, range.end)) /
+                2,
+            )}
+            y={baselineY + geneH / 2}
+            queryName={selectedQuery?.query_name ?? null}
+            call={selectedQuery?.calls?.[hover]}
+            covPct={selectedQuery?.cov_pcts?.[hover]}
+            identity={selectedQuery?.identities?.[hover]}
+            svgWidth={width}
+          />
+        )}
       </div>
 
       {/* legend */}
       <div className="flex flex-wrap items-center gap-4 text-xs text-zinc-500 dark:text-zinc-400">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-sm" style={{ background: identityColor(100) }} />
-          high identity
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-sm" style={{ background: identityColor(85) }} />
-          medium
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-sm" style={{ background: identityColor(70) }} />
-          low identity
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-sm" style={{ background: "var(--gv-ruler-line)" }} />
-          not aligned
-        </span>
-        <span>Scroll to zoom, drag to pan. Click a gene or a block for details.</span>
+        {selectedQuery ? (
+          <>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-sm" style={{ background: "var(--gv-call-present)" }} />
+              present
+              {callCounts && ` (${callCounts.PRESENT.toLocaleString("en-US")})`}
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-sm" style={{ background: "var(--gv-call-partial)" }} />
+              partial
+              {callCounts && ` (${callCounts.PARTIAL.toLocaleString("en-US")})`}
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-sm" style={{ background: "var(--gv-call-absent)" }} />
+              absent
+              {callCounts && ` (${callCounts.ABSENT.toLocaleString("en-US")})`}
+            </span>
+            <span className="text-zinc-400 dark:text-zinc-500">
+              in {selectedQuery.query_name}
+            </span>
+            {showMarkers ? (
+              <>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="w-1 h-3 rounded-sm" style={{ background: SNP_COLOR }} />
+                  SNP
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="w-1 h-3 rounded-sm" style={{ background: INS_COLOR }} />
+                  insertion
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="w-3 h-3 rounded-sm" style={{ background: DEL_COLOR }} />
+                  deletion
+                </span>
+              </>
+            ) : (
+              <span className="text-zinc-400 dark:text-zinc-500">
+                zoom in below {(VARIANT_SPAN / 1000).toFixed(0)} kb to see SNP/indel markers
+              </span>
+            )}
+          </>
+        ) : (
+          <>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-sm" style={{ background: "var(--gv-gene-cds)" }} />
+              protein coding
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-sm" style={{ background: "var(--gv-gene-trna)" }} />
+              tRNA
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-sm" style={{ background: "var(--gv-gene-rrna)" }} />
+              rRNA
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-sm" style={{ background: "var(--gv-gene-pseudo)" }} />
+              pseudo / other
+            </span>
+          </>
+        )}
+        <span>Scroll to zoom, drag to pan. Click a gene for details.</span>
       </div>
 
       {popup && (
@@ -388,25 +602,76 @@ export function GenomeView({
             setPopup(null);
             onOpenGene(locus);
           }}
+          callInfo={
+            selectedQuery && popup.gi !== undefined
+              ? {
+                  name: selectedQuery.query_name,
+                  call: selectedQuery.calls?.[popup.gi] ?? "ABSENT",
+                  covPct: selectedQuery.cov_pcts?.[popup.gi] ?? 0,
+                  identity: selectedQuery.identities?.[popup.gi] ?? 0,
+                }
+              : null
+          }
         />
       )}
     </div>
   );
 }
 
+type VariantPopupInfo =
+  | { kind: "snp"; pos: number; r: number; q: number; queryName: string }
+  | { kind: "del"; pos: number; len: number; queryName: string }
+  | { kind: "ins"; pos: number; seq: string; queryName: string };
+
+/** A gene bead: a rectangle with a strand arrow tip. */
+function GeneShape({
+  x,
+  w,
+  y,
+  h,
+  strand,
+  fill,
+}: {
+  x: number;
+  w: number;
+  y: number;
+  h: number;
+  strand: number;
+  fill: string;
+}) {
+  const tip = Math.min(9, Math.max(3, h / 4));
+  if (w < 2 * tip) {
+    return (
+      <rect x={x} y={y} width={w} height={h} rx={1.5} style={{ fill }} />
+    );
+  }
+  const x2 = x + w;
+  const points =
+    strand >= 0
+      ? `${x},${y} ${x2 - tip},${y} ${x2},${y + h / 2} ${x2 - tip},${y + h} ${x},${y + h}`
+      : `${x + tip},${y} ${x2},${y} ${x2},${y + h} ${x + tip},${y + h} ${x},${y + h / 2}`;
+  return <polygon points={points} style={{ fill }} />;
+}
+
+function truncateLabel(label: string, maxPx: number): string {
+  const charW = 6.2; // 10px monospace approx
+  const maxChars = Math.floor(maxPx / charW);
+  if (maxChars < 2) return "";
+  if (label.length <= maxChars) return label;
+  return `${label.slice(0, Math.max(1, maxChars - 1))}\u2026`;
+}
+
 function GenePopup({
   popup,
   onClose,
   onOpenGene,
+  callInfo,
 }: {
-  popup: { x: number; y: number; gene?: WgaGene; block?: WgaBlock & { queryName: string } };
+  popup: { x: number; y: number; gene?: WgaGene; variant?: VariantPopupInfo };
   onClose: () => void;
   onOpenGene: (locus: string) => void;
+  callInfo?: { name: string; call: Call; covPct: number; identity: number } | null;
 }) {
-  useEffect(() => {
-    const t = setTimeout(() => {}, 0);
-    return () => clearTimeout(t);
-  }, []);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
@@ -419,7 +684,7 @@ function GenePopup({
     <div
       ref={ref}
       className="absolute z-30 bg-white border border-zinc-200 rounded-lg shadow-lg p-3 w-72 dark:bg-zinc-900 dark:border-zinc-800"
-      style={{ left: Math.min(popup.x, 800), top: popup.y + 40 }}
+      style={{ left: Math.min(popup.x, 800), top: popup.y + 16 }}
     >
       {popup.gene && (
         <>
@@ -433,6 +698,21 @@ function GenePopup({
             {popup.gene.end.toLocaleString("en-US")} (
             {popup.gene.strand > 0 ? "+" : "-"} strand)
           </p>
+          {popup.gene.product && (
+            <p className="text-xs text-zinc-600 mt-2 leading-snug dark:text-zinc-300">
+              {popup.gene.product}
+            </p>
+          )}
+          <FunctionBadges product={popup.gene.product} />
+          {callInfo && (
+            <div className="mt-2 flex items-center gap-2 text-xs">
+              <CallBadge call={callInfo.call} />
+              <span className="font-mono text-zinc-500 dark:text-zinc-400">
+                {callInfo.covPct.toFixed(1)}% coverage,{" "}
+                {callInfo.identity.toFixed(1)}% identity
+              </span>
+            </div>
+          )}
           <button
             className="mt-3 w-full h-10 rounded-md bg-zinc-900 text-white text-sm hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
             onClick={() => onOpenGene(popup.gene!.locus_tag)}
@@ -441,25 +721,230 @@ function GenePopup({
           </button>
         </>
       )}
-      {popup.block && (
+      {popup.variant && (
         <>
-          <p className="font-semibold text-[15px]">Alignment block</p>
-          <p className="text-xs text-zinc-500 mt-1 dark:text-zinc-400">Query: {popup.block.queryName}</p>
-          <p className="text-xs text-zinc-500 mt-1 font-mono dark:text-zinc-400">
-            reference {popup.block.ref_start.toLocaleString("en-US")} -{" "}
-            {popup.block.ref_end.toLocaleString("en-US")}
+          <p className="font-semibold text-[15px]">
+            {popup.variant.kind === "snp"
+              ? "SNP"
+              : popup.variant.kind === "del"
+                ? "Deletion"
+                : "Insertion"}
+          </p>
+          <p className="text-xs text-zinc-500 mt-1 dark:text-zinc-400">
+            {popup.variant.queryName}
           </p>
           <p className="text-xs text-zinc-500 mt-1 font-mono dark:text-zinc-400">
-            query {popup.block.qry_seqid}:{" "}
-            {popup.block.qry_start.toLocaleString("en-US")} -{" "}
-            {popup.block.qry_end.toLocaleString("en-US")}
-            {popup.block.qry_rev ? " (reverse strand)" : ""}
+            {popup.variant.kind === "ins"
+              ? `after reference position ${popup.variant.pos.toLocaleString("en-US")}`
+              : `reference position ${popup.variant.pos.toLocaleString("en-US")}`}
           </p>
-          <p className="text-xs text-zinc-500 mt-1 font-mono dark:text-zinc-400">
-            identity {popup.block.identity.toFixed(2)}%
-          </p>
+          {popup.variant.kind === "snp" && (
+            <p className="text-xs mt-1 font-mono dark:text-zinc-300">
+              {String.fromCharCode(popup.variant.r)} &rarr;{" "}
+              <span style={{ color: SNP_COLOR }}>
+                {String.fromCharCode(popup.variant.q)}
+              </span>
+            </p>
+          )}
+          {popup.variant.kind === "del" && (
+            <p className="text-xs mt-1 font-mono dark:text-zinc-300">
+              <span style={{ color: DEL_COLOR }}>
+                {popup.variant.len.toLocaleString("en-US")} bp
+              </span>{" "}
+              missing from the query
+            </p>
+          )}
+          {popup.variant.kind === "ins" && (
+            <p className="text-xs mt-1 font-mono break-all dark:text-zinc-300">
+              <span style={{ color: INS_COLOR }}>
+                {popup.variant.seq.length.toLocaleString("en-US")} bp
+              </span>{" "}
+              inserted: {popup.variant.seq.slice(0, 200)}
+              {popup.variant.seq.length > 200 ? "\u2026" : ""}
+            </p>
+          )}
         </>
       )}
+    </div>
+  );
+}
+
+/** Hover tooltip for a gene: name, position, function annotation and,
+ * when a query is selected, its presence call in that query. */
+function GeneTooltip({
+  gene,
+  x,
+  y,
+  queryName,
+  call,
+  covPct,
+  identity,
+  svgWidth,
+}: {
+  gene: WgaGene;
+  x: number;
+  y: number;
+  queryName: string | null;
+  call?: Call;
+  covPct?: number;
+  identity?: number;
+  svgWidth: number;
+}) {
+  return (
+    <div
+      className="pointer-events-none absolute z-20 w-64 rounded-lg border border-zinc-200 bg-white p-2.5 text-xs shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
+      style={{
+        left: Math.max(4, Math.min(x - 128, svgWidth - 264)),
+        top: y + 6,
+      }}
+    >
+      <p className="font-semibold text-[13px]">
+        {gene.locus_tag}
+        {gene.symbol && (
+          <span className="font-normal text-zinc-500 dark:text-zinc-400">
+            {" "}
+            ({gene.symbol})
+          </span>
+        )}
+      </p>
+      <p className="mt-0.5 font-mono text-[11px] text-zinc-500 dark:text-zinc-400">
+        {gene.seqid}:{gene.start.toLocaleString("en-US")}-
+        {gene.end.toLocaleString("en-US")} ({gene.strand > 0 ? "+" : "-"}),
+        {gene.biotype}
+      </p>
+      {gene.product && (
+        <p className="mt-1 leading-snug text-zinc-700 dark:text-zinc-300">
+          {gene.product}
+        </p>
+      )}
+      <FunctionBadges product={gene.product} />
+      {queryName && call && (
+        <p className="mt-1.5 flex items-center gap-1.5">
+          <CallBadge call={call} />
+          <span className="font-mono text-[11px] text-zinc-500 dark:text-zinc-400">
+            {covPct?.toFixed(1)}% cov, {identity?.toFixed(1)}% id
+          </span>
+        </p>
+      )}
+    </div>
+  );
+}
+
+function CallBadge({ call }: { call: Call }) {
+  const { label, cls } =
+    call === "PRESENT"
+      ? {
+          label: "present",
+          cls: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+        }
+      : call === "PARTIAL"
+        ? {
+            label: "partial",
+            cls: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
+          }
+        : {
+            label: "absent",
+            cls: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400",
+          };
+  return (
+    <span className={`inline-flex h-5 shrink-0 items-center rounded px-1.5 text-[11px] font-medium ${cls}`}>
+      {label}
+    </span>
+  );
+}
+
+const VIRULENCE_KEYWORDS = [
+  "virulen",
+  "toxin",
+  "hemolys",
+  "haemolys",
+  "leukocidin",
+  "cytolys",
+  "adhesin",
+  "adhesi",
+  "invasin",
+  "invasion",
+  "hemagglutin",
+  "haemagglutin",
+  "siderophore",
+  "aerobactin",
+  "enterobactin",
+  "enterochelin",
+  "iga protease",
+  "autotransporter",
+  "rtx ",
+  "secretion system",
+  "immune evasion",
+  "capsular polysaccharide",
+];
+
+const RESISTANCE_KEYWORDS = [
+  "resistance",
+  "beta-lactamase",
+  "lactamase",
+  "aminoglycoside",
+  "tetracycline",
+  "chloramphenicol",
+  "macrolide",
+  "lincosamide",
+  "sulfonamide",
+  "trimethoprim",
+  "vancomycin",
+  "fosfomycin",
+  "rifampin",
+  "rifampicin",
+  "quinolone",
+  "carbapenem",
+  "multidrug",
+  "efflux pump",
+  "mdr ",
+];
+
+const MOBILE_ELEMENT_KEYWORDS = [
+  "transposase",
+  "integrase",
+  "recombinase",
+  "insertion sequence",
+  "phage",
+  "prophage",
+  "plasmid",
+  "integron",
+  "resolvase",
+  "relaxase",
+  "mobilization",
+];
+
+const FUNCTION_BADGE_CLS: Record<string, string> = {
+  "virulence-related": "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+  "resistance-related":
+    "bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300",
+  "mobile element": "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300",
+};
+
+/** Rough keyword based classification of a GFF product string. */
+function functionCategories(product: string | undefined): string[] {
+  if (!product) return [];
+  const p = product.toLowerCase();
+  const cats: string[] = [];
+  if (VIRULENCE_KEYWORDS.some((k) => p.includes(k))) cats.push("virulence-related");
+  if (RESISTANCE_KEYWORDS.some((k) => p.includes(k))) cats.push("resistance-related");
+  if (MOBILE_ELEMENT_KEYWORDS.some((k) => p.includes(k))) cats.push("mobile element");
+  return cats;
+}
+
+function FunctionBadges({ product }: { product: string | undefined }) {
+  const cats = functionCategories(product);
+  if (cats.length === 0) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1">
+      {cats.map((c) => (
+        <span
+          key={c}
+          className={`inline-flex h-5 items-center rounded px-1.5 text-[11px] font-medium ${FUNCTION_BADGE_CLS[c]}`}
+        >
+          {c}
+        </span>
+      ))}
     </div>
   );
 }
@@ -526,30 +1011,9 @@ function geneColor(g: WgaGene): string {
   return "var(--gv-gene-cds)";
 }
 
-/** Sequential single-hue scale for identity 0-100. */
-function identityColor(identity: number): string {
-  const t = Math.max(0, Math.min(100, identity)) / 100;
-  // from light steel blue to deep blue
-  const stops: [number, number, number][] = [
-    [226, 232, 240],
-    [145, 175, 212],
-    [30, 95, 158],
-  ];
-  let c: [number, number, number];
-  if (t < 0.5) {
-    const f = t / 0.5;
-    c = mix(stops[0], stops[1], f);
-  } else {
-    const f = (t - 0.5) / 0.5;
-    c = mix(stops[1], stops[2], f);
-  }
-  return `rgb(${c.map((x) => Math.round(x)).join(",")})`;
-}
-
-function mix(
-  a: [number, number, number],
-  b: [number, number, number],
-  t: number,
-): [number, number, number] {
-  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+/** Gene fill by presence call in the selected query. */
+function callColor(call: Call | undefined): string {
+  if (call === "PRESENT") return "var(--gv-call-present)";
+  if (call === "PARTIAL") return "var(--gv-call-partial)";
+  return "var(--gv-call-absent)";
 }

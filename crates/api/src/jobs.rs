@@ -344,6 +344,7 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
                 start: g.start,
                 end: g.end,
                 strand: g.strand,
+                product: g.product.clone(),
             })
             .collect();
         std::fs::write(
@@ -556,4 +557,50 @@ impl QueryAlignmentSourceOwned {
             delta: &self.delta,
         }
     }
+}
+
+/// Guards the on-demand variant event computation so concurrent
+/// requests do not duplicate the same heavy walk.
+static VARIANTS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Load the per-base variant events of one query against the reference.
+/// Computed on demand from the kept delta file on first use, then cached
+/// as variants.json next to the query's result.json. Queries whose
+/// working files are gone get empty events (the viewer still shows
+/// their alignment blocks).
+pub fn load_variants(
+    state: &SharedState,
+    project_id: i64,
+    run_id: i64,
+    query_file_id: i64,
+) -> ApiResult<std::collections::BTreeMap<String, bactiment_types::AlignmentEvents>> {
+    let qdir = state
+        .run_dir(project_id, run_id)
+        .join("queries")
+        .join(query_file_id.to_string());
+    let path = qdir.join("variants.json");
+    if !path.is_file() {
+        let _guard = VARIANTS_LOCK.lock().unwrap();
+        if !path.is_file() {
+            let ref_fa = state
+                .project_dir(project_id)
+                .join("reference")
+                .join("ref.fa");
+            let qry_fa = qdir.join("query.fa");
+            let delta = qdir.join("work").join("cmp.delta");
+            if qry_fa.is_file() && delta.is_file() && ref_fa.is_file() {
+                bactiment_engine::variants::write_variant_events(&ref_fa, &qry_fa, &delta, &path)?;
+            } else {
+                return Ok(Default::default());
+            }
+        }
+    }
+    let bytes = std::fs::read(&path).map_err(|_| {
+        crate::error::ApiError::Internal(
+            "The variant data for this query could not be read.".into(),
+        )
+    })?;
+    serde_json::from_slice(&bytes).map_err(|_| {
+        crate::error::ApiError::Internal("The variant data for this query is unreadable.".into())
+    })
 }

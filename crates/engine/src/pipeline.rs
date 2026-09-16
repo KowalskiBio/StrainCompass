@@ -180,6 +180,7 @@ pub fn run_comparison(
             start: g.start,
             end: g.end,
             strand: g.strand,
+            product: g.product.clone(),
         })
         .collect();
     let blocks: Vec<WgaBlock> = delta

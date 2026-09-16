@@ -126,6 +126,7 @@ export interface WgaGene {
   start: number;
   end: number;
   strand: number;
+  product: string;
 }
 
 export interface WgaBlock {
@@ -143,12 +144,63 @@ export interface WgaQuery {
   query_id: number;
   query_name: string;
   blocks: WgaBlock[];
+  /** Presence call per gene, aligned with WgaData.genes. */
+  calls?: Call[];
+  /** Coverage percent per gene, aligned with WgaData.genes. */
+  cov_pcts?: number[];
+  /** Best block identity per gene, aligned with WgaData.genes. */
+  identities?: number[];
 }
 
 export interface WgaData {
   reference: [string, number][];
   genes: WgaGene[];
   queries: WgaQuery[];
+}
+
+/** SNP at a reference position: bases are ASCII char codes. */
+export interface SnpEvent {
+  pos: number;
+  r: number;
+  q: number;
+}
+
+/** Reference bases missing from the query (deletion in the query). */
+export interface DelEvent {
+  pos: number;
+  len: number;
+}
+
+/** Query bases inserted after the reference position `pos`. */
+export interface InsEvent {
+  pos: number;
+  seq: string;
+}
+
+export interface AlignmentEvents {
+  snps: SnpEvent[];
+  dels: DelEvent[];
+  ins: InsEvent[];
+}
+
+export interface AlignmentQuery {
+  query_id: number;
+  query_name: string;
+  blocks: WgaBlock[];
+  events: Record<string, AlignmentEvents>;
+}
+
+export interface AlignmentData {
+  reference: [string, number][];
+  queries: AlignmentQuery[];
+}
+
+/** Reference bases of a window, for the alignment viewer letters mode. */
+export interface RefseqWindow {
+  seqid: string;
+  start: number;
+  end: number;
+  seq: string;
 }
 
 export interface GeneBlock {

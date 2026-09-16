@@ -77,6 +77,8 @@ fn routes() -> Router<SharedState> {
         )
         .route("/runs/{id}/matrix", get(routes::results::matrix))
         .route("/runs/{id}/wga", get(routes::results::wga))
+        .route("/runs/{id}/alignment", get(routes::results::alignment))
+        .route("/runs/{id}/refseq", get(routes::results::refseq))
         .route("/runs/{id}/gene/{locus}", get(routes::results::gene_detail))
         .route(
             "/runs/{id}/gene/{locus}/export",
@@ -162,7 +164,10 @@ async fn main() {
             "/api",
             routes()
                 .with_state(state.clone())
-                .layer(DefaultBodyLimit::max(600 * 1024 * 1024)),
+                .layer(DefaultBodyLimit::max(600 * 1024 * 1024))
+                // gzip the big JSON payloads (the alignment viewer ships
+                // every query's variant events at once)
+                .layer(tower_http::compression::CompressionLayer::new()),
         )
         .fallback_service(
             tower_http::services::ServeDir::new(&dist)

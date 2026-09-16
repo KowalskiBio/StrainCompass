@@ -101,6 +101,9 @@ pub struct WgaGene {
     pub start: u64,
     pub end: u64,
     pub strand: i8,
+    /// Function annotation from the GFF `product` attribute.
+    #[serde(default)]
+    pub product: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +111,15 @@ pub struct WgaQuery {
     pub query_id: i64,
     pub query_name: String,
     pub blocks: Vec<WgaBlock>,
+    /// Presence call per gene, aligned with `WgaData::genes`.
+    #[serde(default)]
+    pub calls: Vec<Call>,
+    /// Coverage percent per gene, aligned with `WgaData::genes`.
+    #[serde(default)]
+    pub cov_pcts: Vec<f64>,
+    /// Best block identity per gene (0-100), aligned with `WgaData::genes`.
+    #[serde(default)]
+    pub identities: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +128,64 @@ pub struct WgaData {
     pub reference: Vec<(String, u64)>,
     pub genes: Vec<WgaGene>,
     pub queries: Vec<WgaQuery>,
+}
+
+/// A single nucleotide polymorphism at a reference position: the query
+/// carries a different base. Bases are ASCII bytes, and the query base
+/// is already in reference orientation (reverse complemented when the
+/// aligning block is on the reverse strand).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SnpEvent {
+    /// 1-based reference position.
+    pub pos: u64,
+    pub r: u8,
+    pub q: u8,
+}
+
+/// A stretch of reference bases missing from the query (a gap in the
+/// query row inside an aligned block).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DelEvent {
+    /// 1-based reference position of the first deleted base.
+    pub pos: u64,
+    pub len: u64,
+}
+
+/// Query bases inserted between two adjacent aligned reference
+/// positions. `pos` is the reference position after which the bases
+/// sit (0 = before the first reference base of the block). The
+/// sequence is in reference orientation.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct InsEvent {
+    pub pos: u64,
+    pub seq: String,
+}
+
+/// Variant events of one query against one reference sequence.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AlignmentEvents {
+    pub snps: Vec<SnpEvent>,
+    pub dels: Vec<DelEvent>,
+    pub ins: Vec<InsEvent>,
+}
+
+/// One query with its alignment blocks and per-base variant events
+/// for the whole-genome alignment viewer.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AlignmentQuery {
+    pub query_id: i64,
+    pub query_name: String,
+    pub blocks: Vec<WgaBlock>,
+    /// Events keyed by reference seqid.
+    #[serde(default)]
+    pub events: std::collections::BTreeMap<String, AlignmentEvents>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AlignmentData {
+    /// Reference sequence lengths (seqid, length), sorted.
+    pub reference: Vec<(String, u64)>,
+    pub queries: Vec<AlignmentQuery>,
 }
 
 /// Hover preview + alignment rows for one gene (MSA viewer).

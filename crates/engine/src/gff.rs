@@ -17,6 +17,9 @@ pub struct Gene {
     pub old_locus_tag: String,
     pub symbol: String,
     pub biotype: String,
+    /// Function annotation from the `product` attribute (of the gene
+    /// feature itself, or of the CDS feature sharing its locus tag).
+    pub product: String,
 }
 
 /// Parse a GFF3 file into a list of genes.
@@ -47,8 +50,16 @@ fn parse_attrs(field: &str) -> HashMap<String, String> {
 
 pub fn parse_gff_str(text: &str) -> Result<Vec<Gene>> {
     let mut gene_rows: Vec<Gene> = Vec::new();
-    // (seqid, start, end, strand, feature type, attrs)
-    type CdsRow = (String, u64, u64, i8, String, HashMap<String, String>);
+    // (locus tag, seqid, start, end, strand, feature type, attrs)
+    type CdsRow = (
+        String,
+        String,
+        u64,
+        u64,
+        i8,
+        String,
+        HashMap<String, String>,
+    );
     let mut cds_rows: Vec<CdsRow> = Vec::new();
     let mut saw_gff_header = false;
     let mut n_data_rows = 0;
@@ -115,10 +126,12 @@ pub fn parse_gff_str(text: &str) -> Result<Vec<Gene>> {
                     old_locus_tag: attrs.get("old_locus_tag").cloned().unwrap_or_default(),
                     symbol,
                     biotype,
+                    product: attrs.get("product").cloned().unwrap_or_default(),
                 });
             }
             "CDS" | "tRNA" | "rRNA" | "ncRNA" | "tmRNA" => {
                 cds_rows.push((
+                    attrs.get("locus_tag").cloned().unwrap_or_default(),
                     seqid.to_string(),
                     start,
                     end,
@@ -138,6 +151,24 @@ pub fn parse_gff_str(text: &str) -> Result<Vec<Gene>> {
     }
 
     if !gene_rows.is_empty() {
+        // Gene features usually carry no product; join it in from the CDS
+        // features that share their locus tag.
+        let mut products: HashMap<String, String> = HashMap::new();
+        for (tag, _, _, _, _, _, attrs) in &cds_rows {
+            if tag.is_empty() {
+                continue;
+            }
+            if let Some(p) = attrs.get("product") {
+                if !p.is_empty() {
+                    products.entry(tag.clone()).or_insert_with(|| p.clone());
+                }
+            }
+        }
+        for g in &mut gene_rows {
+            if g.product.is_empty() {
+                g.product = products.get(&g.locus_tag).cloned().unwrap_or_default();
+            }
+        }
         gene_rows.sort_by(|a, b| {
             (a.seqid.clone(), a.start, a.end).cmp(&(b.seqid.clone(), b.start, b.end))
         });
@@ -147,10 +178,11 @@ pub fn parse_gff_str(text: &str) -> Result<Vec<Gene>> {
     // Fallback: merge same-locus_tag features into gene spans.
     let mut by_tag: HashMap<String, Gene> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
-    for (seqid, start, end, strand, ftype, attrs) in cds_rows {
-        let locus_tag = match attrs.get("locus_tag") {
-            Some(t) => t.clone(),
-            None => format!("{}_{}_{}_{}", seqid, start, end, "feat"),
+    for (tag, seqid, start, end, strand, ftype, attrs) in cds_rows {
+        let locus_tag = if !tag.is_empty() {
+            tag
+        } else {
+            format!("{}_{}_{}_{}", seqid, start, end, "feat")
         };
         let entry = by_tag.entry(locus_tag.clone()).or_insert_with(|| {
             order.push(locus_tag.clone());
@@ -167,13 +199,21 @@ pub fn parse_gff_str(text: &str) -> Result<Vec<Gene>> {
                     .cloned()
                     .unwrap_or_default(),
                 biotype: ftype.clone(),
+                product: attrs.get("product").cloned().unwrap_or_default(),
             }
         });
         entry.start = entry.start.min(start);
         entry.end = entry.end.max(end);
         // Prefer a richer biotype when seen later (e.g. tRNA over CDS parts).
         if entry.biotype == "CDS" && ftype != "CDS" {
-            entry.biotype = ftype;
+            entry.biotype = ftype.clone();
+        }
+        if entry.product.is_empty() {
+            if let Some(p) = attrs.get("product") {
+                if !p.is_empty() {
+                    entry.product = p.clone();
+                }
+            }
         }
     }
     let mut genes: Vec<Gene> = order
