@@ -20,9 +20,20 @@ export type WheelSource = "pinch" | "wheel" | "scroll";
 const LINE_PX = 16;
 const PAGE_PX = 400;
 
-// Zoom per pixel of pinch travel, and the most one event may zoom.
-const ZOOM_PER_PX = 0.0035;
-const MAX_STEP = 2;
+/**
+ * Zoom gain per pixel of travel, and the most one event may zoom.
+ *
+ * Pinch and wheel need different gains: a trackpad pinch arrives as a stream of
+ * small deltas (a few pixels each, ~60/s), while a mouse wheel sends a handful of
+ * coarse notches (commonly 100-120 px each). One shared constant high enough to
+ * make pinching feel quick would make every wheel notch jump the full clamp.
+ */
+const PINCH_PER_PX = 0.012;
+const WHEEL_PER_PX = 0.005;
+const MAX_STEP = 3;
+
+/** Extra gain on Safari's pinch scale, to match the wheel path's feel. */
+const GESTURE_GAIN = 1.8;
 
 /**
  * There is no browser API for telling a mouse wheel from a trackpad, so this is a
@@ -44,12 +55,18 @@ export function pixelDelta(e: WheelEvent): { dx: number; dy: number } {
   return { dx: e.deltaX * unit, dy: e.deltaY * unit };
 }
 
+/** Keep a zoom factor within one event's allowed range. */
+function clampStep(factor: number): number {
+  return Math.min(MAX_STEP, Math.max(1 / MAX_STEP, factor));
+}
+
 /**
  * Continuous zoom factor from a pixel delta. Positive delta (pinch in, wheel down)
  * gives a factor above 1, which widens the visible window: zoom out.
  */
-export function zoomFactor(dy: number): number {
-  return Math.min(MAX_STEP, Math.max(1 / MAX_STEP, Math.exp(dy * ZOOM_PER_PX)));
+export function zoomFactor(dy: number, source: WheelSource = "pinch"): number {
+  const gain = source === "wheel" ? WHEEL_PER_PX : PINCH_PER_PX;
+  return clampStep(Math.exp(dy * gain));
 }
 
 /** Safari reports trackpad pinch as GestureEvent, not as a ctrlKey wheel event. */
@@ -99,7 +116,7 @@ export function useWheelGestures<T extends HTMLElement>(
       // this is what stops the browser zooming the page.
       e.preventDefault();
       if (source === "pinch" && hasGestureEvents) return;
-      cb.current({ kind: "zoom", factor: zoomFactor(dy), clientX: e.clientX });
+      cb.current({ kind: "zoom", factor: zoomFactor(dy, source), clientX: e.clientX });
     };
 
     node.addEventListener("wheel", onWheel, { passive: false });
@@ -119,7 +136,7 @@ export function useWheelGestures<T extends HTMLElement>(
       const scale = ev.scale || 1;
       if (scale <= 0 || lastScale <= 0) return;
       // Growing scale means pinch out, which narrows the window: factor below 1.
-      const factor = Math.min(MAX_STEP, Math.max(1 / MAX_STEP, lastScale / scale));
+      const factor = clampStep((lastScale / scale) ** GESTURE_GAIN);
       lastScale = scale;
       cb.current({ kind: "zoom", factor, clientX: ev.clientX });
     };
