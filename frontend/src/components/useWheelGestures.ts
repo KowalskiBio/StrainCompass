@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * to attach the listener ourselves with `{ passive: false }`.
  */
 export type WheelGesture =
-  | { kind: "zoom"; factor: number; clientX: number }
+  | { kind: "zoom"; factor: number; clientX: number; clientY: number }
   | { kind: "pan"; dx: number };
 
 /** What produced a wheel event. */
@@ -76,7 +76,11 @@ export function zoomFactor(dy: number, source: WheelSource = "pinch"): number {
 const hasGestureEvents =
   typeof window !== "undefined" && "ongesturestart" in window;
 
-type SafariGestureEvent = Event & { scale: number; clientX: number };
+type SafariGestureEvent = Event & {
+  scale: number;
+  clientX: number;
+  clientY: number;
+};
 
 /**
  * Returns a callback ref. Attach it to the element that should own the gestures.
@@ -119,7 +123,12 @@ export function useWheelGestures<T extends HTMLElement>(
       // this is what stops the browser zooming the page.
       e.preventDefault();
       if (source === "pinch" && hasGestureEvents) return;
-      cb.current({ kind: "zoom", factor: zoomFactor(dy, source), clientX: e.clientX });
+      cb.current({
+        kind: "zoom",
+        factor: zoomFactor(dy, source),
+        clientX: e.clientX,
+        clientY: e.clientY,
+      });
     };
 
     node.addEventListener("wheel", onWheel, { passive: false });
@@ -141,7 +150,7 @@ export function useWheelGestures<T extends HTMLElement>(
       // Growing scale means pinch out, which narrows the window: factor below 1.
       const factor = clampStep((lastScale / scale) ** GESTURE_GAIN);
       lastScale = scale;
-      cb.current({ kind: "zoom", factor, clientX: ev.clientX });
+      cb.current({ kind: "zoom", factor, clientX: ev.clientX, clientY: ev.clientY });
     };
     const onGestureEnd = (e: Event) => e.preventDefault();
 

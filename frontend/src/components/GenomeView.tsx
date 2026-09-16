@@ -10,22 +10,25 @@ import type {
 } from "../types";
 import { Spinner } from "./ui";
 import { useWheelGestures } from "./useWheelGestures";
-import { clampRange, panRange, zoomRange } from "./genomeRange";
+import { MIN_SPAN, clampRange, panRange, zoomRange } from "./genomeRange";
 import type { Range } from "./genomeRange";
+import { ROW_METRICS, makeWrapLayout, rowPieces, rowsForHeight } from "./genomeLayout";
 
-/** Show SNP/indel markers once the visible window is below this span. */
+/** Show SNP/indel markers once a single row covers less than this span. */
 const VARIANT_SPAN = 20000;
 /** A gene rectangle gets its label once it is this wide in pixels. */
 const LABEL_MIN_W = 42;
 /** Width used until the container has been measured. */
 const FALLBACK_WIDTH = 1100;
 /**
- * Draw the reference bases inside the genes once the window is this small,
- * with hysteresis so a zoom that hovers the boundary does not flicker.
+ * Draw the reference bases inside the genes once a row is this small, with
+ * hysteresis so a zoom that hovers the boundary does not flicker.
  * Same thresholds the alignment view uses for its letters mode.
  */
 const BASES_SPAN = 100;
 const BASES_HYSTERESIS = 15;
+/** Space kept at a row's left for its start coordinate, before the first tick. */
+const TICK_GUTTER = 58;
 /** The refseq endpoint caps a request at this many bases. */
 const REFSEQ_MAX_WINDOW = 8192;
 /**
@@ -42,13 +45,16 @@ const INS_COLOR = "#3b82f6";
 const DEL_COLOR = "#9333ea";
 
 /**
- * Strain map: the reference genome as one continuous line of gene
- * rectangles (beads on a string), colored by their presence call in
- * the selected query (green present, yellow partial, gray absent) or
- * by biotype when "reference annotation" is selected. Zooming in shows
- * gene names inside the boxes and, below a 20 kb window, SNP/indel
- * markers of the selected query. Hovering a gene shows its name,
- * position and function annotation.
+ * Strain map: the reference genome as a line of gene rectangles (beads on a
+ * string), wrapped onto as many rows as the window is tall. Row r continues
+ * where row r-1 ended, the way a paragraph wraps, so the same window is drawn
+ * at as many times the horizontal resolution as there are rows.
+ *
+ * Beads are colored by their presence call in the selected query (green
+ * present, yellow partial, gray absent) or by biotype when "reference
+ * annotation" is selected. Zooming in shows gene names inside the boxes and,
+ * below 20 kb of sequence per row, SNP/indel markers of the selected query.
+ * Hovering a gene shows its name, position and function annotation.
  */
 export function GenomeView({
   run,
@@ -78,6 +84,8 @@ export function GenomeView({
   /** The map container, measured for width and owning the wheel gestures. */
   const [mapEl, setMapEl] = useState<HTMLDivElement | null>(null);
   const [measuredW, setMeasuredW] = useState(0);
+  /** How many rows the window is wrapped onto; derived from the page height. */
+  const [rows, setRows] = useState(3);
   /**
    * Zoom re-projects every gene rather than transforming a layer, so a burst of
    * wheel events would otherwise re-render the whole map several times a frame.
@@ -104,10 +112,12 @@ export function GenomeView({
     initialQuery === undefined ? null : initialQuery === 0 ? null : initialQuery,
   );
   const [colorByInit, setColorByInit] = useState(initialQuery !== undefined);
-  /** Index into data.genes of the hovered gene. */
-  const [hover, setHover] = useState<number | null>(null);
-  /** Index into `markers` of the hovered variant. */
-  const [hoverVariant, setHoverVariant] = useState<number | null>(null);
+  /** The hovered gene: its index into data.genes, and the row it was hovered on. */
+  const [hover, setHover] = useState<{ gi: number; row: number } | null>(null);
+  /** The hovered variant: its index into `markers`, and the row it is drawn on. */
+  const [hoverVariant, setHoverVariant] = useState<{ mi: number; row: number } | null>(
+    null,
+  );
 
   // Variant events of the whole run, fetched lazily on first deep zoom.
   const [alignment, setAlignment] = useState<AlignmentData | null>(null);
@@ -217,11 +227,17 @@ export function GenomeView({
   // Fetch the run's variant events the first time the user zooms deep
   // enough to see them (computing them can take a moment on old runs).
   const span = range ? range.end - range.start : Infinity;
+  /**
+   * Bases per row. Every threshold below is about how dense the map looks, and
+   * a row is what the window is actually drawn on, so they all key off this
+   * rather than off the whole window.
+   */
+  const rowSpan = span / rows;
   // Deliberately a boolean, not the span itself: keying this effect on the
   // range re-ran it on every zoom and pan, and each re-run's cleanup cancelled
   // the in-flight request's state updates while the ref guard stopped it
   // starting a new one, so one gesture mid-fetch hung the spinner for good.
-  const wantVariants = Boolean(data) && span < VARIANT_SPAN && variantsOn;
+  const wantVariants = Boolean(data) && rowSpan < VARIANT_SPAN && variantsOn;
   useEffect(() => {
     if (!wantVariants || alignmentFetched.current) return;
     alignmentFetched.current = true;
@@ -247,14 +263,14 @@ export function GenomeView({
     return ev;
   }, [alignment, colorBy, seqid]);
 
-  const showMarkers = variantsOn && Boolean(variantEvents) && span < VARIANT_SPAN;
+  const showMarkers = variantsOn && Boolean(variantEvents) && rowSpan < VARIANT_SPAN;
 
   // Reference bases, drawn inside the genes at deep zoom.
   const [showBases, setShowBases] = useState(false);
   useEffect(() => {
-    if (!showBases && span < BASES_SPAN - BASES_HYSTERESIS) setShowBases(true);
-    else if (showBases && span > BASES_SPAN + BASES_HYSTERESIS) setShowBases(false);
-  }, [span, showBases]);
+    if (!showBases && rowSpan < BASES_SPAN - BASES_HYSTERESIS) setShowBases(true);
+    else if (showBases && rowSpan > BASES_SPAN + BASES_HYSTERESIS) setShowBases(false);
+  }, [rowSpan, showBases]);
 
   /** Fetched base windows per contig; panning reuses whatever already covers. */
   const refWindowsRef = useRef(new Map<string, RefseqWindow[]>());
@@ -297,6 +313,28 @@ export function GenomeView({
     return () => ro.disconnect();
   }, [mapEl]);
 
+  // Wrap onto as many rows as the page has room for. The map's top edge is
+  // placed by the toolbar above it and does not depend on the map's own height,
+  // so growing the map cannot feed back into the count.
+  useEffect(() => {
+    if (!mapEl) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const measure = () =>
+      setRows((cur) =>
+        rowsForHeight(mapEl.getBoundingClientRect().top, window.innerHeight, cur),
+      );
+    measure();
+    const onResize = () => {
+      clearTimeout(timer);
+      timer = setTimeout(measure, 100);
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [mapEl]);
+
   // Adopt ranges that came from the buttons, the range input or a contig switch,
   // so the next gesture builds on what is actually on screen. Deliberately NOT
   // our own commits: a wide view can take over 100 ms to render, and any gesture
@@ -323,15 +361,15 @@ export function GenomeView({
     if (!base || !seqLength || !mapEl) return;
     const rect = mapEl.getBoundingClientRect();
     if (!rect.width) return;
+    // The gesture lands on one row, and a row covers a fraction of the window:
+    // both panning and the zoom anchor are in row coordinates.
+    const l = makeWrapLayout(base, rows, rect.width);
     if (g.kind === "pan") {
-      applyRange(
-        panRange(base, (g.dx / rect.width) * (base.end - base.start), seqLength),
-      );
+      applyRange(panRange(base, (g.dx / rect.width) * l.rowSpan, seqLength));
       return;
     }
-    const frac = (g.clientX - rect.left) / rect.width;
-    const anchorBp = base.start + frac * (base.end - base.start);
-    applyRange(zoomRange(base, g.factor, anchorBp, seqLength));
+    const anchorBp = l.bpAtPoint(g.clientX - rect.left, g.clientY - rect.top);
+    applyRange(zoomRange(base, g.factor, anchorBp, seqLength, MIN_SPAN * rows));
   });
 
   const setMapRef = useCallback(
@@ -351,30 +389,56 @@ export function GenomeView({
     );
 
   const width = measuredW || FALLBACK_WIDTH;
-  const rulerH = 28;
-  const mapH = 168;
-  const height = rulerH + mapH;
-  const baselineY = rulerH + mapH / 2;
-  const geneH = 46;
-  const bpToX = (bp: number) =>
-    ((bp - range.start) / Math.max(1, range.end - range.start)) * width;
+  const layout = makeWrapLayout(range, rows, width);
+  const { geneH, rulerH } = ROW_METRICS;
+  const height = layout.height;
+  const rowIndexes = Array.from({ length: layout.rows }, (_, i) => i);
+  /** The window never closes below MIN_SPAN bases *per row*. */
+  const minSpan = MIN_SPAN * rows;
 
   const zoom = (factor: number, anchorBp: number) => {
     const base: Range = pendingRangeRef.current ?? range;
-    applyRange(zoomRange(base, factor, anchorBp, seqLength));
+    applyRange(zoomRange(base, factor, anchorBp, seqLength, minSpan));
   };
 
-  const bpAt = (clientX: number) => {
+  /** The base under a point, wherever in the stack of rows it falls. */
+  const bpAt = (clientX: number, clientY: number) => {
     const rect = svgRef.current!.getBoundingClientRect();
-    const frac = (clientX - rect.left) / rect.width;
-    return range.start + frac * (range.end - range.start);
+    return layout.bpAtPoint(clientX - rect.left, clientY - rect.top);
   };
 
-  // ticks for the ruler
-  const tickStep = niceStep(span);
-  const firstTick = Math.ceil(range.start / tickStep) * tickStep;
-  const ticks: number[] = [];
-  for (let t = firstTick; t <= range.end; t += tickStep) ticks.push(t);
+  // Ticks for the per-row rulers. A row is a fraction of the window and is
+  // narrower in bases, so it wants fewer ticks than the whole map used to have.
+  const tickStep = niceStep(layout.rowSpan, 5);
+  /**
+   * Ticks inside one row, minus the ones whose centred label would collide with
+   * the row's own start label or run off the right edge. A row's last boundary
+   * is the next row's start, so nothing is lost by dropping it here.
+   */
+  const rowTicks = (row: number) => {
+    const to = layout.rowEnd(row);
+    const out: number[] = [];
+    for (
+      let t = Math.ceil(layout.rowStart(row) / tickStep) * tickStep;
+      t < to;
+      t += tickStep
+    ) {
+      const x = layout.xInRow(t, row);
+      if (x >= TICK_GUTTER && x <= width - 18) out.push(t);
+    }
+    return out;
+  };
+  /**
+   * A ruler coordinate, shortened only as far as the step allows: rounding to
+   * a tenth of a kb once the ticks are 20 bp apart printed the same "121.0k"
+   * five times across a row.
+   */
+  const tickLabel = (bp: number) => {
+    if (bp < 1000) return String(Math.round(bp));
+    if (tickStep >= 1000) return `${(bp / 1000).toFixed(0)}k`;
+    if (tickStep >= 100) return `${(bp / 1000).toFixed(1)}k`;
+    return Math.round(bp).toLocaleString("en-US");
+  };
 
   const inRange = (s: number, e: number) => e >= range.start && s <= range.end;
 
@@ -397,11 +461,12 @@ export function GenomeView({
     }
   }
 
-  /** Index into `markers` for the variant under an event target, if any. */
-  const markerAt = (target: EventTarget | null): number | null => {
+  /** The variant under an event target, with the row it was drawn on. */
+  const markerAt = (target: EventTarget | null): { mi: number; row: number } | null => {
     const el = (target as Element | null)?.closest?.("[data-mi]");
     const mi = el ? Number(el.getAttribute("data-mi")) : NaN;
-    return Number.isFinite(mi) ? mi : null;
+    const row = el ? Number(el.getAttribute("data-row")) : NaN;
+    return Number.isFinite(mi) && Number.isFinite(row) ? { mi, row } : null;
   };
 
   /** The reference base at a 1-based position, if a fetched window covers it. */
@@ -412,7 +477,7 @@ export function GenomeView({
     return null;
   };
 
-  // The visible bases, at most ~115 of them by the time this is on.
+  // The visible bases: by the time this is on, about 115 of them per row.
   const basePositions: number[] = [];
   if (showBases) {
     for (let p = baseFrom; p <= baseTo; p++) basePositions.push(p);
@@ -424,10 +489,15 @@ export function GenomeView({
    * One delegated listener for the whole gene layer instead of three closures per
    * gene: at whole-genome view that was ~8600 new functions on every zoom frame.
    */
-  const geneAt = (target: EventTarget | null): { g: WgaGene; gi: number } | null => {
+  const geneAt = (
+    target: EventTarget | null,
+  ): { g: WgaGene; gi: number; row: number } | null => {
     const el = (target as Element | null)?.closest?.("[data-gi]");
     const gi = el ? Number(el.getAttribute("data-gi")) : NaN;
-    return Number.isFinite(gi) && data.genes[gi] ? { g: data.genes[gi], gi } : null;
+    const row = el ? Number(el.getAttribute("data-row")) : NaN;
+    return Number.isFinite(gi) && Number.isFinite(row) && data.genes[gi]
+      ? { g: data.genes[gi], gi, row }
+      : null;
   };
 
   // Variant markers of the selected query inside the visible range.
@@ -451,29 +521,36 @@ export function GenomeView({
       ].sort((a, b) => a.pos - b.pos)
     : [];
 
-  const bpPerPx = span / Math.max(1, width);
-  const markerY1 = baselineY - geneH / 2 - 5;
-  const markerY2 = baselineY + geneH / 2 + 5;
+  const bpPerPx = layout.rowSpan / Math.max(1, width);
+  const markerY1 = (row: number) => layout.baselineY(row) - geneH / 2 - 5;
+  const markerY2 = (row: number) => layout.baselineY(row) + geneH / 2 + 5;
 
   /**
    * Point variants bucketed into pixel columns, with the share of that column's
    * bases that differ. Only built when the map is too coarse to draw them
    * individually.
    */
-  const densityColumns: { px: number; kind: "snp" | "ins"; frac: number }[] = [];
+  const densityColumns: {
+    px: number;
+    row: number;
+    kind: "snp" | "ins";
+    frac: number;
+  }[] = [];
   if (showMarkers && bpPerPx > DENSITY_BP_PER_PX) {
     const counts = new Map<string, number>();
     for (const m of markers) {
       if (m.kind === "del") continue;
-      const px = Math.floor(bpToX(m.kind === "ins" ? m.pos + 1 : m.pos));
+      const bp = m.kind === "ins" ? m.pos + 1 : m.pos;
+      const px = Math.floor(layout.xOfBp(bp));
       if (px < 0 || px > width) continue;
-      const key = `${m.kind}:${px}`;
+      const key = `${m.kind}:${layout.rowOfBp(bp)}:${px}`;
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
     for (const [key, n] of counts) {
-      const [kind, px] = key.split(":");
+      const [kind, row, px] = key.split(":");
       densityColumns.push({
         px: Number(px),
+        row: Number(row),
         kind: kind as "snp" | "ins",
         frac: n / bpPerPx,
       });
@@ -481,10 +558,9 @@ export function GenomeView({
   }
 
   /** Click in the gene area: open the nearest variant marker's popup. */
-  function openVariantPopup(clientX: number) {
+  function openVariantPopup(clientX: number, clientY: number) {
     if (markers.length === 0) return;
-    const bp = bpAt(clientX);
-    const bpPerPx = (range!.end - range!.start) / width;
+    const bp = bpAt(clientX, clientY);
     const tol = Math.max(4 * bpPerPx, 1);
     let best: (typeof markers)[number] | null = null;
     let bestDist = Infinity;
@@ -499,7 +575,7 @@ export function GenomeView({
     const rect = svgRef.current!.getBoundingClientRect();
     setPopup({
       x: clientX - rect.left,
-      y: baselineY + geneH / 2,
+      y: layout.baselineY(layout.rowAtY(clientY - rect.top)) + geneH / 2,
       variant: { ...best, queryName: selectedQuery?.query_name ?? "" },
     });
   }
@@ -547,7 +623,7 @@ export function GenomeView({
         {selectedQuery && (
           <label
             className="flex items-center gap-2 h-11 px-3 rounded-lg border border-zinc-300 bg-white text-sm text-zinc-600 cursor-pointer select-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
-            title={`Draw SNP and indel markers of ${selectedQuery.query_name} once the window is below ${(VARIANT_SPAN / 1000).toFixed(0)} kb. Turning this off also skips downloading them.`}
+            title={`Draw SNP and indel markers of ${selectedQuery.query_name} once a row covers less than ${(VARIANT_SPAN / 1000).toFixed(0)} kb. Turning this off also skips downloading them.`}
           >
             <input
               type="checkbox"
@@ -591,7 +667,7 @@ export function GenomeView({
           {Math.round(range.end).toLocaleString("en-US")} bp ({(
             (range.end - range.start) /
             1000
-          ).toFixed(1)} kb shown)
+          ).toFixed(1)} kb shown{rows > 1 ? ` on ${rows} rows` : ""})
         </span>
         {alignmentPending && (
           <span className="inline-flex items-center gap-2 text-sm text-zinc-400 dark:text-zinc-500">
@@ -634,7 +710,10 @@ export function GenomeView({
               }
               const rect = svgRef.current.getBoundingClientRect();
               const span = range.end - range.start;
-              const shiftBp = ((dragRef.current.x - e.clientX) / rect.width) * span;
+              // A row is the unit of travel: dragging across one row's width
+              // moves the window by what a row covers.
+              const shiftBp =
+                ((dragRef.current.x - e.clientX) / rect.width) * layout.rowSpan;
               applyRange(
                 clampRange(dragRef.current.start + shiftBp, span, seqLength),
               );
@@ -651,54 +730,67 @@ export function GenomeView({
               wasDragRef.current = false;
               return;
             }
-            openVariantPopup(e.clientX);
+            openVariantPopup(e.clientX, e.clientY);
           }}
         >
-          {/* ruler */}
-          <g>
-            <line
-              x1={0}
-              x2={width}
-              y1={rulerH - 8}
-              y2={rulerH - 8}
-              style={{ stroke: "var(--gv-ruler-line)" }}
-            />
-            {ticks.map((t) => (
-              <g key={t}>
-                <line
-                  x1={bpToX(t)}
-                  x2={bpToX(t)}
-                  y1={rulerH - 14}
-                  y2={rulerH - 8}
-                  style={{ stroke: "var(--gv-tick)" }}
-                />
-                <text
-                  x={bpToX(t)}
-                  y={rulerH - 17}
-                  fontSize="10"
-                  style={{ fill: "var(--gv-tick-label)" }}
-                  textAnchor="middle"
-                  className="font-mono"
-                >
-                  {t >= 1000 ? `${(t / 1000).toFixed(tickStep >= 1000 ? 0 : 1)}k` : t}
-                </text>
-              </g>
-            ))}
-          </g>
-
-          {/* the string: a thin baseline under all the gene beads */}
-          <line
-            x1={0}
-            x2={width}
-            y1={baselineY}
-            y2={baselineY}
-            style={{ stroke: "var(--gv-ruler-line)" }}
-          />
+          {/* one ruler and one string per row, each with its own coordinates */}
+          {rowIndexes.map((r) => (
+            <g key={`row${r}`}>
+              <line
+                x1={0}
+                x2={width}
+                y1={layout.rowY(r) + rulerH - 2}
+                y2={layout.rowY(r) + rulerH - 2}
+                style={{ stroke: "var(--gv-ruler-line)" }}
+              />
+              {/* where this row picks the sequence up, so the wrap is readable */}
+              <text
+                x={2}
+                y={layout.rowY(r) + rulerH - 11}
+                fontSize="10"
+                style={{ fill: "var(--gv-tick-label)" }}
+                textAnchor="start"
+                className="font-mono"
+              >
+                {tickLabel(layout.rowStart(r))}
+              </text>
+              {rowTicks(r).map((t) => (
+                <g key={t}>
+                  <line
+                    x1={layout.xInRow(t, r)}
+                    x2={layout.xInRow(t, r)}
+                    y1={layout.rowY(r) + rulerH - 8}
+                    y2={layout.rowY(r) + rulerH - 2}
+                    style={{ stroke: "var(--gv-tick)" }}
+                  />
+                  <text
+                    x={layout.xInRow(t, r)}
+                    y={layout.rowY(r) + rulerH - 11}
+                    fontSize="10"
+                    style={{ fill: "var(--gv-tick-label)" }}
+                    textAnchor="middle"
+                    className="font-mono"
+                  >
+                    {tickLabel(t)}
+                  </text>
+                </g>
+              ))}
+              {/* the string: a thin baseline under this row's gene beads */}
+              <line
+                x1={0}
+                x2={width}
+                y1={layout.baselineY(r)}
+                y2={layout.baselineY(r)}
+                style={{ stroke: "var(--gv-ruler-line)" }}
+              />
+            </g>
+          ))}
 
           {/* genes: one continuous line of beads on the string */}
           <g
             onMouseOver={(e) => {
-              setHover(geneAt(e.target)?.gi ?? null);
+              const hit = geneAt(e.target);
+              setHover(hit ? { gi: hit.gi, row: hit.row } : null);
               // Markers sit on top of this layer, so reaching it means the
               // cursor has left any variant it was over.
               setHoverVariant(null);
@@ -711,44 +803,60 @@ export function GenomeView({
               const rect = svgRef.current!.getBoundingClientRect();
               setPopup({
                 x: e.clientX - rect.left,
-                y: baselineY + geneH / 2,
+                y: layout.baselineY(hit.row) + geneH / 2,
                 gene: hit.g,
                 gi: hit.gi,
               });
             }}
           >
-            {visibleGenes.map(({ g, gi }) => {
-              const x = bpToX(Math.max(g.start, range.start));
-              const x2 = bpToX(Math.min(g.end, range.end));
-              const w = Math.max(2, x2 - x);
-              const y = baselineY - geneH / 2;
+            {/* A gene that crosses a row boundary is drawn once per row, with a
+                flat edge where it was cut and its arrow tip only on its real end. */}
+            {visibleGenes.flatMap(({ g, gi }) => {
               const fill = selectedQuery
                 ? callColor(selectedQuery.calls?.[gi])
                 : geneColor(g);
               const label = g.symbol || g.locus_tag;
-              return (
-                <g key={g.locus_tag} className="cursor-pointer" data-gi={gi}>
-                  <GeneShape x={x} w={w} y={y} h={geneH} strand={g.strand} fill={fill} />
-                  {w >= LABEL_MIN_W && (
-                    <text
-                      x={x + w / 2}
-                      /* the bases take the middle line, so the name moves up */
-                      y={showBases ? baselineY - geneH / 2 + 12 : baselineY + 3.5}
-                      fontSize="10"
-                      textAnchor="middle"
-                      className="font-mono pointer-events-none select-none"
-                      style={{
-                        fill: "var(--gv-gene-label)",
-                        stroke: "var(--gv-map-bg)",
-                        strokeWidth: 2.5,
-                        paintOrder: "stroke",
-                      }}
-                    >
-                      {truncateLabel(label, w - 10)}
-                    </text>
-                  )}
-                </g>
-              );
+              return rowPieces(layout, g.start, g.end).map((piece) => {
+                const w = Math.max(2, piece.w);
+                const y = layout.baselineY(piece.row) - geneH / 2;
+                return (
+                  <g
+                    key={`${g.locus_tag}-${piece.row}`}
+                    className="cursor-pointer"
+                    data-gi={gi}
+                    data-row={piece.row}
+                  >
+                    <GeneShape
+                      x={piece.x}
+                      w={w}
+                      y={y}
+                      h={geneH}
+                      strand={g.strand}
+                      fill={fill}
+                      capStart={piece.from > g.start}
+                      capEnd={piece.to < g.end}
+                    />
+                    {w >= LABEL_MIN_W && (
+                      <text
+                        x={piece.x + w / 2}
+                        /* the bases take the middle line, so the name moves up */
+                        y={showBases ? y + 9 : layout.baselineY(piece.row) + 3.5}
+                        fontSize="10"
+                        textAnchor="middle"
+                        className="font-mono pointer-events-none select-none"
+                        style={{
+                          fill: "var(--gv-gene-label)",
+                          stroke: "var(--gv-map-bg)",
+                          strokeWidth: 2.5,
+                          paintOrder: "stroke",
+                        }}
+                      >
+                        {truncateLabel(label, w - 10)}
+                      </text>
+                    )}
+                  </g>
+                );
+              });
             })}
           </g>
 
@@ -767,29 +875,31 @@ export function GenomeView({
           {showMarkers &&
             (bpPerPx > DENSITY_BP_PER_PX ? (
               <g className="pointer-events-none">
-                {densityColumns.map(({ px, kind, frac }) => (
+                {densityColumns.map(({ px, row, kind, frac }) => (
                   <rect
-                    key={`${kind}${px}`}
+                    key={`${kind}${row}:${px}`}
                     x={px}
-                    y={markerY1}
+                    y={markerY1(row)}
                     width={1}
-                    height={markerY2 - markerY1}
+                    height={markerY2(row) - markerY1(row)}
                     fill={kind === "snp" ? SNP_COLOR : INS_COLOR}
                     fillOpacity={Math.min(1, Math.max(MIN_DENSITY_INK, frac))}
                   />
                 ))}
-                {markers.map((m, i) =>
-                  m.kind === "del" ? (
-                    <rect
-                      key={i}
-                      x={bpToX(m.pos)}
-                      y={markerY1}
-                      width={Math.max(1, bpToX(m.pos + m.len) - bpToX(m.pos))}
-                      height={markerY2 - markerY1}
-                      fill={DEL_COLOR}
-                      fillOpacity={0.5}
-                    />
-                  ) : null,
+                {markers.flatMap((m, i) =>
+                  m.kind === "del"
+                    ? rowPieces(layout, m.pos, m.pos + m.len).map((piece) => (
+                        <rect
+                          key={`${i}-${piece.row}`}
+                          x={piece.x}
+                          y={markerY1(piece.row)}
+                          width={Math.max(1, piece.w)}
+                          height={markerY2(piece.row) - markerY1(piece.row)}
+                          fill={DEL_COLOR}
+                          fillOpacity={0.5}
+                        />
+                      ))
+                    : [],
                 )}
               </g>
             ) : (
@@ -797,39 +907,41 @@ export function GenomeView({
                 onMouseOver={(e) => setHoverVariant(markerAt(e.target))}
                 onMouseOut={() => setHoverVariant(null)}
               >
-                {markers.map((m, i) => {
+                {markers.flatMap((m, i) => {
                   const color =
                     m.kind === "snp" ? SNP_COLOR : m.kind === "del" ? DEL_COLOR : INS_COLOR;
                   if (m.kind === "ins") {
-                    const x = bpToX(m.pos + 1);
-                    return (
+                    const row = layout.rowOfBp(m.pos + 1);
+                    const x = layout.xInRow(m.pos + 1, row);
+                    return [
                       <line
                         key={i}
                         data-mi={i}
+                        data-row={row}
                         x1={x}
                         x2={x}
-                        y1={markerY1}
-                        y2={markerY2}
+                        y1={markerY1(row)}
+                        y2={markerY2(row)}
                         stroke={color}
                         strokeWidth={2}
                         strokeLinecap="round"
-                      />
-                    );
+                      />,
+                    ];
                   }
-                  const x = bpToX(m.pos);
                   const to = m.kind === "del" ? m.pos + m.len : m.pos + 1;
-                  return (
+                  return rowPieces(layout, m.pos, to).map((piece) => (
                     <rect
-                      key={i}
+                      key={`${i}-${piece.row}`}
                       data-mi={i}
-                      x={x}
-                      y={markerY1}
-                      width={Math.max(1, bpToX(to) - x)}
-                      height={markerY2 - markerY1}
+                      data-row={piece.row}
+                      x={piece.x}
+                      y={markerY1(piece.row)}
+                      width={Math.max(1, piece.w)}
+                      height={markerY2(piece.row) - markerY1(piece.row)}
                       fill={color}
                       fillOpacity={m.kind === "del" ? 0.5 : showBases ? 0.35 : 1}
                     />
-                  );
+                  ));
                 })}
               </g>
             ))}
@@ -840,14 +952,14 @@ export function GenomeView({
               {basePositions.map((pos) => {
                 const ch = baseAt(pos);
                 if (!ch) return null;
-                const cx = bpToX(pos + 0.5);
+                const row = layout.rowOfBp(pos + 0.5);
                 return (
                   <text
                     key={pos}
-                    x={cx}
-                    y={baselineY + 4}
+                    x={layout.xInRow(pos + 0.5, row)}
+                    y={layout.baselineY(row) + 5}
                     textAnchor="middle"
-                    fontSize={Math.min(14, Math.max(8, (width / span) * 0.8))}
+                    fontSize={Math.min(14, Math.max(8, (width / layout.rowSpan) * 0.8))}
                     className="font-mono select-none"
                     style={{
                       fill: "var(--gv-gene-label)",
@@ -864,36 +976,42 @@ export function GenomeView({
           )}
         </svg>
 
-        {hoverVariant !== null && markers[hoverVariant] && (
+        {hoverVariant !== null && markers[hoverVariant.mi] && (
           <VariantTooltip
-            variant={markers[hoverVariant]}
-            x={bpToX(
-              markers[hoverVariant].kind === "ins"
-                ? markers[hoverVariant].pos + 1
-                : markers[hoverVariant].pos + 0.5,
+            variant={markers[hoverVariant.mi]}
+            x={layout.xInRow(
+              markers[hoverVariant.mi].kind === "ins"
+                ? markers[hoverVariant.mi].pos + 1
+                : markers[hoverVariant.mi].pos + 0.5,
+              hoverVariant.row,
             )}
-            y={baselineY + geneH / 2 + 6}
+            y={layout.baselineY(hoverVariant.row) + geneH / 2 + 6}
             queryName={selectedQuery?.query_name ?? ""}
             svgWidth={width}
           />
         )}
 
-        {hover !== null && hoverVariant === null && data.genes[hover] && data.genes[hover].seqid === seqid && (
-          <GeneTooltip
-            gene={data.genes[hover]}
-            x={bpToX(
-              (Math.max(data.genes[hover].start, range.start) +
-                Math.min(data.genes[hover].end, range.end)) /
-                2,
-            )}
-            y={baselineY + geneH / 2}
-            queryName={selectedQuery?.query_name ?? null}
-            call={selectedQuery?.calls?.[hover]}
-            covPct={selectedQuery?.cov_pcts?.[hover]}
-            identity={selectedQuery?.identities?.[hover]}
-            svgWidth={width}
-          />
-        )}
+        {hover !== null &&
+          hoverVariant === null &&
+          data.genes[hover.gi] &&
+          data.genes[hover.gi].seqid === seqid && (
+            <GeneTooltip
+              gene={data.genes[hover.gi]}
+              /* over the piece the cursor is on, not the whole gene's middle */
+              x={layout.xInRow(
+                (Math.max(data.genes[hover.gi].start, layout.rowStart(hover.row)) +
+                  Math.min(data.genes[hover.gi].end, layout.rowEnd(hover.row))) /
+                  2,
+                hover.row,
+              )}
+              y={layout.baselineY(hover.row) + geneH / 2}
+              queryName={selectedQuery?.query_name ?? null}
+              call={selectedQuery?.calls?.[hover.gi]}
+              covPct={selectedQuery?.cov_pcts?.[hover.gi]}
+              identity={selectedQuery?.identities?.[hover.gi]}
+              svgWidth={width}
+            />
+          )}
       </div>
 
       {/* legend */}
@@ -946,7 +1064,8 @@ export function GenomeView({
               </>
             ) : (
               <span className="text-zinc-400 dark:text-zinc-500">
-                zoom in below {(VARIANT_SPAN / 1000).toFixed(0)} kb to see SNP/indel markers
+                zoom in below {(VARIANT_SPAN / 1000).toFixed(0)} kb per row to see
+                SNP/indel markers
               </span>
             )}
           </>
@@ -979,6 +1098,7 @@ export function GenomeView({
       {popup && (
         <GenePopup
           popup={popup}
+          maxLeft={Math.max(4, width - 296)}
           onClose={() => setPopup(null)}
           onOpenGene={(locus) => {
             setPopup(null);
@@ -1116,7 +1236,11 @@ type VariantInfo =
 
 type VariantPopupInfo = VariantInfo & { queryName: string };
 
-/** A gene bead: a rectangle with a strand arrow tip. */
+/**
+ * A gene bead: a rectangle with a strand arrow tip. `capStart`/`capEnd` mark an
+ * edge that a row boundary cut rather than the gene's own end; the arrow is
+ * drawn only when the 3' end it points at is really there.
+ */
 function GeneShape({
   x,
   w,
@@ -1124,6 +1248,8 @@ function GeneShape({
   h,
   strand,
   fill,
+  capStart = false,
+  capEnd = false,
 }: {
   x: number;
   w: number;
@@ -1131,9 +1257,12 @@ function GeneShape({
   h: number;
   strand: number;
   fill: string;
+  capStart?: boolean;
+  capEnd?: boolean;
 }) {
   const tip = Math.min(9, Math.max(3, h / 4));
-  if (w < 2 * tip) {
+  const tipped = strand >= 0 ? !capEnd : !capStart;
+  if (!tipped || w < 2 * tip) {
     return (
       <rect x={x} y={y} width={w} height={h} rx={1.5} style={{ fill }} />
     );
@@ -1159,11 +1288,14 @@ function GenePopup({
   onClose,
   onOpenGene,
   callInfo,
+  maxLeft,
 }: {
   popup: { x: number; y: number; gene?: WgaGene; variant?: VariantPopupInfo };
   onClose: () => void;
   onOpenGene: (locus: string) => void;
   callInfo?: { name: string; call: Call; covPct: number; identity: number } | null;
+  /** Rightmost left edge that still keeps the card inside the map. */
+  maxLeft: number;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1177,7 +1309,7 @@ function GenePopup({
     <div
       ref={ref}
       className="absolute z-30 bg-white border border-zinc-200 rounded-lg shadow-lg p-3 w-72 dark:bg-zinc-900 dark:border-zinc-800"
-      style={{ left: Math.min(popup.x, 800), top: popup.y + 16 }}
+      style={{ left: Math.max(4, Math.min(popup.x, maxLeft)), top: popup.y + 16 }}
     >
       {popup.gene && (
         <>
@@ -1490,8 +1622,8 @@ function RangeInput({
   );
 }
 
-function niceStep(span: number): number {
-  const target = span / 8;
+function niceStep(span: number, ticks = 8): number {
+  const target = span / ticks;
   const pow = Math.pow(10, Math.floor(Math.log10(Math.max(1, target))));
   const candidates = [1, 2, 5, 10].map((m) => m * pow);
   return candidates.find((c) => c >= target) ?? 10 * pow;
