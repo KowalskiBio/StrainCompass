@@ -98,6 +98,8 @@ export function GenomeView({
   const [colorByInit, setColorByInit] = useState(initialQuery !== undefined);
   /** Index into data.genes of the hovered gene. */
   const [hover, setHover] = useState<number | null>(null);
+  /** Index into `markers` of the hovered variant. */
+  const [hoverVariant, setHoverVariant] = useState<number | null>(null);
 
   // Variant events of the whole run, fetched lazily on first deep zoom.
   const [alignment, setAlignment] = useState<AlignmentData | null>(null);
@@ -387,6 +389,13 @@ export function GenomeView({
     }
   }
 
+  /** Index into `markers` for the variant under an event target, if any. */
+  const markerAt = (target: EventTarget | null): number | null => {
+    const el = (target as Element | null)?.closest?.("[data-mi]");
+    const mi = el ? Number(el.getAttribute("data-mi")) : NaN;
+    return Number.isFinite(mi) ? mi : null;
+  };
+
   /** The reference base at a 1-based position, if a fetched window covers it. */
   const baseAt = (pos: number): string | null => {
     for (const w of refWindowsRef.current.get(seqid) ?? []) {
@@ -562,10 +571,13 @@ export function GenomeView({
 
       <div
         ref={setMapRef}
-        className="relative border border-zinc-200 rounded-xl bg-white overflow-hidden touch-none overscroll-contain dark:border-zinc-800 dark:bg-zinc-900"
+        /* overflow-x-clip, not overflow-hidden: the map already fits its box, and
+           hiding both axes would cut off the hover tooltips below the line. */
+        className="relative border border-zinc-200 rounded-xl bg-white overflow-x-clip touch-none overscroll-contain dark:border-zinc-800 dark:bg-zinc-900"
         onMouseLeave={() => {
           setPopup(null);
           setHover(null);
+          setHoverVariant(null);
         }}
       >
         <svg
@@ -648,7 +660,12 @@ export function GenomeView({
 
           {/* genes: one continuous line of beads on the string */}
           <g
-            onMouseOver={(e) => setHover(geneAt(e.target)?.gi ?? null)}
+            onMouseOver={(e) => {
+              setHover(geneAt(e.target)?.gi ?? null);
+              // Markers sit on top of this layer, so reaching it means the
+              // cursor has left any variant it was over.
+              setHoverVariant(null);
+            }}
             onMouseOut={() => setHover(null)}
             onClick={(e) => {
               const hit = geneAt(e.target);
@@ -698,6 +715,57 @@ export function GenomeView({
             })}
           </g>
 
+          {/*
+            Variant markers. Reference base p occupies [p, p+1), the same span its
+            letter is centred in, so a SNP covers exactly its own base, a deletion
+            covers the bases it removes, and an insertion sits on the boundary
+            after its position rather than over a base.
+          */}
+          {showMarkers && (
+            <g
+              onMouseOver={(e) => setHoverVariant(markerAt(e.target))}
+              onMouseOut={() => setHoverVariant(null)}
+            >
+              {markers.map((m, i) => {
+                const y1 = baselineY - geneH / 2 - 5;
+                const y2 = baselineY + geneH / 2 + 5;
+                const color =
+                  m.kind === "snp" ? SNP_COLOR : m.kind === "del" ? DEL_COLOR : INS_COLOR;
+                if (m.kind === "ins") {
+                  const x = bpToX(m.pos + 1);
+                  return (
+                    <line
+                      key={i}
+                      data-mi={i}
+                      x1={x}
+                      x2={x}
+                      y1={y1}
+                      y2={y2}
+                      stroke={color}
+                      strokeWidth={2}
+                      strokeLinecap="round"
+                    />
+                  );
+                }
+                const x = bpToX(m.pos);
+                const to = m.kind === "del" ? m.pos + m.len : m.pos + 1;
+                const w = Math.max(2, bpToX(to) - x);
+                return (
+                  <rect
+                    key={i}
+                    data-mi={i}
+                    x={x}
+                    y={y1}
+                    width={w}
+                    height={y2 - y1}
+                    fill={color}
+                    fillOpacity={m.kind === "del" ? 0.5 : showBases ? 0.35 : 1}
+                  />
+                );
+              })}
+            </g>
+          )}
+
           {/* reference sequence, once a base is wide enough to read */}
           {showBases && (
             <g className="pointer-events-none">
@@ -726,31 +794,23 @@ export function GenomeView({
               })}
             </g>
           )}
-
-          {/* variant markers of the selected query */}
-          {showMarkers &&
-            markers.map((m, i) => {
-              const x = bpToX(m.kind === "ins" ? m.pos + 0.5 : m.pos);
-              const y1 = baselineY - geneH / 2 - 5;
-              const y2 = baselineY + geneH / 2 + 5;
-              const color =
-                m.kind === "snp" ? SNP_COLOR : m.kind === "del" ? DEL_COLOR : INS_COLOR;
-              return (
-                <line
-                  key={i}
-                  x1={x}
-                  x2={x}
-                  y1={y1}
-                  y2={y2}
-                  stroke={color}
-                  strokeWidth={2}
-                  className="pointer-events-none"
-                />
-              );
-            })}
         </svg>
 
-        {hover !== null && data.genes[hover] && data.genes[hover].seqid === seqid && (
+        {hoverVariant !== null && markers[hoverVariant] && (
+          <VariantTooltip
+            variant={markers[hoverVariant]}
+            x={bpToX(
+              markers[hoverVariant].kind === "ins"
+                ? markers[hoverVariant].pos + 1
+                : markers[hoverVariant].pos + 0.5,
+            )}
+            y={baselineY + geneH / 2 + 6}
+            queryName={selectedQuery?.query_name ?? ""}
+            svgWidth={width}
+          />
+        )}
+
+        {hover !== null && hoverVariant === null && data.genes[hover] && data.genes[hover].seqid === seqid && (
           <GeneTooltip
             gene={data.genes[hover]}
             x={bpToX(
@@ -872,6 +932,81 @@ export function GenomeView({
   );
 }
 
+/** What a variant is, on hover: the substitution, or the length of the indel. */
+function VariantTooltip({
+  variant,
+  x,
+  y,
+  queryName,
+  svgWidth,
+}: {
+  variant: VariantInfo;
+  x: number;
+  y: number;
+  queryName: string;
+  svgWidth: number;
+}) {
+  const color =
+    variant.kind === "snp"
+      ? SNP_COLOR
+      : variant.kind === "del"
+        ? DEL_COLOR
+        : INS_COLOR;
+  const title =
+    variant.kind === "snp"
+      ? "Mismatch"
+      : variant.kind === "del"
+        ? "Deletion"
+        : "Insertion";
+  return (
+    <div
+      className="pointer-events-none absolute z-30 w-60 rounded-lg border border-zinc-200 bg-white p-2.5 text-xs shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
+      style={{ left: Math.max(4, Math.min(x - 120, svgWidth - 244)), top: y }}
+    >
+      <p className="font-semibold text-[13px]" style={{ color }}>
+        {title}
+      </p>
+      <p className="mt-1 font-mono text-[11px] text-zinc-500 dark:text-zinc-400">
+        {variant.kind === "ins"
+          ? `after reference ${variant.pos.toLocaleString("en-US")}`
+          : `reference ${variant.pos.toLocaleString("en-US")}`}
+        {variant.kind === "del" &&
+          ` – ${(variant.pos + variant.len - 1).toLocaleString("en-US")}`}
+      </p>
+      {variant.kind === "snp" && (
+        <p className="mt-1.5 font-mono text-[13px]">
+          {String.fromCharCode(variant.r)} <span className="text-zinc-400">&rarr;</span>{" "}
+          <span style={{ color }}>{String.fromCharCode(variant.q)}</span>
+          <span className="ml-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+            (reference &rarr; query)
+          </span>
+        </p>
+      )}
+      {variant.kind === "del" && (
+        <p className="mt-1.5 text-[12px]">
+          <span className="font-mono font-semibold" style={{ color }}>
+            {variant.len.toLocaleString("en-US")} bp
+          </span>{" "}
+          missing from the query
+        </p>
+      )}
+      {variant.kind === "ins" && (
+        <p className="mt-1.5 text-[12px] break-all">
+          <span className="font-mono font-semibold" style={{ color }}>
+            {variant.seq.length.toLocaleString("en-US")} bp
+          </span>{" "}
+          inserted:{" "}
+          <span className="font-mono">
+            {variant.seq.slice(0, 60)}
+            {variant.seq.length > 60 ? "…" : ""}
+          </span>
+        </p>
+      )}
+      <p className="mt-1.5 text-[11px] text-zinc-400 dark:text-zinc-500">{queryName}</p>
+    </div>
+  );
+}
+
 /** A legend entry that doubles as the on/off switch for that kind of variant. */
 function KindToggle({
   on,
@@ -905,10 +1040,13 @@ function KindToggle({
   );
 }
 
-type VariantPopupInfo =
-  | { kind: "snp"; pos: number; r: number; q: number; queryName: string }
-  | { kind: "del"; pos: number; len: number; queryName: string }
-  | { kind: "ins"; pos: number; seq: string; queryName: string };
+/** A variant as the map holds it, before it is attributed to a query. */
+type VariantInfo =
+  | { kind: "snp"; pos: number; r: number; q: number }
+  | { kind: "del"; pos: number; len: number }
+  | { kind: "ins"; pos: number; seq: string };
+
+type VariantPopupInfo = VariantInfo & { queryName: string };
 
 /** A gene bead: a rectangle with a strand arrow tip. */
 function GeneShape({
