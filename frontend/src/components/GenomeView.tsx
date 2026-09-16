@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { AlignmentData, Call, Run, WgaData, WgaGene } from "../types";
+import type {
+  AlignmentData,
+  Call,
+  RefseqWindow,
+  Run,
+  WgaData,
+  WgaGene,
+} from "../types";
 import { Spinner } from "./ui";
 import { useWheelGestures } from "./useWheelGestures";
 import { clampRange, panRange, zoomRange } from "./genomeRange";
@@ -12,6 +19,15 @@ const VARIANT_SPAN = 20000;
 const LABEL_MIN_W = 42;
 /** Width used until the container has been measured. */
 const FALLBACK_WIDTH = 1100;
+/**
+ * Draw the reference bases inside the genes once the window is this small,
+ * with hysteresis so a zoom that hovers the boundary does not flicker.
+ * Same thresholds the alignment view uses for its letters mode.
+ */
+const BASES_SPAN = 100;
+const BASES_HYSTERESIS = 15;
+/** The refseq endpoint caps a request at this many bases. */
+const REFSEQ_MAX_WINDOW = 8192;
 /** Variant marker colors, shared with the Alignment view (Oligool palette). */
 const SNP_COLOR = "#dc2626";
 const INS_COLOR = "#3b82f6";
@@ -223,6 +239,44 @@ export function GenomeView({
 
   const showMarkers = variantsOn && Boolean(variantEvents) && span < VARIANT_SPAN;
 
+  // Reference bases, drawn inside the genes at deep zoom.
+  const [showBases, setShowBases] = useState(false);
+  useEffect(() => {
+    if (!showBases && span < BASES_SPAN - BASES_HYSTERESIS) setShowBases(true);
+    else if (showBases && span > BASES_SPAN + BASES_HYSTERESIS) setShowBases(false);
+  }, [span, showBases]);
+
+  /** Fetched base windows per contig; panning reuses whatever already covers. */
+  const refWindowsRef = useRef(new Map<string, RefseqWindow[]>());
+  const [refseqVersion, setRefseqVersion] = useState(0);
+
+  const baseFrom = range ? Math.max(1, Math.floor(range.start)) : 0;
+  const baseTo = range ? Math.min(seqLength, Math.ceil(range.end)) : 0;
+
+  useEffect(() => {
+    if (!showBases || !seqid || !seqLength || baseTo < baseFrom) return;
+    const covered = refWindowsRef.current
+      .get(seqid)
+      ?.some((w) => w.start <= baseFrom && w.end >= baseTo);
+    if (covered) return;
+    // Debounced: a fast zoom crosses many ranges before settling.
+    const t = setTimeout(() => {
+      // Snap to a 256 bp grid so panning keeps hitting the same window.
+      const ws = Math.max(1, Math.floor((baseFrom - 256) / 256) * 256 + 1);
+      const we = Math.min(seqLength, ws + REFSEQ_MAX_WINDOW - 1);
+      api
+        .refseq(run.id, seqid, ws, we)
+        .then((w) => {
+          const list = refWindowsRef.current.get(seqid) ?? [];
+          list.push(w);
+          refWindowsRef.current.set(seqid, list);
+          setRefseqVersion((v) => v + 1);
+        })
+        .catch(() => {});
+    }, 150);
+    return () => clearTimeout(t);
+  }, [showBases, seqid, seqLength, baseFrom, baseTo, run.id]);
+
   // Size the map to its container instead of a fixed width.
   useEffect(() => {
     if (!mapEl) return;
@@ -332,6 +386,22 @@ export function GenomeView({
       if (inRange(e.g.start, e.g.end)) visibleGenes.push(e);
     }
   }
+
+  /** The reference base at a 1-based position, if a fetched window covers it. */
+  const baseAt = (pos: number): string | null => {
+    for (const w of refWindowsRef.current.get(seqid) ?? []) {
+      if (pos >= w.start && pos <= w.end) return w.seq[pos - w.start] ?? null;
+    }
+    return null;
+  };
+
+  // The visible bases, at most ~115 of them by the time this is on.
+  const basePositions: number[] = [];
+  if (showBases) {
+    for (let p = baseFrom; p <= baseTo; p++) basePositions.push(p);
+  }
+  // Referenced so the letters re-render when a window arrives.
+  void refseqVersion;
 
   /**
    * One delegated listener for the whole gene layer instead of three closures per
@@ -608,7 +678,8 @@ export function GenomeView({
                   {w >= LABEL_MIN_W && (
                     <text
                       x={x + w / 2}
-                      y={baselineY + 3.5}
+                      /* the bases take the middle line, so the name moves up */
+                      y={showBases ? baselineY - geneH / 2 + 12 : baselineY + 3.5}
                       fontSize="10"
                       textAnchor="middle"
                       className="font-mono pointer-events-none select-none"
@@ -626,6 +697,35 @@ export function GenomeView({
               );
             })}
           </g>
+
+          {/* reference sequence, once a base is wide enough to read */}
+          {showBases && (
+            <g className="pointer-events-none">
+              {basePositions.map((pos) => {
+                const ch = baseAt(pos);
+                if (!ch) return null;
+                const cx = bpToX(pos + 0.5);
+                return (
+                  <text
+                    key={pos}
+                    x={cx}
+                    y={baselineY + 4}
+                    textAnchor="middle"
+                    fontSize={Math.min(14, Math.max(8, (width / span) * 0.8))}
+                    className="font-mono select-none"
+                    style={{
+                      fill: "var(--gv-gene-label)",
+                      stroke: "var(--gv-map-bg)",
+                      strokeWidth: 2.5,
+                      paintOrder: "stroke",
+                    }}
+                  >
+                    {ch}
+                  </text>
+                );
+              })}
+            </g>
+          )}
 
           {/* variant markers of the selected query */}
           {showMarkers &&
