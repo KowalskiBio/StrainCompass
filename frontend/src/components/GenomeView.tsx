@@ -28,6 +28,14 @@ const BASES_SPAN = 100;
 const BASES_HYSTERESIS = 15;
 /** The refseq endpoint caps a request at this many bases. */
 const REFSEQ_MAX_WINDOW = 8192;
+/**
+ * Above this many bases per pixel, point variants are shaded by density rather
+ * than drawn one mark each: below it every mark is at least a pixel wide on its
+ * own, so individual marks are still close to faithful and stay hoverable.
+ */
+const DENSITY_BP_PER_PX = 2;
+/** Floor opacity for a density column, so a lone mismatch is still visible. */
+const MIN_DENSITY_INK = 0.15;
 /** Variant marker colors, shared with the Alignment view (Oligool palette). */
 const SNP_COLOR = "#dc2626";
 const INS_COLOR = "#3b82f6";
@@ -443,6 +451,35 @@ export function GenomeView({
       ].sort((a, b) => a.pos - b.pos)
     : [];
 
+  const bpPerPx = span / Math.max(1, width);
+  const markerY1 = baselineY - geneH / 2 - 5;
+  const markerY2 = baselineY + geneH / 2 + 5;
+
+  /**
+   * Point variants bucketed into pixel columns, with the share of that column's
+   * bases that differ. Only built when the map is too coarse to draw them
+   * individually.
+   */
+  const densityColumns: { px: number; kind: "snp" | "ins"; frac: number }[] = [];
+  if (showMarkers && bpPerPx > DENSITY_BP_PER_PX) {
+    const counts = new Map<string, number>();
+    for (const m of markers) {
+      if (m.kind === "del") continue;
+      const px = Math.floor(bpToX(m.kind === "ins" ? m.pos + 1 : m.pos));
+      if (px < 0 || px > width) continue;
+      const key = `${m.kind}:${px}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    for (const [key, n] of counts) {
+      const [kind, px] = key.split(":");
+      densityColumns.push({
+        px: Number(px),
+        kind: kind as "snp" | "ins",
+        frac: n / bpPerPx,
+      });
+    }
+  }
+
   /** Click in the gene area: open the nearest variant marker's popup. */
   function openVariantPopup(clientX: number) {
     if (markers.length === 0) return;
@@ -717,54 +754,85 @@ export function GenomeView({
 
           {/*
             Variant markers. Reference base p occupies [p, p+1), the same span its
-            letter is centred in, so a SNP covers exactly its own base, a deletion
-            covers the bases it removes, and an insertion sits on the boundary
-            after its position rather than over a base.
+            letter is centred in, so a mismatch covers exactly its own base, a
+            deletion covers the bases it removes, and an insertion sits on the
+            boundary after its position rather than over a base.
+
+            Once a base is well under a pixel those marks cannot be drawn
+            faithfully: a minimum-width tick for every mismatch merges into solid
+            colour and made a 3% divergent region look like a third of the map.
+            Past DENSITY_BP_PER_PX the point events become one column per pixel,
+            shaded by the share of bases in that column that actually differ.
           */}
-          {showMarkers && (
-            <g
-              onMouseOver={(e) => setHoverVariant(markerAt(e.target))}
-              onMouseOut={() => setHoverVariant(null)}
-            >
-              {markers.map((m, i) => {
-                const y1 = baselineY - geneH / 2 - 5;
-                const y2 = baselineY + geneH / 2 + 5;
-                const color =
-                  m.kind === "snp" ? SNP_COLOR : m.kind === "del" ? DEL_COLOR : INS_COLOR;
-                if (m.kind === "ins") {
-                  const x = bpToX(m.pos + 1);
+          {showMarkers &&
+            (bpPerPx > DENSITY_BP_PER_PX ? (
+              <g className="pointer-events-none">
+                {densityColumns.map(({ px, kind, frac }) => (
+                  <rect
+                    key={`${kind}${px}`}
+                    x={px}
+                    y={markerY1}
+                    width={1}
+                    height={markerY2 - markerY1}
+                    fill={kind === "snp" ? SNP_COLOR : INS_COLOR}
+                    fillOpacity={Math.min(1, Math.max(MIN_DENSITY_INK, frac))}
+                  />
+                ))}
+                {markers.map((m, i) =>
+                  m.kind === "del" ? (
+                    <rect
+                      key={i}
+                      x={bpToX(m.pos)}
+                      y={markerY1}
+                      width={Math.max(1, bpToX(m.pos + m.len) - bpToX(m.pos))}
+                      height={markerY2 - markerY1}
+                      fill={DEL_COLOR}
+                      fillOpacity={0.5}
+                    />
+                  ) : null,
+                )}
+              </g>
+            ) : (
+              <g
+                onMouseOver={(e) => setHoverVariant(markerAt(e.target))}
+                onMouseOut={() => setHoverVariant(null)}
+              >
+                {markers.map((m, i) => {
+                  const color =
+                    m.kind === "snp" ? SNP_COLOR : m.kind === "del" ? DEL_COLOR : INS_COLOR;
+                  if (m.kind === "ins") {
+                    const x = bpToX(m.pos + 1);
+                    return (
+                      <line
+                        key={i}
+                        data-mi={i}
+                        x1={x}
+                        x2={x}
+                        y1={markerY1}
+                        y2={markerY2}
+                        stroke={color}
+                        strokeWidth={2}
+                        strokeLinecap="round"
+                      />
+                    );
+                  }
+                  const x = bpToX(m.pos);
+                  const to = m.kind === "del" ? m.pos + m.len : m.pos + 1;
                   return (
-                    <line
+                    <rect
                       key={i}
                       data-mi={i}
-                      x1={x}
-                      x2={x}
-                      y1={y1}
-                      y2={y2}
-                      stroke={color}
-                      strokeWidth={2}
-                      strokeLinecap="round"
+                      x={x}
+                      y={markerY1}
+                      width={Math.max(1, bpToX(to) - x)}
+                      height={markerY2 - markerY1}
+                      fill={color}
+                      fillOpacity={m.kind === "del" ? 0.5 : showBases ? 0.35 : 1}
                     />
                   );
-                }
-                const x = bpToX(m.pos);
-                const to = m.kind === "del" ? m.pos + m.len : m.pos + 1;
-                const w = Math.max(2, bpToX(to) - x);
-                return (
-                  <rect
-                    key={i}
-                    data-mi={i}
-                    x={x}
-                    y={y1}
-                    width={w}
-                    height={y2 - y1}
-                    fill={color}
-                    fillOpacity={m.kind === "del" ? 0.5 : showBases ? 0.35 : 1}
-                  />
-                );
-              })}
-            </g>
-          )}
+                })}
+              </g>
+            ))}
 
           {/* reference sequence, once a base is wide enough to read */}
           {showBases && (
