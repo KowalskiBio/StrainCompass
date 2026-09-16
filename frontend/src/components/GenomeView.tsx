@@ -83,12 +83,14 @@ export function GenomeView({
   // Variant events of the whole run, fetched lazily on first deep zoom.
   const [alignment, setAlignment] = useState<AlignmentData | null>(null);
   const [alignmentPending, setAlignmentPending] = useState(false);
+  const [variantError, setVariantError] = useState<string | null>(null);
   const alignmentFetched = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
     alignmentFetched.current = false;
     setAlignment(null);
+    setVariantError(null);
     api
       .wga(run.id)
       .then((d) => {
@@ -157,22 +159,26 @@ export function GenomeView({
   // Fetch the run's variant events the first time the user zooms deep
   // enough to see them (computing them can take a moment on old runs).
   const span = range ? range.end - range.start : Infinity;
+  // Deliberately a boolean, not the span itself: keying this effect on the
+  // range re-ran it on every zoom and pan, and each re-run's cleanup cancelled
+  // the in-flight request's state updates while the ref guard stopped it
+  // starting a new one, so one gesture mid-fetch hung the spinner for good.
+  const wantVariants = Boolean(data) && span < VARIANT_SPAN;
   useEffect(() => {
-    if (!data || !range || span >= VARIANT_SPAN) return;
-    if (alignmentFetched.current) return;
+    if (!wantVariants || alignmentFetched.current) return;
     alignmentFetched.current = true;
-    let cancelled = false;
+    setVariantError(null);
     setAlignmentPending(true);
     api
       .alignment(run.id)
-      .then((a) => !cancelled && setAlignment(a))
-      .catch(() => {})
-      .finally(() => !cancelled && setAlignmentPending(false));
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [span, data, range, run.id]);
+      .then(setAlignment)
+      .catch((e: Error) => {
+        // Let a later zoom try again rather than silently showing no markers.
+        alignmentFetched.current = false;
+        setVariantError(e.message);
+      })
+      .finally(() => setAlignmentPending(false));
+  }, [wantVariants, run.id]);
 
   /** Variant events of the selected query on the visible seqid. */
   const variantEvents = useMemo(() => {
@@ -388,7 +394,13 @@ export function GenomeView({
         </span>
         {alignmentPending && (
           <span className="inline-flex items-center gap-2 text-sm text-zinc-400 dark:text-zinc-500">
-            <Spinner /> computing variant markers...
+            <Spinner /> loading variant markers...
+          </span>
+        )}
+        {variantError && !alignmentPending && (
+          <span className="text-sm text-red-700 dark:text-red-400">
+            Variant markers failed to load ({variantError}). Zoom out and back in
+            to retry.
           </span>
         )}
       </div>
