@@ -88,6 +88,14 @@ export function GenomeView({
   const [alignmentPending, setAlignmentPending] = useState(false);
   const [variantError, setVariantError] = useState<string | null>(null);
   const alignmentFetched = useRef(false);
+  /** Master switch for the variant layer. Off also skips fetching it at all. */
+  const [variantsOn, setVariantsOn] = useState(true);
+  /** Which kinds of variant are drawn, toggled from the legend. */
+  const [variantKinds, setVariantKinds] = useState({
+    snp: true,
+    ins: true,
+    del: true,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -187,7 +195,7 @@ export function GenomeView({
   // range re-ran it on every zoom and pan, and each re-run's cleanup cancelled
   // the in-flight request's state updates while the ref guard stopped it
   // starting a new one, so one gesture mid-fetch hung the spinner for good.
-  const wantVariants = Boolean(data) && span < VARIANT_SPAN;
+  const wantVariants = Boolean(data) && span < VARIANT_SPAN && variantsOn;
   useEffect(() => {
     if (!wantVariants || alignmentFetched.current) return;
     alignmentFetched.current = true;
@@ -213,7 +221,7 @@ export function GenomeView({
     return ev;
   }, [alignment, colorBy, seqid]);
 
-  const showMarkers = Boolean(variantEvents) && span < VARIANT_SPAN;
+  const showMarkers = variantsOn && Boolean(variantEvents) && span < VARIANT_SPAN;
 
   // Size the map to its container instead of a fixed width.
   useEffect(() => {
@@ -338,15 +346,21 @@ export function GenomeView({
   // Variant markers of the selected query inside the visible range.
   const markers = showMarkers && variantEvents
     ? [
-        ...variantEvents.snps
-          .filter((s) => s.pos >= range.start && s.pos <= range.end)
-          .map((s) => ({ kind: "snp" as const, pos: s.pos, r: s.r, q: s.q })),
-        ...variantEvents.dels
-          .filter((d) => d.pos <= range.end && d.pos + d.len - 1 >= range.start)
-          .map((d) => ({ kind: "del" as const, pos: d.pos, len: d.len })),
-        ...variantEvents.ins
-          .filter((i) => i.pos >= range.start - 1 && i.pos <= range.end)
-          .map((i) => ({ kind: "ins" as const, pos: i.pos, seq: i.seq })),
+        ...(variantKinds.snp
+          ? variantEvents.snps
+              .filter((s) => s.pos >= range.start && s.pos <= range.end)
+              .map((s) => ({ kind: "snp" as const, pos: s.pos, r: s.r, q: s.q }))
+          : []),
+        ...(variantKinds.del
+          ? variantEvents.dels
+              .filter((d) => d.pos <= range.end && d.pos + d.len - 1 >= range.start)
+              .map((d) => ({ kind: "del" as const, pos: d.pos, len: d.len }))
+          : []),
+        ...(variantKinds.ins
+          ? variantEvents.ins
+              .filter((i) => i.pos >= range.start - 1 && i.pos <= range.end)
+              .map((i) => ({ kind: "ins" as const, pos: i.pos, seq: i.seq }))
+          : []),
       ].sort((a, b) => a.pos - b.pos)
     : [];
 
@@ -414,6 +428,20 @@ export function GenomeView({
             ))}
           </select>
         </label>
+        {selectedQuery && (
+          <label
+            className="flex items-center gap-2 h-11 px-3 rounded-lg border border-zinc-300 bg-white text-sm text-zinc-600 cursor-pointer select-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+            title={`Draw SNP and indel markers of ${selectedQuery.query_name} once the window is below ${(VARIANT_SPAN / 1000).toFixed(0)} kb. Turning this off also skips downloading them.`}
+          >
+            <input
+              type="checkbox"
+              checked={variantsOn}
+              onChange={(e) => setVariantsOn(e.target.checked)}
+              className="accent-zinc-900 dark:accent-zinc-100"
+            />
+            Variants
+          </label>
+        )}
         <RangeInput
           range={range}
           seqLength={seqLength}
@@ -662,20 +690,31 @@ export function GenomeView({
             <span className="text-zinc-400 dark:text-zinc-500">
               in {selectedQuery.query_name}
             </span>
-            {showMarkers ? (
+            {!variantsOn ? (
+              <span className="text-zinc-400 dark:text-zinc-500">
+                variant markers off
+              </span>
+            ) : showMarkers ? (
               <>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="w-1 h-3 rounded-sm" style={{ background: SNP_COLOR }} />
-                  SNP
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="w-1 h-3 rounded-sm" style={{ background: INS_COLOR }} />
-                  insertion
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded-sm" style={{ background: DEL_COLOR }} />
-                  deletion
-                </span>
+                <KindToggle
+                  on={variantKinds.snp}
+                  color={SNP_COLOR}
+                  label="SNP"
+                  onToggle={() => setVariantKinds((v) => ({ ...v, snp: !v.snp }))}
+                />
+                <KindToggle
+                  on={variantKinds.ins}
+                  color={INS_COLOR}
+                  label="insertion"
+                  onToggle={() => setVariantKinds((v) => ({ ...v, ins: !v.ins }))}
+                />
+                <KindToggle
+                  on={variantKinds.del}
+                  color={DEL_COLOR}
+                  label="deletion"
+                  wide
+                  onToggle={() => setVariantKinds((v) => ({ ...v, del: !v.del }))}
+                />
               </>
             ) : (
               <span className="text-zinc-400 dark:text-zinc-500">
@@ -730,6 +769,39 @@ export function GenomeView({
         />
       )}
     </div>
+  );
+}
+
+/** A legend entry that doubles as the on/off switch for that kind of variant. */
+function KindToggle({
+  on,
+  color,
+  label,
+  wide,
+  onToggle,
+}: {
+  on: boolean;
+  color: string;
+  label: string;
+  wide?: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={on}
+      title={`${on ? "Hide" : "Show"} ${label} markers`}
+      className={`inline-flex items-center gap-1.5 -mx-1 px-1 rounded cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 ${
+        on ? "" : "opacity-40"
+      }`}
+    >
+      <span
+        className={`${wide ? "w-3" : "w-1"} h-3 rounded-sm`}
+        style={{ background: on ? color : "transparent", outline: `1px solid ${color}` }}
+      />
+      <span className={on ? "" : "line-through"}>{label}</span>
+    </button>
   );
 }
 
