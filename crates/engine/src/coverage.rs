@@ -183,6 +183,7 @@ pub fn gene_coverage(
         rows.push(GeneCoverageRow {
             locus_tag: g.locus_tag.clone(),
             symbol: g.symbol.clone(),
+            protein_id: g.protein_id.clone(),
             biotype: g.biotype.clone(),
             seqid: g.seqid.clone(),
             start: g.start,

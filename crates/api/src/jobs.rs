@@ -456,8 +456,61 @@ pub fn load_query_result(
             "The results for this query are not available (the run may not have finished).".into(),
         )
     })?;
-    serde_json::from_slice(&bytes)
-        .map_err(|_| crate::error::ApiError::Internal("A result file is unreadable.".into()))
+    let mut res: ComparisonResultJson = serde_json::from_slice(&bytes)
+        .map_err(|_| crate::error::ApiError::Internal("A result file is unreadable.".into()))?;
+    backfill_protein_ids(state, project_id, &mut res.genes_coverage);
+    Ok(res)
+}
+
+/// Runs computed before protein accessions were persisted carry empty
+/// `protein_id`. Join them in from the project's reference annotation at read
+/// time, keyed by locus tag (then `old_locus_tag`, for re-annotated GFFs), so
+/// those runs show the Protein column too. New runs already persist it.
+fn backfill_protein_ids(
+    state: &SharedState,
+    project_id: i64,
+    rows: &mut [straincompass_types::GeneCoverageRow],
+) {
+    if rows.is_empty() || rows.iter().all(|r| !r.protein_id.is_empty()) {
+        return;
+    }
+    let staged = state.project_dir(project_id).join("reference").join("ref.gff");
+    let gff_path = match std::fs::exists(&staged) {
+        Ok(true) => staged,
+        _ => match crate::routes::uploads::reference_paths(state, project_id) {
+            Ok(Some((_, gff))) => gff,
+            _ => {
+                tracing::warn!("no reference GFF to backfill protein accessions");
+                return;
+            }
+        },
+    };
+    let genes = match straincompass_engine::gff::parse_gff(&gff_path) {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::warn!("cannot parse reference GFF for protein backfill: {e}");
+            return;
+        }
+    };
+    let by_tag: std::collections::HashMap<&str, &str> = genes
+        .iter()
+        .filter(|g| !g.protein_id.is_empty())
+        .map(|g| (g.locus_tag.as_str(), g.protein_id.as_str()))
+        .collect();
+    let by_old_tag: std::collections::HashMap<&str, &str> = genes
+        .iter()
+        .filter(|g| !g.protein_id.is_empty() && !g.old_locus_tag.is_empty())
+        .map(|g| (g.old_locus_tag.as_str(), g.protein_id.as_str()))
+        .collect();
+    for r in rows.iter_mut() {
+        if r.protein_id.is_empty() {
+            r.protein_id = by_tag
+                .get(r.locus_tag.as_str())
+                .or_else(|| by_old_tag.get(r.locus_tag.as_str()))
+                .map(|p| (*p).to_string())
+                .unwrap_or_default();
+        }
+    }
 }
 
 pub fn load_reference_json(

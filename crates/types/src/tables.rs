@@ -26,6 +26,10 @@ impl Call {
 pub struct GeneCoverageRow {
     pub locus_tag: String,
     pub symbol: String,
+    /// RefSeq protein accession, e.g. "WP_003759425.1"; empty when the gene
+    /// has no coding child in the annotation.
+    #[serde(default)]
+    pub protein_id: String,
     pub biotype: String,
     pub seqid: String,
     pub start: u64,
@@ -233,6 +237,8 @@ pub struct PrematureStop {
 pub struct GeneDetail {
     pub locus_tag: String,
     pub symbol: String,
+    #[serde(default)]
+    pub protein_id: String,
     pub biotype: String,
     pub seqid: String,
     pub start: u64,

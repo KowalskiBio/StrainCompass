@@ -286,6 +286,7 @@ fn sort_coverage(rows: &mut [GeneCoverageRow], q: &TableQuery) {
 const COVERAGE_ALL_COLS: &[(&str, &str)] = &[
     ("locus_tag", "Locus tag"),
     ("symbol", "Symbol"),
+    ("protein_id", "Protein accession"),
     ("biotype", "Biotype"),
     ("seqid", "Sequence"),
     ("start", "Start"),
@@ -333,6 +334,7 @@ fn coverage_line(r: &GeneCoverageRow, cols: &[String], sep: &str) -> String {
         .map(|c| match c.as_str() {
             "locus_tag" => r.locus_tag.clone(),
             "symbol" => r.symbol.clone(),
+            "protein_id" => r.protein_id.clone(),
             "biotype" => r.biotype.clone(),
             "seqid" => r.seqid.clone(),
             "start" => r.start.to_string(),

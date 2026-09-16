@@ -213,13 +213,14 @@ pub fn run_comparison(
 /// Write a genes coverage table as TSV.
 pub fn write_genes_coverage_tsv(rows: &[GeneCoverageRow], out: &Path) -> std::io::Result<()> {
     let mut w = std::io::BufWriter::new(std::fs::File::create(out)?);
-    writeln!(w, "locus_tag\tsymbol\tbiotype\tseqid\tstart\tend\tlength\tcov_bp\tcov_pct\tcall\tbest_identity\tmismatches\tindels")?;
+    writeln!(w, "locus_tag\tsymbol\tprotein_id\tbiotype\tseqid\tstart\tend\tlength\tcov_bp\tcov_pct\tcall\tbest_identity\tmismatches\tindels")?;
     for r in rows {
         writeln!(
             w,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{:.2}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{:.2}\t{}\t{}",
             r.locus_tag,
             r.symbol,
+            r.protein_id,
             r.biotype,
             r.seqid,
             r.start,
@@ -438,6 +439,7 @@ pub fn gene_detail(
     Ok(straincompass_types::GeneDetail {
         locus_tag: gene.locus_tag.clone(),
         symbol: gene.symbol.clone(),
+        protein_id: gene.protein_id.clone(),
         biotype: gene.biotype.clone(),
         seqid: gene.seqid.clone(),
         start: gene.start,

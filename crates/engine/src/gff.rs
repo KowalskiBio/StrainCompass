@@ -17,6 +17,9 @@ pub struct Gene {
     pub old_locus_tag: String,
     pub symbol: String,
     pub biotype: String,
+    /// RefSeq/GenBank protein accession (`protein_id=WP_...`) from the CDS
+    /// child, joined in by locus tag. Empty when the gene has no coding child.
+    pub protein_id: String,
     /// Function annotation from the `product` attribute (of the gene
     /// feature itself, or of the CDS feature sharing its locus tag).
     pub product: String,
@@ -126,6 +129,7 @@ pub fn parse_gff_str(text: &str) -> Result<Vec<Gene>> {
                     old_locus_tag: attrs.get("old_locus_tag").cloned().unwrap_or_default(),
                     symbol,
                     biotype,
+                    protein_id: String::new(),
                     product: attrs.get("product").cloned().unwrap_or_default(),
                 });
             }
@@ -152,8 +156,10 @@ pub fn parse_gff_str(text: &str) -> Result<Vec<Gene>> {
 
     if !gene_rows.is_empty() {
         // Gene features usually carry no product; join it in from the CDS
-        // features that share their locus tag.
+        // features that share their locus tag. The protein accession is on
+        // the CDS child too, same join.
         let mut products: HashMap<String, String> = HashMap::new();
+        let mut proteins: HashMap<String, String> = HashMap::new();
         for (tag, _, _, _, _, _, attrs) in &cds_rows {
             if tag.is_empty() {
                 continue;
@@ -163,10 +169,18 @@ pub fn parse_gff_str(text: &str) -> Result<Vec<Gene>> {
                     products.entry(tag.clone()).or_insert_with(|| p.clone());
                 }
             }
+            if let Some(p) = attrs.get("protein_id") {
+                if !p.is_empty() {
+                    proteins.entry(tag.clone()).or_insert_with(|| p.clone());
+                }
+            }
         }
         for g in &mut gene_rows {
             if g.product.is_empty() {
                 g.product = products.get(&g.locus_tag).cloned().unwrap_or_default();
+            }
+            if g.protein_id.is_empty() {
+                g.protein_id = proteins.get(&g.locus_tag).cloned().unwrap_or_default();
             }
         }
         gene_rows.sort_by(|a, b| {
@@ -199,6 +213,7 @@ pub fn parse_gff_str(text: &str) -> Result<Vec<Gene>> {
                     .cloned()
                     .unwrap_or_default(),
                 biotype: ftype.clone(),
+                protein_id: attrs.get("protein_id").cloned().unwrap_or_default(),
                 product: attrs.get("product").cloned().unwrap_or_default(),
             }
         });
@@ -212,6 +227,13 @@ pub fn parse_gff_str(text: &str) -> Result<Vec<Gene>> {
             if let Some(p) = attrs.get("product") {
                 if !p.is_empty() {
                     entry.product = p.clone();
+                }
+            }
+        }
+        if entry.protein_id.is_empty() {
+            if let Some(p) = attrs.get("protein_id") {
+                if !p.is_empty() {
+                    entry.protein_id = p.clone();
                 }
             }
         }
