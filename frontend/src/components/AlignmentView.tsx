@@ -54,13 +54,12 @@ interface PreparedRow {
   spans: [number, number][];
   /** Raw alignment blocks (for the rev markers), concat coords. */
   blocks: { s: number; e: number; rev: boolean }[];
-  snpAt: Map<number, SnpEvent>;
+  /** All three event lists are sorted by pos for binary-search lookups
+   * and visible-window culling (the draw loop never scans whole-genome
+   * event lists: with divergent queries there are tens of thousands of
+   * SNPs per row and a full scan per frame made panning laggy). */
   snpList: SnpEvent[];
-  /** anchor -> deleted length (per-base expansion, capped per event). */
-  delAt: Map<number, number>;
   delList: DelEvent[];
-  /** boundary anchor -> inserted sequence. */
-  insAt: Map<number, InsEvent>;
   insList: InsEvent[];
 }
 
@@ -75,6 +74,39 @@ function inSpans(spans: [number, number][], a: number): boolean {
     else return true;
   }
   return false;
+}
+
+/** First index whose pos >= target (list.length when all are before). */
+function lowerBoundPos<T extends { pos: number }>(list: T[], target: number): number {
+  let lo = 0;
+  let hi = list.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (list[mid].pos < target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** SNP at an anchor exactly ('snps' is a point list), or null. */
+function snpAt<T extends { pos: number }>(list: T[], a: number): T | null {
+  const i = lowerBoundPos(list, a);
+  return i < list.length && list[i].pos === a ? list[i] : null;
+}
+
+/** Insertion anchored at an anchor exactly, or null. */
+function insAt<T extends { pos: number }>(list: T[], a: number): T | null {
+  const i = lowerBoundPos(list, a);
+  return i < list.length && list[i].pos === a ? list[i] : null;
+}
+
+/** Deletion covering an anchor, or null. Deletions do not start twice at
+ * the same position and nucmer blocks do not overlap, so the last one
+ * starting at or before the anchor is the only candidate. */
+function delCovering(list: DelEvent[], a: number): DelEvent | null {
+  const i = lowerBoundPos(list, a);
+  const d = i < list.length && list[i].pos === a ? list[i] : i > 0 ? list[i - 1] : null;
+  return d && a >= d.pos && a < d.pos + d.len ? d : null;
 }
 
 export function AlignmentView({
@@ -174,33 +206,22 @@ export function AlignmentView({
         else spans.push([b.s, b.e]);
       }
       // events, converted into the concatenated space, in concat order
-      const snpAt = new Map<number, SnpEvent>();
       const snpList: SnpEvent[] = [];
-      const delAt = new Map<number, number>();
       const delList: DelEvent[] = [];
-      const insAt = new Map<number, InsEvent>();
       const insList: InsEvent[] = [];
       for (const c of contigs) {
         const ev = q.events[c.seqid];
         if (!ev) continue;
         for (const s of ev.snps) {
-          const m = { ...s, pos: c.start + s.pos - 1 };
-          snpAt.set(m.pos, m);
-          snpList.push(m);
+          snpList.push({ ...s, pos: c.start + s.pos - 1 });
         }
         for (const d of ev.dels) {
-          const m = { ...d, pos: c.start + d.pos - 1 };
-          delList.push(m);
-          // expand per-anchor for letters mode, capped for huge events
-          const cap = Math.min(m.len, 10000);
-          for (let k = 0; k < cap; k++) delAt.set(m.pos + k, m.len);
+          delList.push({ ...d, pos: c.start + d.pos - 1 });
         }
         for (const i of ev.ins) {
           // insertion sits after anchor (c.start + i.pos - 1); the tick
           // goes on the boundary anchor that follows it
-          const m = { ...i, pos: c.start + i.pos };
-          insAt.set(m.pos, m);
-          insList.push(m);
+          insList.push({ ...i, pos: c.start + i.pos });
         }
       }
       snpList.sort((a, b) => a.pos - b.pos);
@@ -211,11 +232,8 @@ export function AlignmentView({
         name: q.query_name,
         spans,
         blocks: raw,
-        snpAt,
         snpList,
-        delAt,
         delList,
-        insAt,
         insList,
       };
     });
@@ -541,12 +559,12 @@ export function AlignmentView({
             if (!inSpans(r.spans, a)) {
               ch = "-";
               fg = isDark ? "#475569" : "#9ca3af";
-            } else if (r.delAt.has(a)) {
+            } else if (delCovering(r.delList, a)) {
               ch = "-";
               bg = isDark ? "#3b0764" : "#f3e8ff";
               fg = isDark ? "#d8b4fe" : "#7e22ce";
             } else {
-              const snp = r.snpAt.get(a);
+              const snp = snpAt(r.snpList, a);
               const refB = refBaseAt(a);
               if (snp) {
                 ch = String.fromCharCode(snp.q);
@@ -571,10 +589,12 @@ export function AlignmentView({
             ctx.fillText(ch, x + cellW / 2, y + ROW_HEIGHT / 2);
           }
         }
-        // insertion markers with extent lines (ported)
+        // insertion markers with extent lines (ported), windowed by anchor
         if (r) {
-          for (const ins of r.insList) {
-            if (ins.pos < fCol || ins.pos > lCol + 1) continue;
+          const lo = lowerBoundPos(r.insList, fCol);
+          const hi = lowerBoundPos(r.insList, lCol + 2);
+          for (let i = lo; i < hi; i++) {
+            const ins = r.insList[i];
             const bx = labelWidth + ins.pos * cellW - scrollLeft;
             if (bx < labelWidth || bx > labelWidth + seqAreaW) continue;
             const n = ins.seq.length;
@@ -591,11 +611,15 @@ export function AlignmentView({
           }
         }
       } else {
-        // bars mode: variant markers on top of the span bars
+        // bars mode: variant markers on top of the span bars, windowed
+        // to the visible columns (point events bisect; deletions stay a
+        // full scan because their interval can start far before fCol
+        // and still reach into the window, and they are few)
         if (r) {
-          for (const snp of r.snpList) {
-            if (snp.pos < fCol || snp.pos > lCol) continue;
-            const x = Math.floor(labelWidth + snp.pos * cellW - scrollLeft);
+          const snpLo = lowerBoundPos(r.snpList, fCol);
+          const snpHi = lowerBoundPos(r.snpList, lCol + 1);
+          for (let i = snpLo; i < snpHi; i++) {
+            const x = Math.floor(labelWidth + r.snpList[i].pos * cellW - scrollLeft);
             const w = Math.min(barW, labelWidth + seqAreaW - x);
             if (w <= 0) continue;
             ctx.fillStyle = SNP_COLOR;
@@ -615,9 +639,10 @@ export function AlignmentView({
             ctx.fillStyle = DEL_COLOR;
             ctx.fillRect(x1, y + 2, w, ROW_HEIGHT - 4);
           }
-          for (const ins of r.insList) {
-            if (ins.pos < fCol || ins.pos > lCol + 1) continue;
-            const bx = Math.floor(labelWidth + ins.pos * cellW - scrollLeft);
+          const insLo = lowerBoundPos(r.insList, fCol);
+          const insHi = lowerBoundPos(r.insList, lCol + 2);
+          for (let i = insLo; i < insHi; i++) {
+            const bx = Math.floor(labelWidth + r.insList[i].pos * cellW - scrollLeft);
             if (bx < labelWidth || bx > labelWidth + seqAreaW) continue;
             ctx.fillStyle = INS_COLOR;
             ctx.fillRect(bx - 1, y + 2, 2, ROW_HEIGHT - 4);
@@ -813,7 +838,7 @@ export function AlignmentView({
     let isSnp = false;
     if (prepared) {
       for (const r of prepared.rows) {
-        if (r.snpAt.has(hoverCol)) {
+        if (snpAt(r.snpList, hoverCol)) {
           isSnp = true;
           break;
         }
@@ -895,21 +920,22 @@ export function AlignmentView({
           const bxA = (labelWidth + anchor * cellW - scrollLeft) - mouseXRaw;
           const ins =
             Math.abs(bxA) <= tol
-              ? r.insAt.get(anchor)
-              : r.insAt.get(anchor + 1) !== undefined &&
+              ? insAt(r.insList, anchor)
+              : insAt(r.insList, anchor + 1) !== null &&
                   Math.abs(labelWidth + (anchor + 1) * cellW - scrollLeft - mouseXRaw) <= tol
-                ? r.insAt.get(anchor + 1)
-                : undefined;
+                ? insAt(r.insList, anchor + 1)
+                : null;
+          const del = delCovering(r.delList, anchor);
+          const snp = ins || del ? null : snpAt(r.snpList, anchor);
           if (ins) {
             lines.push(
-              `Insertion ${ins.seq.length} bp: ${ins.seq.length > 60 ? `${ins.seq.slice(0, 60)}\u2026` : ins.seq}`,
+              `Insertion ${ins.seq.length} bp: ${ins.seq.length > 60 ? `${ins.seq.slice(0, 60)}…` : ins.seq}`,
             );
-          } else if (r.delAt.has(anchor)) {
-            lines.push(`Deletion ${r.delAt.get(anchor)} bp`);
-          } else if (r.snpAt.has(anchor)) {
-            const s = r.snpAt.get(anchor)!;
+          } else if (del) {
+            lines.push(`Deletion ${del.len} bp`);
+          } else if (snp) {
             lines.push(
-              `SNP ${String.fromCharCode(s.r)} \u2192 ${String.fromCharCode(s.q)}`,
+              `SNP ${String.fromCharCode(snp.r)} → ${String.fromCharCode(snp.q)}`,
             );
           } else if (inSpans(r.spans, anchor)) {
             lines.push("same as reference");

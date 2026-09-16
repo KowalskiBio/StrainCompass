@@ -316,6 +316,12 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
             })
             .unwrap(),
         )?;
+        // Variant events were precomputed by the comparison itself: cache
+        // them now so the alignment viewer never computes on first open.
+        std::fs::write(
+            qdir.join("variants.json"),
+            serde_json::to_vec(&res.events).unwrap(),
+        )?;
         ctx.log(&format!(
             "Wrote the result tables for \u{201c}{name}\u{201d} to disk."
         ));
@@ -460,6 +466,37 @@ pub fn load_query_result(
         .map_err(|_| crate::error::ApiError::Internal("A result file is unreadable.".into()))?;
     backfill_protein_ids(state, project_id, &mut res.genes_coverage);
     Ok(res)
+}
+
+/// Slim read of a finished query: just the display name and the
+/// alignment blocks. The alignment viewer does not need the big
+/// gene-coverage rows, so this skips deserializing them (and the
+/// protein-id GFF backfill `load_query_result` sometimes triggers).
+pub fn load_query_meta(
+    state: &SharedState,
+    project_id: i64,
+    run_id: i64,
+    query_file_id: i64,
+) -> ApiResult<(String, Vec<straincompass_types::WgaBlock>)> {
+    let path = state
+        .run_dir(project_id, run_id)
+        .join("queries")
+        .join(query_file_id.to_string())
+        .join("result.json");
+    let bytes = std::fs::read(&path).map_err(|_| {
+        crate::error::ApiError::NotFound(
+            "The results for this query are not available (the run may not have finished).".into(),
+        )
+    })?;
+    #[derive(serde::Deserialize)]
+    struct Meta {
+        query_name: String,
+        #[serde(default)]
+        blocks: Vec<straincompass_types::WgaBlock>,
+    }
+    let meta: Meta = serde_json::from_slice(&bytes)
+        .map_err(|_| crate::error::ApiError::Internal("A result file is unreadable.".into()))?;
+    Ok((meta.query_name, meta.blocks))
 }
 
 /// Runs computed before protein accessions were persisted carry empty
@@ -612,20 +649,39 @@ impl QueryAlignmentSourceOwned {
     }
 }
 
-/// Guards the on-demand variant event computation so concurrent
-/// requests do not duplicate the same heavy walk.
-static VARIANTS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Per-query guards for the on-demand variant event computation, keyed
+/// by the cache file path: two requests for the SAME query do not
+/// duplicate the heavy walk, while different queries compute in
+/// parallel (the alignment viewer fans out one blocking task per query).
+static VARIANT_LOCKS: std::sync::OnceLock<
+    std::sync::Mutex<
+        std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<()>>>,
+    >,
+> = std::sync::OnceLock::new();
+
+fn variant_lock(path: &std::path::Path) -> std::sync::Arc<std::sync::Mutex<()>> {
+    let map =
+        VARIANT_LOCKS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut guard = map.lock().unwrap();
+    std::sync::Arc::clone(guard.entry(path.to_path_buf()).or_default())
+}
 
 /// Load the per-base variant events of one query against the reference.
 /// Computed on demand from the kept delta file on first use, then cached
 /// as variants.json next to the query's result.json. Queries whose
 /// working files are gone get empty events (the viewer still shows
-/// their alignment blocks).
+/// their alignment blocks). Runs now write variants.json on completion,
+/// so this on-demand path is a backfill for runs made before that.
+///
+/// `ref_records` comes pre-parsed from the caller, which batches one of
+/// these calls per query in parallel: the multi-megabase reference
+/// fasta is parsed once for the whole run instead of once per query.
 pub fn load_variants(
     state: &SharedState,
     project_id: i64,
     run_id: i64,
     query_file_id: i64,
+    ref_records: &[straincompass_engine::fasta::FastaRecord],
 ) -> ApiResult<std::collections::BTreeMap<String, straincompass_types::AlignmentEvents>> {
     let qdir = state
         .run_dir(project_id, run_id)
@@ -633,16 +689,18 @@ pub fn load_variants(
         .join(query_file_id.to_string());
     let path = qdir.join("variants.json");
     if !path.is_file() {
-        let _guard = VARIANTS_LOCK.lock().unwrap();
+        let guard = variant_lock(&path);
+        let _guard = guard.lock().unwrap();
         if !path.is_file() {
-            let ref_fa = state
-                .project_dir(project_id)
-                .join("reference")
-                .join("ref.fa");
             let qry_fa = qdir.join("query.fa");
             let delta = qdir.join("work").join("cmp.delta");
-            if qry_fa.is_file() && delta.is_file() && ref_fa.is_file() {
-                straincompass_engine::variants::write_variant_events(&ref_fa, &qry_fa, &delta, &path)?;
+            if qry_fa.is_file() && delta.is_file() {
+                straincompass_engine::variants::write_variant_events_with_ref(
+                    ref_records,
+                    &qry_fa,
+                    &delta,
+                    &path,
+                )?;
             } else {
                 return Ok(Default::default());
             }

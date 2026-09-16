@@ -142,16 +142,32 @@ pub fn write_variant_events(
     dest: &Path,
 ) -> Result<()> {
     let ref_records = fasta::parse_fasta(ref_fasta)?;
+    write_variant_events_with_ref(&ref_records, qry_fasta, delta_path, dest)
+}
+
+/// Same as [`write_variant_events`] but takes pre-parsed reference records,
+/// so a caller computing events for several queries parses the reference
+/// fasta (usually multi-megabase) only once.
+pub fn write_variant_events_with_ref(
+    ref_records: &[FastaRecord],
+    qry_fasta: &Path,
+    delta_path: &Path,
+    dest: &Path,
+) -> Result<()> {
     let qry_records = fasta::parse_fasta(qry_fasta)?;
     let delta = DeltaFile::parse(delta_path)?;
-    let events = variant_events(&delta, &ref_records, &qry_records)?;
-    let bytes = serde_json::to_vec(&events)
+    let events = variant_events(&delta, ref_records, &qry_records)?;
+    write_events_json(&events, dest)
+}
+
+fn write_events_json(events: &BTreeMap<String, AlignmentEvents>, dest: &Path) -> Result<()> {
+    let bytes = serde_json::to_vec(events)
         .map_err(|e| crate::friendly(format!("Cannot encode the variant events: {e}")))?;
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let tmp = dest.with_extension("json.tmp");
-    std::fs::write(&tmp, &bytes)?;
+    std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, dest)?;
     Ok(())
 }

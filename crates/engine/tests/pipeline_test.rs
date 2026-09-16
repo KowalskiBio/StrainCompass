@@ -231,6 +231,32 @@ fn full_pipeline_with_real_tools() {
     let report = res.dnadiff_report.as_ref().unwrap();
     assert!(report.contains("TotalBases"));
 
+    // Variant events are precomputed by the comparison itself, so the
+    // alignment viewer never walks the delta on first use.
+    let ev = &res.events["chr1"];
+    assert!(
+        ev.snps.iter().any(|s| s.pos == gene_start(0) + 3 + 1),
+        "SNP inside G0 reported as an event, got {:?}",
+        ev.snps
+    );
+    let stop_first = gene_start(5) + 300 + 1; // 0-based edit to 1-based
+    assert!(
+        ev.snps
+            .iter()
+            .any(|s| (stop_first..=stop_first + 2).contains(&s.pos)),
+        "the stop edit reported as an event"
+    );
+    assert!(
+        ev.ins.iter().any(|i| i.seq.len() == 10),
+        "10bp insertion inside G1, got {:?}",
+        ev.ins
+    );
+    assert!(
+        ev.dels.iter().any(|d| d.len >= 1900),
+        "the ~2kb deletion removing G3, got {:?}",
+        ev.dels
+    );
+
     // ---- gene detail (MSA viewer data) for the minus strand gene G5 ----
     let qry_fa = dir.join("query.fa");
     let delta_path = work.join("cmp.delta");

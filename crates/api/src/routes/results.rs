@@ -334,6 +334,13 @@ pub async fn gene_detail(
 
 /// GET /runs/{id}/alignment : whole-genome alignment viewer data
 /// (blocks + per-base variant events per query, events keyed by seqid).
+///
+/// Runs written recently carry variants.json already (run_comparison
+/// precomputes the events), so this endpoint is normally a set of file
+/// reads. Old runs backfill here: each query runs on its own blocking
+/// task (bounded by cpu_slots) and the reference fasta is parsed once
+/// for the whole run, instead of one serial loop that re-parsed the
+/// reference under a global lock.
 pub async fn alignment(
     State(state): State<SharedState>,
     Path(run_id): Path<i64>,
@@ -348,24 +355,50 @@ pub async fn alignment(
     let lengths: Vec<(String, u64)> = serde_json::from_value(reference["lengths"].clone())
         .map_err(|_| ApiError::Internal("The reference metadata is unreadable.".into()))?;
 
-    // First use can walk whole-genome alignments per query: keep it off
-    // the async worker threads.
-    let queries = tokio::task::spawn_blocking(move || -> crate::error::ApiResult<Vec<_>> {
-        let mut out = Vec::new();
-        for qid in &query_ids {
-            let res = jobs::load_query_result(&state, project_id, run_id, *qid)?;
-            let events = jobs::load_variants(&state, project_id, run_id, *qid)?;
-            out.push(straincompass_types::AlignmentQuery {
-                query_id: *qid,
-                query_name: res.query_name.clone(),
-                blocks: res.blocks,
-                events,
-            });
-        }
-        Ok(out)
+    // The parse fails with a friendly engine error when ref.fa is gone:
+    // map it through like the job runner does.
+    let ref_path = state
+        .project_dir(project_id)
+        .join("reference")
+        .join("ref.fa");
+    let ref_records = tokio::task::spawn_blocking(move || {
+        straincompass_engine::fasta::parse_fasta(&ref_path).map_err(ApiError::from)
     })
     .await
     .map_err(|e| ApiError::Internal(format!("The alignment task crashed. ({e})")))??;
+    let ref_records = std::sync::Arc::new(ref_records);
+
+    let mut handles = Vec::with_capacity(query_ids.len());
+    for qid in query_ids {
+        let state = state.clone();
+        let ref_records = std::sync::Arc::clone(&ref_records);
+        let sem = state.cpu_slots.clone();
+        handles.push(async move {
+            let _permit = sem.acquire_owned().await;
+            tokio::task::spawn_blocking(
+                move || -> ApiResult<straincompass_types::AlignmentQuery> {
+                    let (query_name, blocks) =
+                        jobs::load_query_meta(&state, project_id, run_id, qid)?;
+                    let events =
+                        jobs::load_variants(&state, project_id, run_id, qid, &ref_records)?;
+                    Ok(straincompass_types::AlignmentQuery {
+                        query_id: qid,
+                        query_name,
+                        blocks,
+                        events,
+                    })
+                },
+            )
+            .await
+            .map_err(|e| ApiError::Internal(format!("The alignment task crashed. ({e})")))?
+        });
+    }
+    // Await in order: tasks were spawned eagerly so they run in
+    // parallel; a later query's error does not hide an earlier one's.
+    let mut queries = Vec::with_capacity(handles.len());
+    for h in handles {
+        queries.push(h.await?);
+    }
 
     Ok(Json(straincompass_types::AlignmentData {
         reference: lengths,

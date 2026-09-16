@@ -7,10 +7,14 @@ use crate::fasta;
 use crate::gaps;
 use crate::gff;
 use crate::tools::ToolPaths;
+use crate::variants;
 use crate::Result;
-use straincompass_types::{GapRow, GeneCoverageRow, PanelRow, RunParams, WgaBlock, WgaGene};
+use straincompass_types::{
+    AlignmentEvents, GapRow, GeneCoverageRow, PanelRow, RunParams, WgaBlock, WgaGene,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -26,6 +30,10 @@ pub struct ComparisonResult {
     pub genes: Vec<WgaGene>,
     pub blocks: Vec<WgaBlock>,
     pub dnadiff_report: Option<String>,
+    /// Variant events keyed by reference seqid, precomputed here (the
+    /// delta and both fastas are already parsed) so the alignment
+    /// viewer never has to walk the delta on first use.
+    pub events: BTreeMap<String, AlignmentEvents>,
 }
 
 /// Inputs needed for one comparison. Paths point to sanitized files
@@ -198,6 +206,8 @@ pub fn run_comparison(
         })
         .collect();
 
+    let events = variants::variant_events(&delta, &ref_records, &qry_records)?;
+
     Ok(ComparisonResult {
         query_name: inputs.query_name.to_string(),
         genes_coverage: cov_rows,
@@ -207,6 +217,7 @@ pub fn run_comparison(
         genes: wga_genes,
         blocks,
         dnadiff_report,
+        events,
     })
 }
 

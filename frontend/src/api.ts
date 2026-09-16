@@ -56,6 +56,38 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return resp.json() as Promise<T>;
 }
 
+/**
+ * Alignment payloads are big (per-base variant events of every query)
+ * and immutable for a finished run, so one fetch serves every consumer
+ * on the page: the strain map's deep-zoom variant layer and the
+ * alignment viewer share it, and toggling between them never refetches.
+ * The in-flight promise is cached too, so simultaneous callers coalesce.
+ * Failures are evicted, letting a later call retry.
+ */
+const alignmentCache = new Map<number, Promise<AlignmentData>>();
+/** Payloads are tens of MB each for big runs: keep the cache shallow. */
+const ALIGNMENT_CACHE_MAX = 4;
+
+function alignmentCached(runId: number): Promise<AlignmentData> {
+  let p = alignmentCache.get(runId);
+  if (p) {
+    // refresh recency
+    alignmentCache.delete(runId);
+    alignmentCache.set(runId, p);
+    return p;
+  }
+  p = request<AlignmentData>(`/runs/${runId}/alignment`).catch((e) => {
+    alignmentCache.delete(runId);
+    throw e;
+  });
+  alignmentCache.set(runId, p);
+  while (alignmentCache.size > ALIGNMENT_CACHE_MAX) {
+    const oldest = alignmentCache.keys().next().value!;
+    alignmentCache.delete(oldest);
+  }
+  return p;
+}
+
 export const api = {
   listProjects: () => request<Project[]>("/projects"),
   createProject: (name: string, organism?: string) =>
@@ -164,8 +196,7 @@ export const api = {
   matrix: (runId: number, q: TableQuery) =>
     request<Page<MatrixRow>>(`/runs/${runId}/matrix${qs(q)}`),
   wga: (runId: number) => request<WgaData>(`/runs/${runId}/wga`),
-  alignment: (runId: number) =>
-    request<AlignmentData>(`/runs/${runId}/alignment`),
+  alignment: alignmentCached,
   refseq: (runId: number, seqid: string, start: number, end: number) =>
     request<RefseqWindow>(
       `/runs/${runId}/refseq?seqid=${encodeURIComponent(seqid)}&start=${start}&end=${end}`,

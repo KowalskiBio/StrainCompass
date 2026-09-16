@@ -31,9 +31,11 @@ Redesign the "Genome view" tab with two user-selectable sub-modes:
 
 - Variant data (SNPs, deletions, insertions per query per reference contig) is extracted
   from the kept `work/cmp.delta` nucmer files.
-- Computed **on demand and cached** as `{run_dir}/queries/{qid}/variants.json`.
-  This works for existing runs without re-running the pipeline.
-- Whole-genome events are shipped to the client at once (hundreds of KB is fine).
+- **Precomputed by `run_comparison`** and written as `{run_dir}/queries/{qid}/variants.json`
+  at run end, so the viewers never walk the delta on first open. Runs made before this
+  still backfill on demand (parallel per query) and then serve from the same cache.
+- Whole-genome events are shipped to the client at once (hundreds of KB is fine) and are
+  cached per run id in `api.ts`, so the map and the alignment viewer share one fetch.
 - Only reference bases for the visible window are fetched on demand via a `refseq`
   endpoint (seqid + start + end, ~5 kb cap) for letters mode.
 
@@ -59,9 +61,10 @@ pub struct AlignmentData {
 
 ### Endpoints
 
-- `GET /runs/{id}/alignment` returns `AlignmentData`. Computed on cache miss from the
-  delta files (via `jobs::msa_sources` to locate them), written atomically
-  (temp file + rename), with an in-flight lock to avoid duplicate work.
+- `GET /runs/{id}/alignment` returns `AlignmentData`. New runs read the persisted
+  variants.json directly. On a cache miss (old runs) the events are computed per query
+  in parallel (cpu_slots-bounded, reference fasta parsed once, per-query locks to
+  avoid duplicate work) and written atomically (temp file + rename).
 - `GET /runs/{id}/refseq?seqid=..&start=..&end=..` returns uppercase reference bases for
   the window (clamped to ~5 kb).
 
