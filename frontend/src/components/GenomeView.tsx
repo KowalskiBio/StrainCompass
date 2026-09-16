@@ -61,6 +61,9 @@ export function GenomeView({
    */
   const pendingRangeRef = useRef<Range | null>(null);
   const rangeRafRef = useRef(0);
+  /** The exact range object our last frame committed, to tell it apart from
+   * ranges set elsewhere in the component. */
+  const lastCommittedRef = useRef<Range | null>(null);
   const initialGeneRef = useRef(initialGene);
   const [popup, setPopup] = useState<{
     x: number;
@@ -118,6 +121,27 @@ export function GenomeView({
   const selectedQuery = useMemo(
     () => data?.queries.find((q) => q.query_id === colorBy) ?? null,
     [data, colorBy],
+  );
+
+  /**
+   * Genes of the shown contig, by ascending start, keeping each one's index into
+   * data.genes (the per-query calls arrays are aligned with it). Rendering used
+   * to walk all ~2900 genes on every zoom frame; this lets it bisect to the
+   * visible slice instead.
+   */
+  const contigGenes = useMemo(() => {
+    const out: { g: WgaGene; gi: number }[] = [];
+    data?.genes.forEach((g, gi) => {
+      if (g.seqid === seqid) out.push({ g, gi });
+    });
+    out.sort((a, b) => a.g.start - b.g.start);
+    return out;
+  }, [data, seqid]);
+
+  /** Longest gene on the contig: how far back a gene can start and still overlap. */
+  const maxGeneLen = useMemo(
+    () => contigGenes.reduce((m, x) => Math.max(m, x.g.end - x.g.start), 0),
+    [contigGenes],
   );
 
   const callCounts = useMemo(() => {
@@ -201,10 +225,13 @@ export function GenomeView({
     return () => ro.disconnect();
   }, [mapEl]);
 
-  // Keep the gesture target in step with range changes from the buttons and the
-  // range input, so the next gesture builds on what is actually on screen.
+  // Adopt ranges that came from the buttons, the range input or a contig switch,
+  // so the next gesture builds on what is actually on screen. Deliberately NOT
+  // our own commits: a wide view can take over 100 ms to render, and any gesture
+  // landing in that window would be overwritten here by the range we just
+  // committed, silently throwing away part of the zoom.
   useEffect(() => {
-    pendingRangeRef.current = range;
+    if (range && range !== lastCommittedRef.current) pendingRangeRef.current = range;
   }, [range]);
 
   useEffect(() => () => cancelAnimationFrame(rangeRafRef.current), []);
@@ -214,6 +241,7 @@ export function GenomeView({
     if (rangeRafRef.current) return;
     rangeRafRef.current = requestAnimationFrame(() => {
       rangeRafRef.current = 0;
+      lastCommittedRef.current = pendingRangeRef.current;
       if (pendingRangeRef.current) setRange(pendingRangeRef.current);
     });
   }, []);
@@ -277,6 +305,35 @@ export function GenomeView({
   for (let t = firstTick; t <= range.end; t += tickStep) ticks.push(t);
 
   const inRange = (s: number, e: number) => e >= range.start && s <= range.end;
+
+  // Only the genes that can touch the visible window. Bisect for the first gene
+  // that could still overlap, then walk forward until past the right edge.
+  const visibleGenes: { g: WgaGene; gi: number }[] = [];
+  {
+    const from = range.start - maxGeneLen;
+    let lo = 0;
+    let hi = contigGenes.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (contigGenes[mid].g.start < from) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let i = lo; i < contigGenes.length; i++) {
+      const e = contigGenes[i];
+      if (e.g.start > range.end) break;
+      if (inRange(e.g.start, e.g.end)) visibleGenes.push(e);
+    }
+  }
+
+  /**
+   * One delegated listener for the whole gene layer instead of three closures per
+   * gene: at whole-genome view that was ~8600 new functions on every zoom frame.
+   */
+  const geneAt = (target: EventTarget | null): { g: WgaGene; gi: number } | null => {
+    const el = (target as Element | null)?.closest?.("[data-gi]");
+    const gi = el ? Number(el.getAttribute("data-gi")) : NaN;
+    return Number.isFinite(gi) && data.genes[gi] ? { g: data.genes[gi], gi } : null;
+  };
 
   // Variant markers of the selected query inside the visible range.
   const markers = showMarkers && variantEvents
@@ -492,9 +549,23 @@ export function GenomeView({
           />
 
           {/* genes: one continuous line of beads on the string */}
-          <g>
-            {data.genes.map((g, gi) => {
-              if (g.seqid !== seqid || !inRange(g.start, g.end)) return null;
+          <g
+            onMouseOver={(e) => setHover(geneAt(e.target)?.gi ?? null)}
+            onMouseOut={() => setHover(null)}
+            onClick={(e) => {
+              const hit = geneAt(e.target);
+              if (!hit) return;
+              e.preventDefault();
+              const rect = svgRef.current!.getBoundingClientRect();
+              setPopup({
+                x: e.clientX - rect.left,
+                y: baselineY + geneH / 2,
+                gene: hit.g,
+                gi: hit.gi,
+              });
+            }}
+          >
+            {visibleGenes.map(({ g, gi }) => {
               const x = bpToX(Math.max(g.start, range.start));
               const x2 = bpToX(Math.min(g.end, range.end));
               const w = Math.max(2, x2 - x);
@@ -504,22 +575,7 @@ export function GenomeView({
                 : geneColor(g);
               const label = g.symbol || g.locus_tag;
               return (
-                <g
-                  key={g.locus_tag}
-                  className="cursor-pointer"
-                  onMouseEnter={() => setHover(gi)}
-                  onMouseLeave={() => setHover(null)}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    const rect = svgRef.current!.getBoundingClientRect();
-                    setPopup({
-                      x: e.clientX - rect.left,
-                      y: baselineY + geneH / 2,
-                      gene: g,
-                      gi,
-                    });
-                  }}
-                >
+                <g key={g.locus_tag} className="cursor-pointer" data-gi={gi}>
                   <GeneShape x={x} w={w} y={y} h={geneH} strand={g.strand} fill={fill} />
                   {w >= LABEL_MIN_W && (
                     <text

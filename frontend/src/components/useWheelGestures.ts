@@ -28,9 +28,12 @@ const PAGE_PX = 400;
  * coarse notches (commonly 100-120 px each). One shared constant high enough to
  * make pinching feel quick would make every wheel notch jump the full clamp.
  */
-const PINCH_PER_PX = 0.012;
-const WHEEL_PER_PX = 0.005;
-const MAX_STEP = 3;
+// A half-second trackpad pinch is roughly 120 px of travel, so ln(20)/120 puts
+// one pinch at about 20x: whole genome to ~145 kb, gene level in three.
+const PINCH_PER_PX = 0.025;
+// About 2.6x per wheel notch, in the same spirit as the 2x +/- buttons.
+const WHEEL_PER_PX = 0.008;
+const MAX_STEP = 6;
 
 /** Extra gain on Safari's pinch scale, to match the wheel path's feel. */
 const GESTURE_GAIN = 1.8;
