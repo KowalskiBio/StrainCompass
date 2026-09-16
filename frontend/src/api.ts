@@ -1,5 +1,6 @@
 import type {
   AlignmentData,
+  AlignmentDataWire,
   GeneDetail,
   GapRow,
   GeneCoverageRow,
@@ -68,6 +69,34 @@ const alignmentCache = new Map<number, Promise<AlignmentData>>();
 /** Payloads are tens of MB each for big runs: keep the cache shallow. */
 const ALIGNMENT_CACHE_MAX = 4;
 
+/** Turn the columnar wire form into the per-event objects the
+ * consumers already index. Runs once per fetch, inside the cached
+ * promise, so toggling views never repeats it. */
+function hydrateAlignment(w: AlignmentDataWire): AlignmentData {
+  return {
+    reference: w.reference,
+    queries: w.queries.map((q) => ({
+      query_id: q.query_id,
+      query_name: q.query_name,
+      blocks: q.blocks,
+      events: Object.fromEntries(
+        Object.entries(q.events).map(([seqid, ev]) => [
+          seqid,
+          {
+            snps: ev.snp_pos.map((pos, i) => ({
+              pos,
+              r: ev.snp_ref[i],
+              q: ev.snp_qry[i],
+            })),
+            dels: ev.del_pos.map((pos, i) => ({ pos, len: ev.del_len[i] })),
+            ins: ev.ins_pos.map((pos, i) => ({ pos, seq: ev.ins_seq[i] })),
+          },
+        ]),
+      ),
+    })),
+  };
+}
+
 function alignmentCached(runId: number): Promise<AlignmentData> {
   let p = alignmentCache.get(runId);
   if (p) {
@@ -76,10 +105,12 @@ function alignmentCached(runId: number): Promise<AlignmentData> {
     alignmentCache.set(runId, p);
     return p;
   }
-  p = request<AlignmentData>(`/runs/${runId}/alignment`).catch((e) => {
-    alignmentCache.delete(runId);
-    throw e;
-  });
+  p = request<AlignmentDataWire>(`/runs/${runId}/alignment`)
+    .then(hydrateAlignment)
+    .catch((e) => {
+      alignmentCache.delete(runId);
+      throw e;
+    });
   alignmentCache.set(runId, p);
   while (alignmentCache.size > ALIGNMENT_CACHE_MAX) {
     const oldest = alignmentCache.keys().next().value!;

@@ -109,6 +109,85 @@ function delCovering(list: DelEvent[], a: number): DelEvent | null {
   return d && a >= d.pos && a < d.pos + d.len ? d : null;
 }
 
+interface Prepared {
+  contigs: PreparedContig[];
+  totalLen: number;
+  rows: PreparedRow[];
+  offsetOf: Map<string, number>;
+}
+
+/** Building the sorted per-row event lists takes real time on divergent
+ * runs (hundreds of thousands of events), and the component unmounts
+ * whenever the user toggles back to the StrainMap — a fresh memo per
+ * visit made every toggle as slow as the first. The prepared form is
+ * cached per fetched payload, which the promise cache keeps alive. */
+const preparedCache = new WeakMap<AlignmentData, Prepared>();
+
+function prepareData(data: AlignmentData): Prepared {
+  let prepared = preparedCache.get(data);
+  if (prepared) return prepared;
+  const contigs: PreparedContig[] = [];
+  let off = 0;
+  for (const [seqid, len] of data.reference) {
+    contigs.push({ seqid, start: off, len });
+    off += len;
+  }
+  const totalLen = off;
+  const offsetOf = new Map(contigs.map((c) => [c.seqid, c.start]));
+
+  const rows: PreparedRow[] = data.queries.map((q) => {
+    const raw = q.blocks
+      .map((b) => ({
+        s: (offsetOf.get(b.ref_seqid) ?? 0) + b.ref_start - 1,
+        e: (offsetOf.get(b.ref_seqid) ?? 0) + b.ref_end - 1,
+        rev: b.qry_rev,
+      }))
+      .sort((a, b) => a.s - b.s);
+    // merged spans
+    const spans: [number, number][] = [];
+    for (const b of raw) {
+      const last = spans[spans.length - 1];
+      if (last && b.s <= last[1] + 1) last[1] = Math.max(last[1], b.e);
+      else spans.push([b.s, b.e]);
+    }
+    // events, converted into the concatenated space, in concat order
+    const snpList: SnpEvent[] = [];
+    const delList: DelEvent[] = [];
+    const insList: InsEvent[] = [];
+    for (const c of contigs) {
+      const ev = q.events[c.seqid];
+      if (!ev) continue;
+      for (const s of ev.snps) {
+        snpList.push({ ...s, pos: c.start + s.pos - 1 });
+      }
+      for (const d of ev.dels) {
+        delList.push({ ...d, pos: c.start + d.pos - 1 });
+      }
+      for (const i of ev.ins) {
+        // insertion sits after anchor (c.start + i.pos - 1); the tick
+        // goes on the boundary anchor that follows it
+        insList.push({ ...i, pos: c.start + i.pos });
+      }
+    }
+    snpList.sort((a, b) => a.pos - b.pos);
+    delList.sort((a, b) => a.pos - b.pos);
+    insList.sort((a, b) => a.pos - b.pos);
+    return {
+      queryId: q.query_id,
+      name: q.query_name,
+      spans,
+      blocks: raw,
+      snpList,
+      delList,
+      insList,
+    };
+  });
+
+  prepared = { contigs, totalLen, rows, offsetOf };
+  preparedCache.set(data, prepared);
+  return prepared;
+}
+
 export function AlignmentView({
   run,
   initialRange,
@@ -179,67 +258,7 @@ export function AlignmentView({
   }, [run.id]);
 
   /* ── prepare the concatenated coordinate space and per-query indexes ── */
-  const prepared = useMemo(() => {
-    if (!data) return null;
-    const contigs: PreparedContig[] = [];
-    let off = 0;
-    for (const [seqid, len] of data.reference) {
-      contigs.push({ seqid, start: off, len });
-      off += len;
-    }
-    const totalLen = off;
-    const offsetOf = new Map(contigs.map((c) => [c.seqid, c.start]));
-
-    const rows: PreparedRow[] = data.queries.map((q) => {
-      const raw = q.blocks
-        .map((b) => ({
-          s: (offsetOf.get(b.ref_seqid) ?? 0) + b.ref_start - 1,
-          e: (offsetOf.get(b.ref_seqid) ?? 0) + b.ref_end - 1,
-          rev: b.qry_rev,
-        }))
-        .sort((a, b) => a.s - b.s);
-      // merged spans
-      const spans: [number, number][] = [];
-      for (const b of raw) {
-        const last = spans[spans.length - 1];
-        if (last && b.s <= last[1] + 1) last[1] = Math.max(last[1], b.e);
-        else spans.push([b.s, b.e]);
-      }
-      // events, converted into the concatenated space, in concat order
-      const snpList: SnpEvent[] = [];
-      const delList: DelEvent[] = [];
-      const insList: InsEvent[] = [];
-      for (const c of contigs) {
-        const ev = q.events[c.seqid];
-        if (!ev) continue;
-        for (const s of ev.snps) {
-          snpList.push({ ...s, pos: c.start + s.pos - 1 });
-        }
-        for (const d of ev.dels) {
-          delList.push({ ...d, pos: c.start + d.pos - 1 });
-        }
-        for (const i of ev.ins) {
-          // insertion sits after anchor (c.start + i.pos - 1); the tick
-          // goes on the boundary anchor that follows it
-          insList.push({ ...i, pos: c.start + i.pos });
-        }
-      }
-      snpList.sort((a, b) => a.pos - b.pos);
-      delList.sort((a, b) => a.pos - b.pos);
-      insList.sort((a, b) => a.pos - b.pos);
-      return {
-        queryId: q.query_id,
-        name: q.query_name,
-        spans,
-        blocks: raw,
-        snpList,
-        delList,
-        insList,
-      };
-    });
-
-    return { contigs, totalLen, rows, offsetOf };
-  }, [data]);
+  const prepared = useMemo(() => (data ? prepareData(data) : null), [data]);
 
   /* ── auto label width from the row names ── */
   useEffect(() => {
@@ -618,12 +637,25 @@ export function AlignmentView({
         if (r) {
           const snpLo = lowerBoundPos(r.snpList, fCol);
           const snpHi = lowerBoundPos(r.snpList, lCol + 1);
-          for (let i = snpLo; i < snpHi; i++) {
+          // Zoomed out, many SNPs land on the same pixel: draw one
+          // rect per pixel and binary-search straight to the next
+          // affected pixel, so the loop is bounded by the sequence area
+          // width rather than by the visible event count (a divergent
+          // query shows >100k SNPs in a whole-genome overview).
+          const mergePixels = cellW < 1;
+          let i = snpLo;
+          while (i < snpHi) {
             const x = Math.floor(labelWidth + r.snpList[i].pos * cellW - scrollLeft);
             const w = Math.min(barW, labelWidth + seqAreaW - x);
-            if (w <= 0) continue;
+            if (w <= 0) break; // sorted: the rest are past the right edge
             ctx.fillStyle = SNP_COLOR;
             ctx.fillRect(x, y + 2, w, ROW_HEIGHT - 4);
+            if (!mergePixels) {
+              i++;
+            } else {
+              const nextPos = Math.ceil((x + 1 - labelWidth + scrollLeft) / cellW);
+              i = Math.max(i + 1, lowerBoundPos(r.snpList, nextPos));
+            }
           }
           for (const d of r.delList) {
             if (d.pos + d.len - 1 < fCol || d.pos > lCol) continue;
@@ -641,11 +673,21 @@ export function AlignmentView({
           }
           const insLo = lowerBoundPos(r.insList, fCol);
           const insHi = lowerBoundPos(r.insList, lCol + 2);
-          for (let i = insLo; i < insHi; i++) {
-            const bx = Math.floor(labelWidth + r.insList[i].pos * cellW - scrollLeft);
-            if (bx < labelWidth || bx > labelWidth + seqAreaW) continue;
-            ctx.fillStyle = INS_COLOR;
-            ctx.fillRect(bx - 1, y + 2, 2, ROW_HEIGHT - 4);
+          // same pixel merge for the 2px insertion ticks
+          let j = insLo;
+          while (j < insHi) {
+            const bx = Math.floor(labelWidth + r.insList[j].pos * cellW - scrollLeft);
+            if (bx > labelWidth + seqAreaW) break;
+            if (bx >= labelWidth) {
+              ctx.fillStyle = INS_COLOR;
+              ctx.fillRect(bx - 1, y + 2, 2, ROW_HEIGHT - 4);
+            }
+            if (!mergePixels) {
+              j++;
+            } else {
+              const nextPos = Math.ceil((bx + 2 - labelWidth + scrollLeft) / cellW);
+              j = Math.max(j + 1, lowerBoundPos(r.insList, nextPos));
+            }
           }
         }
       }

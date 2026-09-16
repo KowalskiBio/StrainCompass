@@ -195,6 +195,31 @@ export interface AlignmentData {
   queries: AlignmentQuery[];
 }
 
+/** Wire form of AlignmentEvents: parallel arrays instead of one
+ * object per event (a divergent query carries >100k SNPs). api.ts
+ * hydrates these into the interfaces above once, off the draw path. */
+export interface AlignmentEventsWire {
+  snp_pos: number[];
+  snp_ref: number[];
+  snp_qry: number[];
+  del_pos: number[];
+  del_len: number[];
+  ins_pos: number[];
+  ins_seq: string[];
+}
+
+export interface AlignmentQueryWire {
+  query_id: number;
+  query_name: string;
+  blocks: WgaBlock[];
+  events: Record<string, AlignmentEventsWire>;
+}
+
+export interface AlignmentDataWire {
+  reference: [string, number][];
+  queries: AlignmentQueryWire[];
+}
+
 /** Reference bases of a window, for the alignment viewer letters mode. */
 export interface RefseqWindow {
   seqid: string;

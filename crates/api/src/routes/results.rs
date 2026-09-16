@@ -341,10 +341,14 @@ pub async fn gene_detail(
 /// task (bounded by cpu_slots) and the reference fasta is parsed once
 /// for the whole run, instead of one serial loop that re-parsed the
 /// reference under a global lock.
+///
+/// The answer is columnar (parallel arrays per event kind): the
+/// object form was ~4 MB per query for divergent runs, and the
+/// browser's JSON parser blocked the page for seconds on it.
 pub async fn alignment(
     State(state): State<SharedState>,
     Path(run_id): Path<i64>,
-) -> ApiResult<Json<straincompass_types::AlignmentData>> {
+) -> ApiResult<Json<straincompass_types::AlignmentDataColumnar>> {
     let (project_id, query_ids, status) = jobs::run_meta(&state, run_id)?;
     if status != "succeeded" {
         return Err(ApiError::BadRequest(
@@ -376,16 +380,19 @@ pub async fn alignment(
         handles.push(async move {
             let _permit = sem.acquire_owned().await;
             tokio::task::spawn_blocking(
-                move || -> ApiResult<straincompass_types::AlignmentQuery> {
+                move || -> ApiResult<straincompass_types::AlignmentQueryColumnar> {
                     let (query_name, blocks) =
                         jobs::load_query_meta(&state, project_id, run_id, qid)?;
                     let events =
                         jobs::load_variants(&state, project_id, run_id, qid, &ref_records)?;
-                    Ok(straincompass_types::AlignmentQuery {
+                    Ok(straincompass_types::AlignmentQueryColumnar {
                         query_id: qid,
                         query_name,
                         blocks,
-                        events,
+                        events: events
+                            .into_iter()
+                            .map(|(seqid, ev)| (seqid, ev.into()))
+                            .collect(),
                     })
                 },
             )
@@ -400,7 +407,7 @@ pub async fn alignment(
         queries.push(h.await?);
     }
 
-    Ok(Json(straincompass_types::AlignmentData {
+    Ok(Json(straincompass_types::AlignmentDataColumnar {
         reference: lengths,
         queries,
     }))
@@ -543,23 +550,20 @@ mod tests {
         assert_eq!(q.blocks[0].ref_seqid, "chr1");
 
         let ev = &q.events["chr1"];
-        assert_eq!(ev.ins.len(), 1);
-        assert_eq!((ev.ins[0].pos, ev.ins[0].seq.as_str()), (0, "G"));
-        assert_eq!(ev.dels.len(), 2);
-        assert_eq!((ev.dels[0].pos, ev.dels[0].len), (1, 2));
-        assert_eq!((ev.dels[1].pos, ev.dels[1].len), (4, 1));
-        assert_eq!(ev.snps.len(), 1);
-        assert_eq!(
-            (ev.snps[0].pos, ev.snps[0].r, ev.snps[0].q),
-            (6, b'C', b'A')
-        );
+        assert_eq!(ev.ins_pos.len(), 1);
+        assert_eq!((ev.ins_pos[0], ev.ins_seq[0].as_str()), (0, "G"));
+        assert_eq!(ev.del_pos.len(), 2);
+        assert_eq!((ev.del_pos[0], ev.del_len[0]), (1, 2));
+        assert_eq!((ev.del_pos[1], ev.del_len[1]), (4, 1));
+        assert_eq!(ev.snp_pos.len(), 1);
+        assert_eq!((ev.snp_pos[0], ev.snp_ref[0], ev.snp_qry[0]), (6, b'C', b'A'));
 
         // the events were cached next to result.json
         let cache = dir.join("projects/1/runs/1/queries/10/variants.json");
         assert!(cache.is_file());
         // a second call serves the same data from the cache
         let res2 = alignment(State(state), Path(1)).await.unwrap().0;
-        assert_eq!(res2.queries[0].events["chr1"].snps.len(), 1);
+        assert_eq!(res2.queries[0].events["chr1"].snp_pos.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

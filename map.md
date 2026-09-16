@@ -61,10 +61,17 @@ pub struct AlignmentData {
 
 ### Endpoints
 
-- `GET /runs/{id}/alignment` returns `AlignmentData`. New runs read the persisted
-  variants.json directly. On a cache miss (old runs) the events are computed per query
-  in parallel (cpu_slots-bounded, reference fasta parsed once, per-query locks to
-  avoid duplicate work) and written atomically (temp file + rename).
+- `GET /runs/{id}/alignment` returns `AlignmentDataColumnar`: per query and seqid the
+  events are parallel arrays (`snp_pos/snp_ref/snp_qry`, `del_pos/del_len`,
+  `ins_pos/ins_seq`) instead of one object per event — a divergent query carries
+  >100k SNPs and the object form made ~60 MB responses that froze the browser's
+  JSON parser. `api.ts` hydrates the arrays into the per-event objects the
+  consumers index, once per fetch inside the cached promise. New runs read the
+  persisted variants.json directly. On a cache miss (old runs) the events are
+  computed per query in parallel (cpu_slots-bounded, reference fasta parsed once,
+  per-query locks to avoid duplicate work) and written atomically (temp file +
+  rename). variants.json on disk keeps the object form; only the HTTP response is
+  columnar.
 - `GET /runs/{id}/refseq?seqid=..&start=..&end=..` returns uppercase reference bases for
   the window (clamped to ~5 kb).
 

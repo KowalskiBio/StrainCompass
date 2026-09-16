@@ -173,6 +173,52 @@ pub struct AlignmentEvents {
     pub ins: Vec<InsEvent>,
 }
 
+/// Wire form of [AlignmentEvents]: parallel arrays instead of one
+/// object per event. A divergent query carries >100k SNPs, and the
+/// object form made the alignment endpoint answer ~4 MB per query
+/// (~60 MB per run) that the browser's JSON parser ground through on
+/// the main thread for seconds. Arrays of plain numbers serialize
+/// smaller and parse several times faster. Only the HTTP response
+/// uses this; variants.json on disk keeps the object form.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct AlignmentEventsColumnar {
+    pub snp_pos: Vec<u64>,
+    pub snp_ref: Vec<u8>,
+    pub snp_qry: Vec<u8>,
+    pub del_pos: Vec<u64>,
+    pub del_len: Vec<u64>,
+    pub ins_pos: Vec<u64>,
+    pub ins_seq: Vec<String>,
+}
+
+impl From<AlignmentEvents> for AlignmentEventsColumnar {
+    fn from(ev: AlignmentEvents) -> Self {
+        let mut out = AlignmentEventsColumnar {
+            snp_pos: Vec::with_capacity(ev.snps.len()),
+            snp_ref: Vec::with_capacity(ev.snps.len()),
+            snp_qry: Vec::with_capacity(ev.snps.len()),
+            del_pos: Vec::with_capacity(ev.dels.len()),
+            del_len: Vec::with_capacity(ev.dels.len()),
+            ins_pos: Vec::with_capacity(ev.ins.len()),
+            ins_seq: Vec::with_capacity(ev.ins.len()),
+        };
+        for s in ev.snps {
+            out.snp_pos.push(s.pos);
+            out.snp_ref.push(s.r);
+            out.snp_qry.push(s.q);
+        }
+        for d in ev.dels {
+            out.del_pos.push(d.pos);
+            out.del_len.push(d.len);
+        }
+        for i in ev.ins {
+            out.ins_pos.push(i.pos);
+            out.ins_seq.push(i.seq);
+        }
+        out
+    }
+}
+
 /// One query with its alignment blocks and per-base variant events
 /// for the whole-genome alignment viewer.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -183,6 +229,25 @@ pub struct AlignmentQuery {
     /// Events keyed by reference seqid.
     #[serde(default)]
     pub events: std::collections::BTreeMap<String, AlignmentEvents>,
+}
+
+/// Wire form of [AlignmentQuery] (see [AlignmentEventsColumnar]):
+/// same fields, columnar events.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AlignmentQueryColumnar {
+    pub query_id: i64,
+    pub query_name: String,
+    pub blocks: Vec<WgaBlock>,
+    #[serde(default)]
+    pub events: std::collections::BTreeMap<String, AlignmentEventsColumnar>,
+}
+
+/// Wire form of [AlignmentData] (see [AlignmentEventsColumnar]).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AlignmentDataColumnar {
+    /// Reference sequence lengths (seqid, length), sorted.
+    pub reference: Vec<(String, u64)>,
+    pub queries: Vec<AlignmentQueryColumnar>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
