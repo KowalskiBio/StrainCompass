@@ -2,11 +2,11 @@
 
 use crate::error::ApiResult;
 use crate::state::SharedState;
-use bactiment_engine::pipeline::{
+use straincompass_engine::pipeline::{
     self, ComparisonInputs, ComparisonResult, QueryAlignmentSource, WorkDirs,
 };
-use bactiment_engine::tools::ToolPaths;
-use bactiment_types::{MatrixRow, RunParams};
+use straincompass_engine::tools::ToolPaths;
+use straincompass_types::{MatrixRow, RunParams};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -169,8 +169,8 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
         std::fs::copy(&ref_gff, &staged_gff)?;
         std::fs::write(&marker, format!("{ref_hash} {gff_hash}"))?;
         // check that GFF seqids exist in the fasta
-        let genes = bactiment_engine::gff::parse_gff(&staged_gff)?;
-        let recs = bactiment_engine::fasta::parse_fasta(&staged_fa)?;
+        let genes = straincompass_engine::gff::parse_gff(&staged_gff)?;
+        let recs = straincompass_engine::fasta::parse_fasta(&staged_fa)?;
         let ids: std::collections::HashSet<String> = recs.iter().map(|r| r.id.clone()).collect();
         let missing: Vec<String> = genes
             .iter()
@@ -270,7 +270,7 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
     let mut results: Vec<(i64, String, ComparisonResult)> = Vec::new();
     for h in handles {
         let outcome: std::result::Result<
-            bactiment_engine::Result<(i64, String, ComparisonResult)>,
+            straincompass_engine::Result<(i64, String, ComparisonResult)>,
             tokio::task::JoinError,
         > = h.await;
         match outcome {
@@ -324,8 +324,8 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
     std::fs::write(run_dir.join("params.json"), &params_json)?;
     // reference metadata for viewers
     {
-        let genes = bactiment_engine::gff::parse_gff(&staged_gff)?;
-        let recs = bactiment_engine::fasta::parse_fasta(&staged_fa)?;
+        let genes = straincompass_engine::gff::parse_gff(&staged_gff)?;
+        let recs = straincompass_engine::fasta::parse_fasta(&staged_fa)?;
         let lengths: Vec<(String, u64)> = {
             let mut v: Vec<(String, u64)> = recs
                 .iter()
@@ -334,9 +334,9 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
             v.sort();
             v
         };
-        let genes_json: Vec<bactiment_types::WgaGene> = genes
+        let genes_json: Vec<straincompass_types::WgaGene> = genes
             .iter()
-            .map(|g| bactiment_types::WgaGene {
+            .map(|g| straincompass_types::WgaGene {
                 locus_tag: g.locus_tag.clone(),
                 symbol: g.symbol.clone(),
                 biotype: g.biotype.clone(),
@@ -407,10 +407,10 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct ComparisonResultJson {
     pub query_name: String,
-    pub genes_coverage: Vec<bactiment_types::GeneCoverageRow>,
-    pub unaligned_gaps: Vec<bactiment_types::GapRow>,
-    pub panel: Option<Vec<bactiment_types::PanelRow>>,
-    pub blocks: Vec<bactiment_types::WgaBlock>,
+    pub genes_coverage: Vec<straincompass_types::GeneCoverageRow>,
+    pub unaligned_gaps: Vec<straincompass_types::GapRow>,
+    pub panel: Option<Vec<straincompass_types::PanelRow>>,
+    pub blocks: Vec<straincompass_types::WgaBlock>,
     pub ref_lengths: Vec<(String, u64)>,
 }
 
@@ -573,7 +573,7 @@ pub fn load_variants(
     project_id: i64,
     run_id: i64,
     query_file_id: i64,
-) -> ApiResult<std::collections::BTreeMap<String, bactiment_types::AlignmentEvents>> {
+) -> ApiResult<std::collections::BTreeMap<String, straincompass_types::AlignmentEvents>> {
     let qdir = state
         .run_dir(project_id, run_id)
         .join("queries")
@@ -589,7 +589,7 @@ pub fn load_variants(
             let qry_fa = qdir.join("query.fa");
             let delta = qdir.join("work").join("cmp.delta");
             if qry_fa.is_file() && delta.is_file() && ref_fa.is_file() {
-                bactiment_engine::variants::write_variant_events(&ref_fa, &qry_fa, &delta, &path)?;
+                straincompass_engine::variants::write_variant_events(&ref_fa, &qry_fa, &delta, &path)?;
             } else {
                 return Ok(Default::default());
             }

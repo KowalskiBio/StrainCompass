@@ -62,8 +62,8 @@ const PANEL_COLUMNS: Column[] = [
 // The backend caps page_size at 1000 per request; to show the whole table
 // (no pagination UI) we fetch every page at this size and concatenate them.
 const FETCH_PAGE_SIZE = 1000;
-const COL_WIDTHS_KEY = "bactiment-col-widths";
-const HIDDEN_COLS_KEY = "bactiment-hidden-cols";
+const COL_WIDTHS_KEY = "straincompass-col-widths";
+const HIDDEN_COLS_KEY = "straincompass-hidden-cols";
 
 // Columns hidden by default per table, until the user changes it via the
 // Columns picker (then their choice is remembered instead).

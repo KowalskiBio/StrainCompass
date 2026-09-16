@@ -1,4 +1,4 @@
-//! bactiment API server: HTTP + job runner + static SPA serving.
+//! straincompass API server: HTTP + job runner + static SPA serving.
 
 mod db;
 mod error;
@@ -62,6 +62,7 @@ fn routes() -> Router<SharedState> {
             "/runs/{id}",
             get(routes::runs::detail).delete(routes::runs::delete),
         )
+        .route("/runs/{id}/name", put(routes::runs::rename))
         .route("/runs/{id}/params", get(routes::runs::params))
         .route(
             "/runs/{id}/genes_coverage",
@@ -117,16 +118,16 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "bactiment_api=info,tower_http=info".into()),
+                .unwrap_or_else(|_| "straincompass_api=info,tower_http=info".into()),
         )
         .init();
 
-    let data_dir = std::env::var("BACTIMENT_DATA_DIR").unwrap_or_else(|_| "./data".into());
-    let bind = std::env::var("BACTIMENT_BIND").unwrap_or_else(|_| "127.0.0.1:8010".into());
+    let data_dir = std::env::var("STRAINCOMPASS_DATA_DIR").unwrap_or_else(|_| "./data".into());
+    let bind = std::env::var("STRAINCOMPASS_BIND").unwrap_or_else(|_| "127.0.0.1:8010".into());
     let data_dir = std::path::PathBuf::from(data_dir);
     std::fs::create_dir_all(&data_dir).expect("cannot create the data directory");
 
-    let conn = rusqlite::Connection::open(data_dir.join("bactiment.db"))
+    let conn = rusqlite::Connection::open(data_dir.join("straincompass.db"))
         .expect("cannot open the database");
     db::init_db(&conn).expect("cannot initialize the database");
 
@@ -142,9 +143,9 @@ async fn main() {
         cpu_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(slots)),
     });
 
-    // SPA static serving: explicit BACTIMENT_STATIC_DIR, then frontend/dist
+    // SPA static serving: explicit STRAINCOMPASS_STATIC_DIR, then frontend/dist
     // next to the data dir, then ./frontend/dist
-    let dist = std::env::var_os("BACTIMENT_STATIC_DIR")
+    let dist = std::env::var_os("STRAINCOMPASS_STATIC_DIR")
         .map(std::path::PathBuf::from)
         .filter(|p| p.exists())
         .or_else(|| {
@@ -202,7 +203,7 @@ async fn main() {
         .await
         .expect("cannot bind");
     tracing::info!(
-        "bactiment listening on http://{bind} (data: {}, {} parallel slots)",
+        "straincompass listening on http://{bind} (data: {}, {} parallel slots)",
         data_dir.display(),
         slots
     );
@@ -250,7 +251,7 @@ mod routes {
 
         pub async fn list() -> Json<serde_json::Value> {
             Json(json!({
-                "schema": bactiment_types::param_schema(),
+                "schema": straincompass_types::param_schema(),
                 "presets": ["default", "strict", "loose"],
             }))
         }

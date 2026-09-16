@@ -1,5 +1,5 @@
 [package]
-name = "bactiment-types"
+name = "straincompass-types"
 version.workspace = true
 edition.workspace = true
 

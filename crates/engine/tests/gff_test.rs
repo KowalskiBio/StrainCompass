@@ -1,6 +1,6 @@
 //! GFF parsing tests (pure, no external tools).
 
-use bactiment_engine::gff::parse_gff_str;
+use straincompass_engine::gff::parse_gff_str;
 
 #[test]
 fn gene_features_get_product_from_matching_cds() {

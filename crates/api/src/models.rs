@@ -28,6 +28,9 @@ pub struct FileDto {
 pub struct RunDto {
     pub id: i64,
     pub project_id: i64,
+    /// User-chosen label. None means "never renamed", and the UI falls back
+    /// to "Run #<id>".
+    pub name: Option<String>,
     pub status: String,
     pub step: Option<String>,
     pub error: Option<String>,

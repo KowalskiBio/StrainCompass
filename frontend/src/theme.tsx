@@ -8,7 +8,7 @@ import {
 
 type Theme = "light" | "dark";
 
-const STORAGE_KEY = "bactiment-theme";
+const STORAGE_KEY = "straincompass-theme";
 
 function initialTheme(): Theme {
   try {

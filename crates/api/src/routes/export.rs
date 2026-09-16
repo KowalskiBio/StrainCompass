@@ -9,7 +9,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::header;
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
-use bactiment_types::{Call, GeneCoverageRow, TableQuery};
+use straincompass_types::{Call, GeneCoverageRow, TableQuery};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]

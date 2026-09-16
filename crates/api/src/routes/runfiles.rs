@@ -220,7 +220,7 @@ pub async fn export_gene_alignment(
     let (ref_fa, ref_gff, params, sources) = jobs::msa_sources(&state, project_id, run_id)?;
     let borrowed: Vec<_> = sources.iter().map(|s| s.borrow()).collect();
     let detail =
-        bactiment_engine::pipeline::gene_detail(&ref_fa, &ref_gff, &params, &locus, &borrowed)?;
+        straincompass_engine::pipeline::gene_detail(&ref_fa, &ref_gff, &params, &locus, &borrowed)?;
     let clustal = q.format.as_deref() == Some("clustal");
     let (body, ext, mime) = if clustal {
         (clustal_format(&detail), "aln", "text/plain; charset=utf-8")
@@ -247,7 +247,7 @@ pub struct GeneExportQ {
     pub format: Option<String>,
 }
 
-fn fasta_format(d: &bactiment_types::GeneDetail) -> String {
+fn fasta_format(d: &straincompass_types::GeneDetail) -> String {
     let mut out = format!(">{}_reference\n", d.locus_tag);
     for q in &d.queries {
         out.push_str(&format!(
@@ -297,10 +297,10 @@ fn fasta_format(d: &bactiment_types::GeneDetail) -> String {
     out
 }
 
-fn clustal_format(d: &bactiment_types::GeneDetail) -> String {
+fn clustal_format(d: &straincompass_types::GeneDetail) -> String {
     // simple clustal-like output: one block per alignment block, aligned
     // rows per query, 60 columns per line
-    let mut out = String::from("CLUSTAL W (bactiment) multiple sequence alignment\n\n");
+    let mut out = String::from("CLUSTAL W (straincompass) multiple sequence alignment\n\n");
     let mut block_no = 0;
     let max_name = d
         .queries

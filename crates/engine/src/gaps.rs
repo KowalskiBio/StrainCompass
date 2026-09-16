@@ -2,7 +2,7 @@
 
 use crate::delta::DeltaFile;
 use crate::gff::Gene;
-use bactiment_types::GapRow;
+use straincompass_types::GapRow;
 use std::collections::HashMap;
 
 /// Compute unaligned regions (>= min_gap bp) per reference sequence, with

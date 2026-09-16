@@ -44,6 +44,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(msg);
   }
+  // Not every endpoint answers with JSON: the delete routes used to reply with
+  // a bare "deleted", and resp.json() then threw AFTER the server had already
+  // done the work. The caller saw "Unexpected token 'd'" and assumed the
+  // delete had failed, when it had succeeded. Only parse when the server says
+  // it sent JSON.
+  const contentType = resp.headers.get("content-type") ?? "";
+  if (resp.status === 204 || !contentType.includes("application/json")) {
+    return undefined as T;
+  }
   return resp.json() as Promise<T>;
 }
 
@@ -63,7 +72,7 @@ export const api = {
       body: JSON.stringify({ name }),
     }),
   deleteProject: (id: number) =>
-    request<string>(`/projects/${id}`, { method: "DELETE" }),
+    request<void>(`/projects/${id}`, { method: "DELETE" }),
 
   listFiles: (projectId: number) =>
     request<ProjectFile[]>(`/projects/${projectId}/files`),
@@ -116,7 +125,7 @@ export const api = {
       },
     ),
   deleteFile: (projectId: number, fileId: number) =>
-    request<string>(`/projects/${projectId}/files/${fileId}`, {
+    request<void>(`/projects/${projectId}/files/${fileId}`, {
       method: "DELETE",
     }),
 
@@ -129,8 +138,14 @@ export const api = {
   listRuns: (projectId: number) =>
     request<Run[]>(`/projects/${projectId}/runs`),
   getRun: (runId: number) => request<RunWithLogs>(`/runs/${runId}`),
+  renameRun: (runId: number, name: string) =>
+    request<Run>(`/runs/${runId}/name`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    }),
   deleteRun: (runId: number) =>
-    request<string>(`/runs/${runId}`, { method: "DELETE" }),
+    request<void>(`/runs/${runId}`, { method: "DELETE" }),
   getRunParams: (runId: number) =>
     request<{ params: RunParams; defaults: RunParams; schema: ParamSpecLike[] }>(
       `/runs/${runId}/params`,

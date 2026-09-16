@@ -15,7 +15,7 @@ export default function App() {
             <span className="w-8 h-8 rounded-md bg-zinc-900 text-white grid place-items-center font-bold text-sm dark:bg-zinc-100 dark:text-zinc-900">
               b
             </span>
-            <span className="text-lg font-semibold tracking-tight">bactiment</span>
+            <span className="text-lg font-semibold tracking-tight">straincompass</span>
           </Link>
           <div className="flex items-center gap-1">
             <nav className="flex items-center gap-1">
@@ -54,7 +54,7 @@ export default function App() {
       </main>
       <footer className="border-t border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
         <div className="max-w-[1600px] mx-auto px-6 py-3 text-sm text-zinc-400 dark:text-zinc-500">
-          bactiment: bacterial genome comparison workbench
+          straincompass: bacterial genome comparison workbench
         </div>
       </footer>
     </div>

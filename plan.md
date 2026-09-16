@@ -1,4 +1,4 @@
-# bactiment
+# straincompass
 
 Bacterial genome comparison workbench: compare one or more query genomes
 (draft or complete assemblies) against an annotated reference, inspect the
@@ -176,8 +176,8 @@ GET    /settings                    show masked key + status
 
 ### Backend (Rust workspace)
 
-- **Crates**: `bactiment-engine` (pipeline, no web code), `bactiment-api`
-  (HTTP server), `bactiment-types` (shared DTOs + parameter model). The
+- **Crates**: `straincompass-engine` (pipeline, no web code), `straincompass-api`
+  (HTTP server), `straincompass-types` (shared DTOs + parameter model). The
   engine has no dependency on axum or the DB, so the Tauri build uses it
   directly.
 - **API server**: axum + tokio. Owns projects, files, runs, users.
@@ -416,3 +416,28 @@ GET    /projects/{id}/usage          storage used by the project
   with the BLAST recheck panel.
 - A fully aligned gene can still carry a premature stop codon; sequence
   presence does not prove a functional ORF.
+
+## NCBI cross references (added 2026-09-15)
+
+Reference genes now carry `protein_id`, `product` and `gene_id`, so the
+results table has a "Protein (NCBI)" column and the alignment dialog links
+the gene name straight to NCBI.
+
+The catch the implementation has to handle: RefSeq GFFs put `protein_id`
+and `product` on the **CDS** child, not on the `gene` feature. Both the R
+script and the engine read gene-level features only, so neither could see
+an accession. Both now join the CDS attributes back by the shared
+`locus_tag` (first CDS wins for genes with several children).
+
+Link priority, identical in `frontend/src/ncbi.ts` and the R script so the
+TSV and the web UI point at the same record:
+
+1. `Dbxref=GeneID:<n>` -> `/gene/<n>` (best, but older RefSeq GFFs lack it;
+   NC_003212.1 has zero)
+2. `protein_id=WP_...` -> `/protein/<acc>` (3089 of 3219 genes in EGD-e)
+3. sequence accession + coordinates -> `/nuccore/<seqid>?from=&to=`
+   (always resolves, and is what pseudogenes and RNAs fall back to)
+
+Note the table column is written into each query's stored results at run
+time, so runs made before this change show "-" until re-run. The alignment
+dialog re-parses the GFF live and therefore works on old runs immediately.

@@ -16,6 +16,13 @@ class ErrorBoundary extends React.Component<
     return { error };
   }
 
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    // Without this the card below shows a bare message like "The operation
+    // is insecure." with no hint of where it came from, which is close to
+    // undiagnosable from a screenshot.
+    console.error("straincompass crashed:", error, info.componentStack);
+  }
+
   render() {
     if (this.state.error) {
       return (
@@ -30,6 +37,7 @@ class ErrorBoundary extends React.Component<
             </p>
             <pre className="mt-3 text-xs text-red-700 bg-white/60 rounded-lg p-3 overflow-auto max-h-40 font-mono">
               {this.state.error.message}
+              {this.state.error.stack ? `\n\n${this.state.error.stack}` : ""}
             </pre>
             <div className="mt-4 flex gap-3">
               <button

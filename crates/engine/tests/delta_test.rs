@@ -1,4 +1,4 @@
-use bactiment_engine::delta::parse_delta_str;
+use straincompass_engine::delta::parse_delta_str;
 
 /// The exact delta output of a controlled nucmer run:
 /// reference 3000bp, query 3003bp with 5 SNPs (ref 301,601,901,1201,1501),
@@ -53,7 +53,7 @@ fn parses_and_scores_like_show_coords() {
 
 #[test]
 fn reconstructs_alignment_rows() {
-    use bactiment_engine::msa;
+    use straincompass_engine::msa;
     let d = parse_delta_str(DELTA).unwrap();
     let a = &d.alignments[0];
     // Deterministic reference and the matching query: build ref, then apply
@@ -117,7 +117,7 @@ fn reconstructs_alignment_rows() {
 #[test]
 fn merged_intervals() {
     let mut ivs = vec![(10u64, 20u64), (5, 8), (21, 30), (40, 50)];
-    bactiment_engine::delta::merge_intervals(&mut ivs);
+    straincompass_engine::delta::merge_intervals(&mut ivs);
     assert_eq!(ivs, vec![(5, 8), (10, 30), (40, 50)]);
 }
 

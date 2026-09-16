@@ -5,13 +5,13 @@ use crate::models::{RunDto, RunLogDto, RunQueryDto};
 use crate::state::SharedState;
 use axum::extract::{Path, State};
 use axum::Json;
-use bactiment_types::{validate_params, RunParams};
+use straincompass_types::{validate_params, RunParams};
 use serde::Deserialize;
 use std::sync::MutexGuard;
 
 fn run_dto(conn: &MutexGuard<'_, rusqlite::Connection>, run_id: i64) -> ApiResult<Option<RunDto>> {
     let Ok(row) = conn.query_row(
-        "SELECT id, project_id, status, step, error, created_at, started_at, finished_at, query_ids
+        "SELECT id, project_id, status, step, error, created_at, started_at, finished_at, query_ids, name
          FROM runs WHERE id = ?1",
         [run_id],
         |r| {
@@ -25,12 +25,14 @@ fn run_dto(conn: &MutexGuard<'_, rusqlite::Connection>, run_id: i64) -> ApiResul
                 r.get::<_, Option<String>>(6)?,
                 r.get::<_, Option<String>>(7)?,
                 r.get::<_, String>(8)?,
+                r.get::<_, Option<String>>(9)?,
             ))
         },
     ) else {
         return Ok(None);
     };
-    let (id, project_id, status, step, error, created_at, started_at, finished_at, query_ids) = row;
+    let (id, project_id, status, step, error, created_at, started_at, finished_at, query_ids, name) =
+        row;
     let has_panel: bool = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM files WHERE project_id = ?1 AND role = 'panel')",
@@ -53,6 +55,7 @@ fn run_dto(conn: &MutexGuard<'_, rusqlite::Connection>, run_id: i64) -> ApiResul
     Ok(Some(RunDto {
         id,
         project_id,
+        name,
         status,
         step,
         error,
@@ -183,10 +186,47 @@ pub async fn list_for_project(
 }
 
 /// DELETE /runs/{id}
+#[derive(Deserialize)]
+pub struct RenameRun {
+    pub name: String,
+}
+
+/// PUT /runs/{id}/name : label a run so results are identifiable later.
+/// An empty name clears the label and the run goes back to "Run #<id>".
+pub async fn rename(
+    State(state): State<SharedState>,
+    Path(run_id): Path<i64>,
+    Json(body): Json<RenameRun>,
+) -> ApiResult<Json<RunDto>> {
+    let trimmed = body.name.trim();
+    if trimmed.chars().count() > 120 {
+        return Err(ApiError::BadRequest(
+            "That name is too long. Please keep it under 120 characters.".into(),
+        ));
+    }
+    let name: Option<String> = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    };
+    let conn = state.db.lock().unwrap();
+    let n = conn.execute(
+        "UPDATE runs SET name = ?1 WHERE id = ?2",
+        rusqlite::params![name, run_id],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound("This run does not exist (anymore).".into()));
+    }
+    let dto = run_dto(&conn, run_id)?;
+    drop(conn);
+    dto.map(Json)
+        .ok_or_else(|| ApiError::NotFound("This run does not exist (anymore).".into()))
+}
+
 pub async fn delete(
     State(state): State<SharedState>,
     Path(run_id): Path<i64>,
-) -> ApiResult<&'static str> {
+) -> ApiResult<Json<serde_json::Value>> {
     let project_id: Option<i64> = {
         let conn = state.db.lock().unwrap();
         conn.query_row("SELECT project_id FROM runs WHERE id = ?1", [run_id], |r| {
@@ -206,7 +246,7 @@ pub async fn delete(
     }
     let dir = state.run_dir(project_id, run_id);
     let _ = std::fs::remove_dir_all(dir);
-    Ok("deleted")
+    Ok(Json(serde_json::json!({ "status": "deleted" })))
 }
 
 /// GET /runs/{id}/params : the parameter set used, plus the defaults.
@@ -233,7 +273,7 @@ pub async fn params(
     Ok(Json(serde_json::json!({
         "params": params,
         "defaults": RunParams::default(),
-        "schema": bactiment_types::param_schema(),
+        "schema": straincompass_types::param_schema(),
         "presets": ["default", "strict", "loose"],
     })))
 }

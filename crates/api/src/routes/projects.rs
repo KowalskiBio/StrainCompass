@@ -182,7 +182,7 @@ pub async fn rename(
 pub async fn delete(
     State(state): State<SharedState>,
     Path(id): Path<i64>,
-) -> ApiResult<&'static str> {
+) -> ApiResult<Json<serde_json::Value>> {
     let conn = state.db.lock().unwrap();
     let n = conn.execute("DELETE FROM projects WHERE id = ?1", [id])?;
     if n == 0 {
@@ -199,5 +199,5 @@ pub async fn delete(
             ))
         })?;
     }
-    Ok("deleted")
+    Ok(Json(serde_json::json!({ "status": "deleted" })))
 }

@@ -13,7 +13,7 @@ fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .connect_timeout(Duration::from_secs(20))
-        .user_agent("bactiment/0.1")
+        .user_agent("straincompass/0.1")
         .build()
         .expect("reqwest client")
 }

@@ -6,7 +6,7 @@ use crate::jobs;
 use crate::state::SharedState;
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use bactiment_types::{
+use straincompass_types::{
     Call, GapRow, GeneCoverageRow, GeneDetail, MatrixRow, Page, PanelRow, TableQuery, WgaData,
     WgaQuery,
 };
@@ -273,7 +273,7 @@ pub async fn wga(
     let reference: Value = jobs::load_reference_json(&state, project_id, run_id)?;
     let lengths: Vec<(String, u64)> = serde_json::from_value(reference["lengths"].clone())
         .map_err(|_| ApiError::Internal("The reference metadata is unreadable.".into()))?;
-    let genes: Vec<bactiment_types::WgaGene> =
+    let genes: Vec<straincompass_types::WgaGene> =
         serde_json::from_value(reference["genes"].clone())
             .map_err(|_| ApiError::Internal("The reference metadata is unreadable.".into()))?;
     let mut queries = Vec::new();
@@ -281,7 +281,7 @@ pub async fn wga(
         let res = jobs::load_query_result(&state, project_id, run_id, *qid)?;
         // Calls per gene, aligned with the reference gene list (keyed by
         // locus tag; genes missing from the coverage table count as absent).
-        let by_tag: std::collections::HashMap<&str, &bactiment_types::GeneCoverageRow> = res
+        let by_tag: std::collections::HashMap<&str, &straincompass_types::GeneCoverageRow> = res
             .genes_coverage
             .iter()
             .map(|r| (r.locus_tag.as_str(), r))
@@ -328,7 +328,7 @@ pub async fn gene_detail(
     let (ref_fa, ref_gff, params, sources) = jobs::msa_sources(&state, project_id, run_id)?;
     let borrowed: Vec<_> = sources.iter().map(|s| s.borrow()).collect();
     let detail =
-        bactiment_engine::pipeline::gene_detail(&ref_fa, &ref_gff, &params, &locus, &borrowed)?;
+        straincompass_engine::pipeline::gene_detail(&ref_fa, &ref_gff, &params, &locus, &borrowed)?;
     Ok(Json(detail))
 }
 
@@ -337,7 +337,7 @@ pub async fn gene_detail(
 pub async fn alignment(
     State(state): State<SharedState>,
     Path(run_id): Path<i64>,
-) -> ApiResult<Json<bactiment_types::AlignmentData>> {
+) -> ApiResult<Json<straincompass_types::AlignmentData>> {
     let (project_id, query_ids, status) = jobs::run_meta(&state, run_id)?;
     if status != "succeeded" {
         return Err(ApiError::BadRequest(
@@ -355,7 +355,7 @@ pub async fn alignment(
         for qid in &query_ids {
             let res = jobs::load_query_result(&state, project_id, run_id, *qid)?;
             let events = jobs::load_variants(&state, project_id, run_id, *qid)?;
-            out.push(bactiment_types::AlignmentQuery {
+            out.push(straincompass_types::AlignmentQuery {
                 query_id: *qid,
                 query_name: res.query_name.clone(),
                 blocks: res.blocks,
@@ -367,7 +367,7 @@ pub async fn alignment(
     .await
     .map_err(|e| ApiError::Internal(format!("The alignment task crashed. ({e})")))??;
 
-    Ok(Json(bactiment_types::AlignmentData {
+    Ok(Json(straincompass_types::AlignmentData {
         reference: lengths,
         queries,
     }))
@@ -401,13 +401,13 @@ pub async fn refseq(
         .project_dir(project_id)
         .join("reference")
         .join("ref.fa");
-    let records = bactiment_engine::fasta::parse_fasta(&ref_fa)?;
+    let records = straincompass_engine::fasta::parse_fasta(&ref_fa)?;
     let rec = records
         .iter()
         .find(|r| r.id == q.seqid)
         .ok_or_else(|| ApiError::NotFound("This reference sequence does not exist.".into()))?;
     let end = end.min(rec.seq.len() as u64);
-    let seq = String::from_utf8_lossy(&bactiment_engine::fasta::subseq(rec, start, end, false))
+    let seq = String::from_utf8_lossy(&straincompass_engine::fasta::subseq(rec, start, end, false))
         .into_owned();
     Ok(Json(serde_json::json!({
         "seqid": q.seqid,
@@ -421,14 +421,14 @@ pub async fn refseq(
 mod tests {
     use super::*;
     use crate::state::AppState;
-    use bactiment_types::RunParams;
+    use straincompass_types::RunParams;
     use std::sync::{Arc, Mutex};
 
     /// A tiny finished run on disk: one reference (chr1, 8 bp) and one
     /// query whose delta encodes an insertion, two deletions and a SNP
     /// (the same fixture the engine variant tests use).
     fn seeded_state() -> (SharedState, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!("bactiment-api-test-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("straincompass-api-test-{}", uuid::Uuid::new_v4()));
         let run_dir = dir.join("projects/1/runs/1");
         let qdir = run_dir.join("queries/10");
         std::fs::create_dir_all(qdir.join("work")).unwrap();

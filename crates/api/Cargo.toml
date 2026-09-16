@@ -1,15 +1,15 @@
 [package]
-name = "bactiment-api"
+name = "straincompass-api"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "bactiment-api"
+name = "straincompass-api"
 path = "src/main.rs"
 
 [dependencies]
-bactiment-types = { path = "../types" }
-bactiment-engine = { path = "../engine" }
+straincompass-types = { path = "../types" }
+straincompass-engine = { path = "../engine" }
 axum = { version = "0.8", features = ["multipart", "macros"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["fs", "set-header", "compression-gzip"] }

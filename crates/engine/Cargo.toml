@@ -1,10 +1,10 @@
 [package]
-name = "bactiment-engine"
+name = "straincompass-engine"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-bactiment-types = { path = "../types" }
+straincompass-types = { path = "../types" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

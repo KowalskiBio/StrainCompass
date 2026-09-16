@@ -11,7 +11,7 @@ use crate::delta::{Alignment, DeltaFile};
 use crate::fasta::{self, FastaRecord};
 use crate::msa;
 use crate::Result;
-use bactiment_types::{AlignmentEvents, DelEvent, InsEvent, SnpEvent};
+use straincompass_types::{AlignmentEvents, DelEvent, InsEvent, SnpEvent};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 

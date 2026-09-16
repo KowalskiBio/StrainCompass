@@ -5,7 +5,7 @@ use crate::models::FileDto;
 use crate::state::SharedState;
 use axum::extract::{Multipart, Path, State};
 use axum::Json;
-use bactiment_engine::fasta;
+use straincompass_engine::fasta;
 use std::io::Write;
 use uuid::Uuid;
 
@@ -66,7 +66,7 @@ async fn store_upload(
             })?;
         }
         "reference_gff" => {
-            bactiment_engine::gff::parse_gff_str(&text).map_err(|e| {
+            straincompass_engine::gff::parse_gff_str(&text).map_err(|e| {
                 ApiError::BadRequest(format!("\u{201c}{display_name}\u{201d}: {}", e))
             })?;
         }
@@ -289,7 +289,7 @@ async fn build_panel(
     };
     let ids_text = ids_text.to_string();
     let panel = tokio::task::spawn_blocking(move || {
-        bactiment_engine::panel::panel_from_ids(&ref_fasta, &ref_gff, &ids_text)
+        straincompass_engine::panel::panel_from_ids(&ref_fasta, &ref_gff, &ids_text)
     })
     .await
     .map_err(|e| ApiError::Internal(format!("The panel could not be built. ({e})")))??;
@@ -316,7 +316,7 @@ async fn build_panel(
             let c = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(60))
                 .connect_timeout(std::time::Duration::from_secs(20))
-                .user_agent("bactiment/0.1")
+                .user_agent("straincompass/0.1")
                 .build()
                 .map_err(|e| ApiError::Internal(format!("NCBI could not be reached. ({e})")))?;
             let mut unresolved: Vec<String> = Vec::new();
@@ -435,7 +435,7 @@ pub async fn list_files(
 pub async fn delete_file(
     State(state): State<SharedState>,
     Path((project_id, file_id)): Path<(i64, i64)>,
-) -> ApiResult<&'static str> {
+) -> ApiResult<Json<serde_json::Value>> {
     ensure_project(&state, project_id).await?;
     let stored_name: Option<String> = {
         let conn = state.db.lock().unwrap();
@@ -457,7 +457,7 @@ pub async fn delete_file(
     }
     let path = state.uploads_dir(project_id).join(stored_name);
     let _ = std::fs::remove_file(path);
-    Ok("deleted")
+    Ok(Json(serde_json::json!({ "status": "deleted" })))
 }
 
 pub async fn delete_role(state: &SharedState, project_id: i64, role: &str) -> ApiResult<()> {

@@ -5,9 +5,9 @@
 //! inserted query base (gap in the reference row), `d > 0` = one deleted
 //! reference base (gap in the query row).
 
-use bactiment_engine::delta::parse_delta_str;
-use bactiment_engine::fasta::parse_fasta_str;
-use bactiment_engine::variants::variant_events;
+use straincompass_engine::delta::parse_delta_str;
+use straincompass_engine::fasta::parse_fasta_str;
+use straincompass_engine::variants::variant_events;
 
 const REF_FASTA: &str = ">chr1\nACGTACGT\n";
 
@@ -15,7 +15,7 @@ fn delta(body: &str) -> String {
     format!(">chr1 q1\n{body}\n")
 }
 
-fn events(text: &str) -> std::collections::BTreeMap<String, bactiment_types::AlignmentEvents> {
+fn events(text: &str) -> std::collections::BTreeMap<String, straincompass_types::AlignmentEvents> {
     let delta = parse_delta_str(text).unwrap();
     let ref_records = parse_fasta_str(REF_FASTA).unwrap();
     let qry_records = parse_fasta_str(">q1\nGGAAGT\n").unwrap();

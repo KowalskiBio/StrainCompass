@@ -25,7 +25,7 @@ fn find_tool(name: &str, extra_dirs: &[PathBuf]) -> std::result::Result<PathBuf,
         return Ok(path);
     }
     Err(EngineError::ToolMissing(format!(
-        "The tool {name} was not found. Install MUMmer / BLAST+ or set BACTIMENT_TOOLS_DIRS."
+        "The tool {name} was not found. Install MUMmer / BLAST+ or set STRAINCOMPASS_TOOLS_DIRS."
     )))
 }
 
@@ -46,10 +46,10 @@ fn which(name: &str) -> std::result::Result<PathBuf, EngineError> {
 }
 
 impl ToolPaths {
-    /// Discover tools from extra dirs (from BACTIMENT_TOOLS_DIRS, colon
+    /// Discover tools from extra dirs (from STRAINCOMPASS_TOOLS_DIRS, colon
     /// separated) then from PATH.
     pub fn discover() -> Result<ToolPaths> {
-        let extra: Vec<PathBuf> = std::env::var("BACTIMENT_TOOLS_DIRS")
+        let extra: Vec<PathBuf> = std::env::var("STRAINCOMPASS_TOOLS_DIRS")
             .map(|v| {
                 v.split(':')
                     .filter(|s| !s.is_empty())
@@ -137,6 +137,12 @@ impl ToolPaths {
                 "The overall comparison report (dnadiff) could not be computed. {msg}"
             )));
         }
+        // dnadiff always writes <prefix>.snps, a full SNP listing that runs
+        // ~19 MB per bacterial genome pair. Nothing reads it: not the engine,
+        // not the API, and it is not in the Files panel whitelist. It was 305
+        // MB of a 440 MB project on disk. Drop it once the report exists;
+        // failing to delete it must never fail the run.
+        let _ = std::fs::remove_file(out_dir.join(format!("{prefix}.snps")));
         Ok(report)
     }
 }

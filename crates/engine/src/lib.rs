@@ -1,4 +1,4 @@
-//! bactiment-engine: the analysis pipeline as a library with no web or
+//! straincompass-engine: the analysis pipeline as a library with no web or
 //! database dependencies. Ports the logic of the original R script
 //! (compare_genome_vs_reference.R) to Rust.
 

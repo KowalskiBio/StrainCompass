@@ -47,6 +47,32 @@ pub fn init_db(conn: &Connection) -> ApiResult<()> {
         );
         ",
     )?;
+    // Additive migrations. CREATE TABLE IF NOT EXISTS does nothing to an
+    // existing table, and SQLite has no ADD COLUMN IF NOT EXISTS, so each new
+    // column is checked against pragma table_info. Cheap on every start and it
+    // keeps databases created before the column working untouched.
+    add_column_if_missing(conn, "runs", "name", "TEXT")?;
+    Ok(())
+}
+
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    decl: &str,
+) -> ApiResult<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let present = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|c| c == column);
+    drop(stmt);
+    if !present {
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
+            [],
+        )?;
+    }
     Ok(())
 }
 

@@ -14,7 +14,7 @@ pub enum ApiError {
     #[error("{0}")]
     Internal(String),
     #[error(transparent)]
-    Engine(#[from] bactiment_engine::EngineError),
+    Engine(#[from] straincompass_engine::EngineError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]

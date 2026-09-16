@@ -8,7 +8,7 @@ use crate::gaps;
 use crate::gff;
 use crate::tools::ToolPaths;
 use crate::Result;
-use bactiment_types::{GapRow, GeneCoverageRow, PanelRow, RunParams, WgaBlock, WgaGene};
+use straincompass_types::{GapRow, GeneCoverageRow, PanelRow, RunParams, WgaBlock, WgaGene};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Write;
@@ -306,7 +306,7 @@ pub fn gene_detail(
     params: &RunParams,
     locus_tag: &str,
     sources: &[QueryAlignmentSource<'_>],
-) -> Result<bactiment_types::GeneDetail> {
+) -> Result<straincompass_types::GeneDetail> {
     let genes = gff::parse_gff(ref_gff)?;
     let gene = genes
         .iter()
@@ -369,7 +369,7 @@ pub fn gene_detail(
                 // because we reversed the rows wholesale.
             }
             let _ = (&mut ref_row, &mut qry_row);
-            blocks.push(bactiment_types::GeneBlock {
+            blocks.push(straincompass_types::GeneBlock {
                 ref_start: slice.ref_start.max(gene.start),
                 ref_end: slice.ref_end.min(gene.end),
                 qry_start: slice.qry_start,
@@ -415,13 +415,13 @@ pub fn gene_detail(
         }
         let stops = crate::msa::premature_stops(&qry_seq_gene)
             .into_iter()
-            .map(|(ci, aa)| bactiment_types::PrematureStop {
+            .map(|(ci, aa)| straincompass_types::PrematureStop {
                 codon_index: ci,
                 aa_position: aa,
             })
             .collect();
 
-        queries.push(bactiment_types::GeneQueryAlignment {
+        queries.push(straincompass_types::GeneQueryAlignment {
             query_id: src.query_id,
             query_name: src.query_name.clone(),
             call: cov.call,
@@ -435,7 +435,7 @@ pub fn gene_detail(
         });
     }
 
-    Ok(bactiment_types::GeneDetail {
+    Ok(straincompass_types::GeneDetail {
         locus_tag: gene.locus_tag.clone(),
         symbol: gene.symbol.clone(),
         biotype: gene.biotype.clone(),

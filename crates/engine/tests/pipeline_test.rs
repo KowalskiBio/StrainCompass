@@ -1,9 +1,9 @@
 //! End-to-end engine test against real MUMmer + BLAST+.
 //! Skipped when the tools are not on this machine (e.g. plain CI).
 
-use bactiment_engine::pipeline::{self, ComparisonInputs, WorkDirs};
-use bactiment_engine::tools::ToolPaths;
-use bactiment_types::{Call, RunParams};
+use straincompass_engine::pipeline::{self, ComparisonInputs, WorkDirs};
+use straincompass_engine::tools::ToolPaths;
+use straincompass_types::{Call, RunParams};
 use std::io::Write;
 
 fn tools_available() -> Option<ToolPaths> {
@@ -145,7 +145,7 @@ fn full_pipeline_with_real_tools() {
         eprintln!("skipping: MUMmer/BLAST+ not found");
         return;
     };
-    let dir = std::env::temp_dir().join(format!("bactiment-test-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("straincompass-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let ref_seq = build_fixture(&dir);
@@ -299,11 +299,11 @@ fn reverse_complement_query_full_coverage() {
         eprintln!("skipping: MUMmer/BLAST+ not found");
         return;
     };
-    let dir = std::env::temp_dir().join(format!("bactiment-rc-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("straincompass-rc-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let ref_seq = build_fixture(&dir);
-    let rc = bactiment_engine::fasta::revcomp(&ref_seq);
+    let rc = straincompass_engine::fasta::revcomp(&ref_seq);
     write_fasta(&dir.join("qrc.fa"), "rc_ctg", &rc);
 
     let params = params();

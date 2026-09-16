@@ -2,7 +2,7 @@
 
 use crate::tools::ToolPaths;
 use crate::{friendly, Result};
-use bactiment_types::{Call, PanelRow};
+use straincompass_types::{Call, PanelRow};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
