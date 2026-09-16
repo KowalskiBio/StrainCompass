@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { AlignmentData, DelEvent, InsEvent, RefseqWindow, Run, SnpEvent } from "../types";
 import { Spinner } from "./ui";
+import { useWheelGestures } from "./useWheelGestures";
 
 /**
  * Whole-genome alignment viewer in the style of Oligool's MSA viewer
@@ -423,25 +424,40 @@ export function AlignmentView({
     });
   };
 
-  /* ── Ctrl/Cmd + wheel = zoom (ported) ── */
-  const handleWheel = (e: React.WheelEvent) => {
-    if (e.ctrlKey || e.metaKey) {
-      e.preventDefault();
-      const factor = e.deltaY > 0 ? 1.15 : 0.87;
+  /* ── pinch / wheel = zoom (zoom maths ported from Oligool) ── */
+  // Attached natively rather than through React's onWheel: React registers wheel
+  // as a passive listener, so preventDefault() there never runs and a macOS
+  // trackpad pinch falls through to the browser's own page zoom.
+  const setWheelEl = useWheelGestures<HTMLDivElement>(
+    (g) => {
+      if (g.kind !== "zoom") return;
       const rect = scrollRef.current?.getBoundingClientRect();
       if (!rect) return;
-      const offsetX = Math.max(0, Math.min(seqAreaW, e.clientX - rect.left - labelWidth));
+      const offsetX = Math.max(
+        0,
+        Math.min(seqAreaW, g.clientX - rect.left - labelWidth),
+      );
       const currentTotalVirtualW = seqAreaW / viewFraction;
       const mouseFracGlobal = (scrollLeft + offsetX) / currentTotalVirtualW;
-      const newVF = Math.max(0.005, Math.min(1, viewFraction * factor));
+      const newVF = Math.max(0.005, Math.min(1, viewFraction * g.factor));
       const newTotalVirtualW = seqAreaW / newVF;
       let newSL = mouseFracGlobal * newTotalVirtualW - offsetX;
       newSL = Math.max(0, Math.min(newTotalVirtualW - seqAreaW, newSL));
       setViewFraction(newVF);
       setScrollLeft(newSL);
       targetScrollRef.current = newSL;
-    }
-  };
+    },
+    // Unmodified scrolling stays with the browser: this element scrolls natively.
+    { capturePan: false },
+  );
+
+  const setScrollEl = useCallback(
+    (n: HTMLDivElement | null) => {
+      scrollRef.current = n;
+      setWheelEl(n);
+    },
+    [setWheelEl],
+  );
 
   /* ── main canvas drawing ── */
   const startFrac = totalVirtualW > 0 ? scrollLeft / totalVirtualW : 0;
@@ -1202,11 +1218,10 @@ export function AlignmentView({
 
         {/* scrollable canvas area */}
         <div
-          ref={scrollRef}
+          ref={setScrollEl}
           className={`thin-scroll relative overscroll-contain ${viewFraction >= 0.99 ? "overflow-x-hidden" : "overflow-x-auto"}`}
           style={{ height: `${Math.min(totalH, MAX_VIEWER_HEIGHT)}px` }}
           onScroll={handleScroll}
-          onWheel={handleWheel}
         >
           <div
             style={{

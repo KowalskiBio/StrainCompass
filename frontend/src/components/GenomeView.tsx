@@ -1,13 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { AlignmentData, Call, Run, WgaData, WgaGene } from "../types";
 import { Spinner } from "./ui";
+import { useWheelGestures } from "./useWheelGestures";
+import { clampRange, panRange, zoomRange } from "./genomeRange";
+import type { Range } from "./genomeRange";
 
 /** Show SNP/indel markers once the visible window is below this span. */
 const VARIANT_SPAN = 20000;
 /** A gene rectangle gets its label once it is this wide in pixels. */
 const LABEL_MIN_W = 42;
-
+/** Width used until the container has been measured. */
+const FALLBACK_WIDTH = 1100;
 /** Variant marker colors, shared with the Alignment view (Oligool palette). */
 const SNP_COLOR = "#dc2626";
 const INS_COLOR = "#3b82f6";
@@ -43,10 +47,20 @@ export function GenomeView({
   const [data, setData] = useState<WgaData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [seqid, setSeqid] = useState(initialRange?.seqid ?? "");
-  const [range, setRange] = useState<{ start: number; end: number } | null>(
+  const [range, setRange] = useState<Range | null>(
     initialRange ? { start: initialRange.start, end: initialRange.end } : null,
   );
   const svgRef = useRef<SVGSVGElement>(null);
+  /** The map container, measured for width and owning the wheel gestures. */
+  const [mapEl, setMapEl] = useState<HTMLDivElement | null>(null);
+  const [measuredW, setMeasuredW] = useState(0);
+  /**
+   * Zoom re-projects every gene rather than transforming a layer, so a burst of
+   * wheel events would otherwise re-render the whole map several times a frame.
+   * Gestures accumulate here and are committed once per frame.
+   */
+  const pendingRangeRef = useRef<Range | null>(null);
+  const rangeRafRef = useRef(0);
   const initialGeneRef = useRef(initialGene);
   const [popup, setPopup] = useState<{
     x: number;
@@ -171,6 +185,57 @@ export function GenomeView({
 
   const showMarkers = Boolean(variantEvents) && span < VARIANT_SPAN;
 
+  // Size the map to its container instead of a fixed width.
+  useEffect(() => {
+    if (!mapEl) return;
+    const ro = new ResizeObserver(([entry]) => {
+      setMeasuredW(Math.max(1, Math.round(entry.contentRect.width)));
+    });
+    ro.observe(mapEl);
+    return () => ro.disconnect();
+  }, [mapEl]);
+
+  // Keep the gesture target in step with range changes from the buttons and the
+  // range input, so the next gesture builds on what is actually on screen.
+  useEffect(() => {
+    pendingRangeRef.current = range;
+  }, [range]);
+
+  useEffect(() => () => cancelAnimationFrame(rangeRafRef.current), []);
+
+  const applyRange = useCallback((r: Range) => {
+    pendingRangeRef.current = r;
+    if (rangeRafRef.current) return;
+    rangeRafRef.current = requestAnimationFrame(() => {
+      rangeRafRef.current = 0;
+      if (pendingRangeRef.current) setRange(pendingRangeRef.current);
+    });
+  }, []);
+
+  const setWheelEl = useWheelGestures<HTMLDivElement>((g) => {
+    const base = pendingRangeRef.current;
+    if (!base || !seqLength || !mapEl) return;
+    const rect = mapEl.getBoundingClientRect();
+    if (!rect.width) return;
+    if (g.kind === "pan") {
+      applyRange(
+        panRange(base, (g.dx / rect.width) * (base.end - base.start), seqLength),
+      );
+      return;
+    }
+    const frac = (g.clientX - rect.left) / rect.width;
+    const anchorBp = base.start + frac * (base.end - base.start);
+    applyRange(zoomRange(base, g.factor, anchorBp, seqLength));
+  });
+
+  const setMapRef = useCallback(
+    (n: HTMLDivElement | null) => {
+      setMapEl(n);
+      setWheelEl(n);
+    },
+    [setWheelEl],
+  );
+
   if (error) return <p className="text-red-700 py-4 dark:text-red-400">{error}</p>;
   if (!data || !range || !seqid)
     return (
@@ -179,7 +244,7 @@ export function GenomeView({
       </div>
     );
 
-  const width = 1100;
+  const width = measuredW || FALLBACK_WIDTH;
   const rulerH = 28;
   const mapH = 168;
   const height = rulerH + mapH;
@@ -188,24 +253,10 @@ export function GenomeView({
   const bpToX = (bp: number) =>
     ((bp - range.start) / Math.max(1, range.end - range.start)) * width;
 
-  function zoom(factor: number, anchorBp: number) {
-    setRange((r) => {
-      if (!r) return r;
-      const half = ((r.end - r.start) / 2) * factor;
-      let start = anchorBp - half;
-      let end = anchorBp + half;
-      if (start < 1) {
-        start = 1;
-        end = Math.min(seqLength, 1 + half * 2);
-      }
-      if (end > seqLength) {
-        end = seqLength;
-        start = Math.max(1, seqLength - half * 2);
-      }
-      if (end - start < 40) return r;
-      return { start: Math.round(start), end: Math.round(end) };
-    });
-  }
+  const zoom = (factor: number, anchorBp: number) => {
+    const base: Range = pendingRangeRef.current ?? range;
+    applyRange(zoomRange(base, factor, anchorBp, seqLength));
+  };
 
   const bpAt = (clientX: number) => {
     const rect = svgRef.current!.getBoundingClientRect();
@@ -343,7 +394,8 @@ export function GenomeView({
       </div>
 
       <div
-        className="relative border border-zinc-200 rounded-xl bg-white overflow-x-auto dark:border-zinc-800 dark:bg-zinc-900"
+        ref={setMapRef}
+        className="relative border border-zinc-200 rounded-xl bg-white overflow-hidden touch-none overscroll-contain dark:border-zinc-800 dark:bg-zinc-900"
         onMouseLeave={() => {
           setPopup(null);
           setHover(null);
@@ -355,12 +407,7 @@ export function GenomeView({
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           className="block select-none"
-          style={{ cursor: dragRef.current ? "grabbing" : "grab", minWidth: width }}
-          onWheel={(e) => {
-            e.preventDefault();
-            const bp = bpAt(e.clientX);
-            zoom(e.deltaY > 0 ? 1.2 : 0.83, bp);
-          }}
+          style={{ cursor: dragRef.current ? "grabbing" : "grab" }}
           onMouseDown={(e) => {
             dragRef.current = { x: e.clientX, start: range.start, moved: false };
           }}
@@ -370,14 +417,11 @@ export function GenomeView({
                 dragRef.current.moved = true;
               }
               const rect = svgRef.current.getBoundingClientRect();
-              const shiftBp =
-                ((dragRef.current.x - e.clientX) / rect.width) *
-                (range.end - range.start);
-              const start = Math.min(
-                Math.max(1, dragRef.current.start + shiftBp),
-                seqLength - (range.end - range.start),
+              const span = range.end - range.start;
+              const shiftBp = ((dragRef.current.x - e.clientX) / rect.width) * span;
+              applyRange(
+                clampRange(dragRef.current.start + shiftBp, span, seqLength),
               );
-              setRange({ start, end: start + (range.end - range.start) });
             }
           }}
           onMouseUp={() => {
@@ -591,7 +635,10 @@ export function GenomeView({
             </span>
           </>
         )}
-        <span>Scroll to zoom, drag to pan. Click a gene for details.</span>
+        <span>
+          Pinch or scroll-wheel to zoom, two-finger scroll or drag to pan. Click a
+          gene for details.
+        </span>
       </div>
 
       {popup && (

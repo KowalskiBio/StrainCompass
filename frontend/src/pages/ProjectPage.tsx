@@ -289,7 +289,7 @@ export default function ProjectPage() {
             <div className="flex items-center gap-2">
               <div className="flex overflow-hidden rounded-lg border border-zinc-300 dark:border-zinc-700">
                 <button
-                  onClick={() => setParam("gv", genomeMode === "strain" ? null : "align")}
+                  onClick={() => setParam("gv", null)}
                   className={`h-9 px-4 text-sm font-medium transition-colors ${
                     genomeMode === "strain"
                       ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
@@ -299,7 +299,7 @@ export default function ProjectPage() {
                   StrainMap
                 </button>
                 <button
-                  onClick={() => setParam("gv", genomeMode === "align" ? null : "strain")}
+                  onClick={() => setParam("gv", "align")}
                   className={`h-9 border-l border-zinc-300 px-4 text-sm font-medium transition-colors dark:border-zinc-700 ${
                     genomeMode === "align"
                       ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
