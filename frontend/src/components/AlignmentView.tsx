@@ -288,12 +288,19 @@ export function AlignmentView({
 
   /* ── auto-switch bars/letters with hysteresis (ported) ── */
   useEffect(() => {
+    // Before the data arrives anchorLen is 0, so visibleBases is 0 and
+    // read as "zoomed past base level" — the viewer flipped into
+    // letters mode while still showing nothing, and once the data
+    // landed the first draw letter-rendered the WHOLE genome (tens of
+    // millions of canvas ops, a ~half-minute frozen page). Only ever
+    // switch on real geometry.
+    if (!prepared) return;
     if (viewMode === "bars" && visibleBases < BP_THRESHOLD - HYSTERESIS) {
       setViewMode("letters");
     } else if (viewMode === "letters" && visibleBases > BP_THRESHOLD + HYSTERESIS) {
       setViewMode("bars");
     }
-  }, [visibleBases, viewMode]);
+  }, [visibleBases, viewMode, prepared]);
 
   /* ── container resize tracking (ported) ── */
   useEffect(() => {
@@ -564,7 +571,10 @@ export function AlignmentView({
       }
 
       if (viewMode === "letters") {
-        for (let a = fCol; a <= lCol; a++) {
+        // step at most one column per pixel: if a letters draw ever
+        // runs against a zoomed-out window (a pending mode/zoom state
+        // change), it must not iterate every anchor of the genome
+        for (let a = fCol; a <= lCol; a += colStep) {
           const x = labelWidth + a * cellW - scrollLeft;
           if (x + cellW < labelWidth || x > labelWidth + seqAreaW) continue;
           let bg = isDark ? "#1e293b" : "#f3f4f6";
