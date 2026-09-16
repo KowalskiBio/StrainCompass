@@ -62,6 +62,9 @@ const PANEL_COLUMNS: Column[] = [
 // The backend caps page_size at 1000 per request; to show the whole table
 // (no pagination UI) we fetch every page at this size and concatenate them.
 const FETCH_PAGE_SIZE = 1000;
+// Header row height; the virtualizer offsets the first row by it because the
+// header shares the rows' scroll container (so both scroll sideways together).
+const HEADER_HEIGHT = 44;
 const COL_WIDTHS_KEY = "straincompass-col-widths";
 const HIDDEN_COLS_KEY = "straincompass-hidden-cols";
 
@@ -187,6 +190,7 @@ export function ResultsTables({
   useEffect(() => {
     setSortBy(null);
     setCall("");
+    setPinnedGene(null);
   }, [table]);
 
   useEffect(() => {
@@ -355,21 +359,19 @@ export function ResultsTables({
 
       {/* table */}
       <div className="border border-zinc-200 rounded-xl bg-white overflow-hidden dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="overflow-x-auto">
-          <VirtualTable
-            columns={visibleColumns}
-            rows={data?.rows ?? []}
-            table={table}
-            sortBy={sortBy}
-            sortDir={sortDir}
-            onSort={toggleSort}
-            onPinGene={setPinnedGene}
-            onOpenGene={onOpenGene}
-            run={run}
-            colWidths={colWidths}
-            onResizeColumn={resizeColumn}
-          />
-        </div>
+        <VirtualTable
+          columns={visibleColumns}
+          rows={data?.rows ?? []}
+          table={table}
+          sortBy={sortBy}
+          sortDir={sortDir}
+          onSort={toggleSort}
+          onPinGene={setPinnedGene}
+          onOpenGene={onOpenGene}
+          run={run}
+          colWidths={colWidths}
+          onResizeColumn={resizeColumn}
+        />
         {/* row count */}
         <div className="flex items-center px-4 h-12 border-t border-zinc-200 text-sm text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
           <span>
@@ -381,7 +383,7 @@ export function ResultsTables({
       </div>
 
       {/* right-click preview, pinned until another row is right-clicked or this is closed */}
-      {pinnedGene && table === "genes_coverage" && (
+      {pinnedGene && (table === "genes_coverage" || table === "matrix") && (
         <GenePreview
           runId={run.id}
           locus={pinnedGene}
@@ -412,7 +414,7 @@ function VirtualTable({
   sortBy: string | null;
   sortDir: "asc" | "desc";
   onSort: (key: string) => void;
-  onPinGene: (locus: string | null) => void;
+  onPinGene: React.Dispatch<React.SetStateAction<string | null>>;
   onOpenGene: (locus: string) => void;
   run: Run;
   colWidths: Record<string, number>;
@@ -424,7 +426,14 @@ function VirtualTable({
     getScrollElement: () => parentRef.current,
     estimateSize: () => 44,
     overscan: 12,
+    // The header row shares the scroll container with the rows, so the first
+    // row starts one header height down.
+    paddingStart: HEADER_HEIGHT,
   });
+
+  function widthFor(c: Column) {
+    return colWidths[`${table}:${c.key}`] ?? c.width ?? 120;
+  }
 
   // A manually resized column locks to its exact width (flex-shrink/grow 0);
   // an untouched one keeps stretching to fill the table, as before.
@@ -437,6 +446,12 @@ function VirtualTable({
       minWidth: width,
     };
   }
+
+  // The header and the rows live in one scroll container and are sized by the
+  // same track, so they can never drift apart horizontally: the track is at
+  // least as wide as the container (columns stretch to fill) and grows to the
+  // summed column widths when those no longer fit (one shared scrollbar).
+  const trackMinWidth = columns.reduce((sum, c) => sum + widthFor(c), 0);
 
   function startResize(e: React.MouseEvent<HTMLDivElement>, key: string) {
     e.preventDefault();
@@ -458,84 +473,95 @@ function VirtualTable({
   }
 
   return (
-    <div className="min-w-full">
-      {/* header */}
-      <div className="flex bg-zinc-50 border-b border-zinc-200 sticky top-0 z-10 dark:bg-zinc-900 dark:border-zinc-800">
-        {columns.map((c) => (
-          <div
-            key={c.key}
-            className="relative flex items-stretch border-r border-zinc-200 last:border-r-0 dark:border-zinc-800"
-            style={flexStyleFor(c)}
-          >
-            <button
-              onClick={() => onSort(c.key)}
-              className={`flex-1 min-w-0 flex items-center gap-1 px-3 h-11 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 ${c.numeric ? "justify-end" : ""}`}
-            >
-              <span className="truncate">{c.label}</span>
-              {sortBy === c.key && (
-                <span className="text-zinc-900 dark:text-zinc-100">{sortDir === "asc" ? "\u2191" : "\u2193"}</span>
-              )}
-            </button>
+    // One scroll container for the header and the rows: a single horizontal
+    // scrollbar moves both together, and the header stays pinned vertically.
+    <div
+      ref={parentRef}
+      className="overflow-auto thin-scroll"
+      style={{ height: "min(62vh, 700px)" }}
+    >
+      <div
+        style={{
+          minWidth: trackMinWidth,
+          height: virtualizer.getTotalSize(),
+          position: "relative",
+        }}
+      >
+        {/* header */}
+        <div
+          className="flex bg-zinc-50 border-b border-zinc-200 sticky top-0 z-10 dark:bg-zinc-900 dark:border-zinc-800"
+          style={{ height: HEADER_HEIGHT, boxSizing: "border-box" }}
+        >
+          {columns.map((c) => (
             <div
-              onMouseDown={(e) => startResize(e, c.key)}
-              title="Drag to resize"
-              className="w-1.5 shrink-0 cursor-col-resize hover:bg-blue-400/60 active:bg-blue-500"
-            />
-          </div>
-        ))}
-      </div>
-      {/* rows */}
-      <div ref={parentRef} className="overflow-auto thin-scroll" style={{ height: "min(62vh, 700px)" }}>
-        <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
-          {virtualizer.getVirtualItems().map((v) => {
-            const row = rows[v.index] as unknown as Record<string, unknown>;
-            return (
-              <div
-                key={v.key}
-                className={`flex items-center border-b border-zinc-100 text-[15px] dark:border-zinc-800 ${
-                  v.index % 2 ? "bg-zinc-50/60 dark:bg-zinc-800/30" : "bg-white dark:bg-zinc-900"
-                } hover:bg-blue-50/50 dark:hover:bg-blue-950/30`}
-                style={{
-                  position: "absolute",
-                  top: v.start,
-                  left: 0,
-                  width: "100%",
-                  height: v.size,
-                }}
-                onContextMenu={(e) => {
-                  if (table === "genes_coverage") {
-                    e.preventDefault();
-                    const locus = row["locus_tag"] as string;
-                    onPinGene(locus);
-                  }
-                }}
-                onClick={() => {
-                  if (table === "genes_coverage" || table === "matrix") {
-                    const locus = row["locus_tag"] as string;
-                    if (locus) onOpenGene(locus);
-                  }
-                }}
+              key={c.key}
+              className="relative flex items-stretch border-r border-zinc-200 last:border-r-0 dark:border-zinc-800"
+              style={flexStyleFor(c)}
+            >
+              <button
+                onClick={() => onSort(c.key)}
+                className={`flex-1 min-w-0 flex items-center gap-1 px-3 h-full text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 ${c.numeric ? "justify-end" : ""}`}
               >
-                {columns.map((c) => (
-                  <div
-                    key={c.key}
-                    className={`px-3 flex items-center truncate border-r border-zinc-100 last:border-r-0 dark:border-zinc-800 ${
-                      c.numeric ? "justify-end font-mono text-sm tabular-nums" : ""
-                    }`}
-                    style={flexStyleFor(c)}
-                  >
-                    <Cell
-                      col={c.key}
-                      row={row}
-                      table={table}
-                      run={run}
-                    />
-                  </div>
-                ))}
-              </div>
-            );
-          })}
+                <span className="truncate">{c.label}</span>
+                {sortBy === c.key && (
+                  <span className="text-zinc-900 dark:text-zinc-100">{sortDir === "asc" ? "\u2191" : "\u2193"}</span>
+                )}
+              </button>
+              <div
+                onMouseDown={(e) => startResize(e, c.key)}
+                title="Drag to resize"
+                className="w-1.5 shrink-0 cursor-col-resize hover:bg-blue-400/60 active:bg-blue-500"
+              />
+            </div>
+          ))}
         </div>
+        {/* rows */}
+        {virtualizer.getVirtualItems().map((v) => {
+          const row = rows[v.index] as unknown as Record<string, unknown>;
+          return (
+            <div
+              key={v.key}
+              className={`flex items-center border-b border-zinc-100 text-[15px] dark:border-zinc-800 ${
+                v.index % 2 ? "bg-zinc-50/60 dark:bg-zinc-800/30" : "bg-white dark:bg-zinc-900"
+              } hover:bg-blue-50/50 dark:hover:bg-blue-950/30`}
+              style={{
+                position: "absolute",
+                top: v.start,
+                left: 0,
+                width: "100%",
+                height: v.size,
+              }}
+              onContextMenu={(e) => {
+                if (table === "genes_coverage" || table === "matrix") {
+                  e.preventDefault();
+                  const locus = row["locus_tag"] as string;
+                  if (!locus) return;
+                  // Right-clicking the row whose preview is already open closes
+                  // it; any other row moves the preview over to that row.
+                  onPinGene((prev) => (prev === locus ? null : locus));
+                }
+              }}
+              onClick={() => {
+                if (table === "genes_coverage" || table === "matrix") {
+                  const locus = row["locus_tag"] as string;
+                  if (locus) onOpenGene(locus);
+                }
+              }}
+            >
+              {columns.map((c) => (
+                <div
+                  key={c.key}
+                  className={`px-3 flex items-center truncate border-r border-zinc-100 last:border-r-0 dark:border-zinc-800 ${
+                    c.numeric ? "justify-end font-mono text-sm tabular-nums" : ""
+                  }`}
+                  style={flexStyleFor(c)}
+                >
+                  <Cell col={c.key} row={row} table={table} run={run} />
+                </div>
+              ))}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -615,12 +641,18 @@ function Cell({
   return <span className="truncate">{String(v)}</span>;
 }
 
-/** Closes an open popover on Escape or on any click outside `ref`'s subtree. */
+/**
+ * Closes an open popover on Escape or on a left click outside `ref`'s subtree.
+ * Right clicks are left alone so a right-click-driven popover can toggle itself
+ * from its own contextmenu handler instead of being closed by the mousedown
+ * that precedes it.
+ */
 function usePopoverDismiss(open: boolean, onClose: () => void) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     function onPointerDown(e: MouseEvent) {
+      if (e.button !== 0) return;
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     }
     function onKeyDown(e: KeyboardEvent) {
@@ -777,9 +809,13 @@ function GenePreview({
       cancelled = true;
     };
   }, [runId, locus, cache]);
+  const ref = usePopoverDismiss(true, onClose);
   if (!detail) return null;
   return (
-    <div className="fixed right-4 top-56 z-40 w-72 max-h-[calc(100vh-15.5rem)] flex flex-col bg-white border border-zinc-200 rounded-xl shadow-xl p-4 pointer-events-auto overflow-y-auto thin-scroll dark:bg-zinc-900 dark:border-zinc-800">
+    <div
+      ref={ref}
+      className="fixed right-4 top-56 z-40 w-72 max-h-[calc(100vh-15.5rem)] flex flex-col bg-white border border-zinc-200 rounded-xl shadow-xl p-4 pointer-events-auto overflow-y-auto thin-scroll dark:bg-zinc-900 dark:border-zinc-800"
+    >
       <div className="flex items-start justify-between gap-2">
         <p className="font-semibold truncate" title={detail.locus_tag}>
           {detail.locus_tag}
