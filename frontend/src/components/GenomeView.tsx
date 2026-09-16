@@ -9,6 +9,7 @@ import type {
   WgaGene,
 } from "../types";
 import { Spinner } from "./ui";
+import { GeneSearch } from "./GeneSearch";
 import { useWheelGestures } from "./useWheelGestures";
 import { MIN_SPAN, clampRange, panRange, zoomRange } from "./genomeRange";
 import type { Range } from "./genomeRange";
@@ -39,6 +40,15 @@ const REFSEQ_MAX_WINDOW = 8192;
 const DENSITY_BP_PER_PX = 2;
 /** Floor opacity for a density column, so a lone mismatch is still visible. */
 const MIN_DENSITY_INK = 0.15;
+/**
+ * Focusing a searched gene: how much of one row it is zoomed to fill, and the
+ * closest that zoom may go. A gene is shown at a third of a row rather than
+ * filling it because what a search is usually asking is "where is this and
+ * what is around it", and the floor keeps a 76 bp tRNA from slamming the map
+ * to base level.
+ */
+const FOCUS_ROW_SHARE = 3;
+const FOCUS_MIN_ROW_SPAN = 500;
 /** Variant marker colors, shared with the Alignment view (Oligool palette). */
 const SNP_COLOR = "#dc2626";
 const INS_COLOR = "#3b82f6";
@@ -114,6 +124,8 @@ export function GenomeView({
   const [colorByInit, setColorByInit] = useState(initialQuery !== undefined);
   /** The hovered gene: its index into data.genes, and the row it was hovered on. */
   const [hover, setHover] = useState<{ gi: number; row: number } | null>(null);
+  /** Locus tag of the gene the search last jumped to, ringed until the next one. */
+  const [focusedLocus, setFocusedLocus] = useState<string | null>(null);
   /** The hovered variant: its index into `markers`, and the row it is drawn on. */
   const [hoverVariant, setHoverVariant] = useState<{ mi: number; row: number } | null>(
     null,
@@ -401,6 +413,28 @@ export function GenomeView({
     applyRange(zoomRange(base, factor, anchorBp, seqLength, minSpan));
   };
 
+  /**
+   * Put `g` in the middle of the second row and zoom so it fills about a third
+   * of that row.
+   *
+   * The second row rather than the first because the wrap then carries a full
+   * row of sequence on either side of the gene, which is what makes its
+   * neighbourhood readable; with a single row there is nothing to prefer, so it
+   * centres in that one. Near a contig's own ends the window runs out of
+   * sequence to place and clamps, landing the gene wherever it can.
+   */
+  const focusGene = (g: WgaGene) => {
+    const len = data.reference.find((r) => r[0] === g.seqid)?.[1] ?? 0;
+    if (!len) return;
+    const rowSpan = Math.max(FOCUS_MIN_ROW_SPAN, (g.end - g.start) * FOCUS_ROW_SHARE);
+    const span = Math.min(len, rowSpan * rows);
+    const targetRow = Math.min(1, rows - 1);
+    const centre = (g.start + g.end) / 2;
+    setSeqid(g.seqid);
+    setRange(clampRange(centre - (targetRow + 0.5) * (span / rows), span, len));
+    setFocusedLocus(g.locus_tag);
+  };
+
   /** The base under a point, wherever in the stack of rows it falls. */
   const bpAt = (clientX: number, clientY: number) => {
     const rect = svgRef.current!.getBoundingClientRect();
@@ -460,6 +494,10 @@ export function GenomeView({
       if (inRange(e.g.start, e.g.end)) visibleGenes.push(e);
     }
   }
+
+  /** The searched gene, when it is on the shown contig and inside the window. */
+  const focusedGene =
+    visibleGenes.find(({ g }) => g.locus_tag === focusedLocus)?.g ?? null;
 
   /** The variant under an event target, with the row it was drawn on. */
   const markerAt = (target: EventTarget | null): { mi: number; row: number } | null => {
@@ -590,6 +628,7 @@ export function GenomeView({
             setSeqid(e.target.value);
             const len = data.reference.find((r) => r[0] === e.target.value)?.[1] ?? 0;
             setRange({ start: 1, end: len });
+            setFocusedLocus(null);
           }}
           className="h-11 px-3 rounded-lg border border-zinc-300 bg-white text-[15px] dark:border-zinc-700 dark:bg-zinc-900"
           disabled={data.reference.length <= 1}
@@ -634,6 +673,11 @@ export function GenomeView({
             Variants
           </label>
         )}
+        <GeneSearch
+          genes={data.genes}
+          multiContig={data.reference.length > 1}
+          onPick={focusGene}
+        />
         <RangeInput
           range={range}
           seqLength={seqLength}
@@ -859,6 +903,25 @@ export function GenomeView({
               });
             })}
           </g>
+
+          {/* the searched gene, ringed so it can be picked out of the beads */}
+          {focusedGene && (
+            <g className="pointer-events-none">
+              {rowPieces(layout, focusedGene.start, focusedGene.end).map((piece) => (
+                <rect
+                  key={`focus${piece.row}`}
+                  x={piece.x - 3}
+                  y={layout.baselineY(piece.row) - geneH / 2 - 3}
+                  width={Math.max(2, piece.w) + 6}
+                  height={geneH + 6}
+                  rx={4}
+                  fill="none"
+                  stroke="var(--gv-focus-ring)"
+                  strokeWidth={2}
+                />
+              ))}
+            </g>
+          )}
 
           {/*
             Variant markers. Reference base p occupies [p, p+1), the same span its

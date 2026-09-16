@@ -293,3 +293,30 @@ export function EmptyState({
     </div>
   );
 }
+
+/**
+ * Closes an open popover on Escape or on a left click outside `ref`'s subtree.
+ * Right clicks are left alone so a right-click-driven popover can toggle itself
+ * from its own contextmenu handler instead of being closed by the mousedown
+ * that precedes it.
+ */
+export function usePopoverDismiss(open: boolean, onClose: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(e: MouseEvent) {
+      if (e.button !== 0) return;
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open, onClose]);
+  return ref;
+}

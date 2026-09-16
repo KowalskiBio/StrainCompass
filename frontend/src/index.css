@@ -25,6 +25,7 @@
   --gv-call-present: #22c55e;
   --gv-call-partial: #eab308;
   --gv-call-absent: #b6b6bd;
+  --gv-focus-ring: #1e5f9e;
 }
 
 .dark {
@@ -43,6 +44,7 @@
   --gv-call-present: #4ade80;
   --gv-call-partial: #facc15;
   --gv-call-absent: #52525b;
+  --gv-focus-ring: #5b9bd9;
 }
 
 html {
