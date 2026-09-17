@@ -25,6 +25,18 @@ const BP_THRESHOLD = 100;
 const HYSTERESIS = 15;
 /** Auto-switch threshold between bars and letters mode. */
 const REFSEQ_MAX_WINDOW = 8192;
+/**
+ * Deepest zoom: this many bases across the sequence area, so the view always
+ * reaches base letters. A fixed fraction can't do it: 0.005 of a 5 Mb genome
+ * is 25 kb, which kept letters mode mathematically unreachable.
+ */
+const MIN_VISIBLE_BASES = 40;
+/**
+ * Zoomed out, point variants are shaded by the share of bases in their pixel
+ * column that actually differ (same contract the strain map uses), with a
+ * floor so a lone mismatch is still visible.
+ */
+const MIN_DENSITY_INK = 0.15;
 
 /* ── colors (Oligool palette; event colors shared with the StrainMap) ── */
 const SNP_COLOR = "#dc2626";
@@ -204,8 +216,8 @@ export function AlignmentView({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hoverOverlayRef = useRef<HTMLCanvasElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const targetScrollRef = useRef<number | null>(null);
   const [availableWidth, setAvailableWidth] = useState(900);
+  /** Virtual horizontal offset in css px: no DOM node is ever this wide. */
   const [scrollLeft, setScrollLeft] = useState(0);
   const [viewFraction, setViewFraction] = useState(1);
   const [viewMode, setViewMode] = useState<"bars" | "letters">("bars");
@@ -213,7 +225,6 @@ export function AlignmentView({
   const [isResizingLabel, setIsResizingLabel] = useState(false);
   const hoverColRef = useRef<number | null>(null);
   const hoverRafRef = useRef(0);
-  const scrollRafRef = useRef(0);
   const redrawRef = useRef<() => void>(() => {});
   const scrollPressRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [isBarDragging, setIsBarDragging] = useState(false);
@@ -277,6 +288,14 @@ export function AlignmentView({
   const seqAreaW = Math.max(1, availableWidth - labelWidth - RIGHT_PADDING);
   const totalVirtualW = seqAreaW / viewFraction;
   const anchorLen = prepared?.totalLen ?? 0;
+  /**
+   * The horizontal offset is fully virtual: totalVirtualW only ever lives in
+   * maths, never in the DOM. Reaching base level on a 5 Mb genome needs a
+   * ~175-megapixel strip, several times the browsers' maximum layout width —
+   * a virtual offset has no such ceiling, so zoom depth is limited only by
+   * MIN_VISIBLE_BASES.
+   */
+  const minVF = anchorLen > 0 ? Math.min(1, MIN_VISIBLE_BASES / anchorLen) : 1;
   const cellW = anchorLen > 0 ? totalVirtualW / anchorLen : 1;
   const visibleBases = anchorLen * viewFraction;
   const headerH = CONTIG_BAND_H + RULER_HEIGHT;
@@ -311,17 +330,9 @@ export function AlignmentView({
   const resizeObsRef = useRef<ResizeObserver | null>(null);
   useEffect(() => () => resizeObsRef.current?.disconnect(), []);
 
-  /* ── sync programmatic scroll after render (ported) ── */
-  useEffect(() => {
-    if (targetScrollRef.current !== null && scrollRef.current) {
-      scrollRef.current.scrollLeft = targetScrollRef.current;
-      targetScrollRef.current = null;
-    }
-  });
-
-  /* ── zoom helpers (ported) ── */
+  /* ── zoom helpers ── */
   const applyZoom = (factor: number, anchorPx: number = seqAreaW / 2) => {
-    const newVF = Math.max(0.005, Math.min(1, viewFraction * factor));
+    const newVF = Math.max(minVF, Math.min(1, viewFraction * factor));
     const currentTotalVirtualW = seqAreaW / viewFraction;
     const anchorFracGlobal = (scrollLeft + anchorPx) / currentTotalVirtualW;
     const newTotalVirtualW = seqAreaW / newVF;
@@ -329,7 +340,6 @@ export function AlignmentView({
     newSL = Math.max(0, Math.min(newTotalVirtualW - seqAreaW, newSL));
     setViewFraction(newVF);
     setScrollLeft(newSL);
-    targetScrollRef.current = newSL;
   };
   const zoomIn = () => applyZoom(0.75, 0);
   const zoomOut = () => applyZoom(1.33, 0);
@@ -345,14 +355,13 @@ export function AlignmentView({
     const a0 = contig.start + Math.max(1, initialRange.start) - 1;
     const a1 = contig.start + initialRange.end - 1;
     const span = Math.max(40, a1 - a0 + 1);
-    const newVF = Math.max(0.005, Math.min(1, span / prepared.totalLen));
+    const newVF = Math.max(minVF, Math.min(1, span / prepared.totalLen));
     const centerFrac = (a0 + a1) / (2 * prepared.totalLen);
     const newTotalW = seqAreaW / newVF;
     let newSL = centerFrac * newTotalW - seqAreaW / 2;
     newSL = Math.max(0, Math.min(newTotalW - seqAreaW, newSL));
     setViewFraction(newVF);
     setScrollLeft(newSL);
-    targetScrollRef.current = newSL;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prepared, availableWidth, initialRange]);
 
@@ -435,15 +444,11 @@ export function AlignmentView({
 
   /* ── pan helpers (ported) ── */
   const panBy = (dir: -1 | 1) => {
-    const el = scrollRef.current;
-    if (!el) return;
     const vf = viewFractionRef.current;
     const saw = seqAreaWRef.current;
     const tvw = totalVirtualWRef.current;
     const step = Math.max(40, saw * vf * 0.25);
-    const newSL = Math.max(0, Math.min(tvw - saw, el.scrollLeft + dir * step));
-    el.scrollLeft = newSL;
-    setScrollLeft(newSL);
+    setScrollLeft((v) => Math.max(0, Math.min(tvw - saw, v + dir * step)));
   };
   const startPan = (dir: -1 | 1) => {
     panBy(dir);
@@ -456,42 +461,32 @@ export function AlignmentView({
     }
   };
 
-  /* ── scroll handler with rAF coalescing (ported) ── */
-  const handleScroll = () => {
-    if (!scrollRef.current) return;
-    cancelAnimationFrame(scrollRafRef.current);
-    scrollRafRef.current = requestAnimationFrame(() => {
-      if (!scrollRef.current) return;
-      setScrollLeft(scrollRef.current.scrollLeft);
-    });
-  };
-
-  /* ── pinch / wheel = zoom (zoom maths ported from Oligool) ── */
+  /* ── wheel = zoom, two-finger scroll / wheel = pan ── */
   // Attached natively rather than through React's onWheel: React registers wheel
   // as a passive listener, so preventDefault() there never runs and a macOS
   // trackpad pinch falls through to the browser's own page zoom.
-  const setWheelEl = useWheelGestures<HTMLDivElement>(
-    (g) => {
-      if (g.kind !== "zoom") return;
-      const rect = scrollRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const offsetX = Math.max(
-        0,
-        Math.min(seqAreaW, g.clientX - rect.left - labelWidth),
-      );
-      const currentTotalVirtualW = seqAreaW / viewFraction;
-      const mouseFracGlobal = (scrollLeft + offsetX) / currentTotalVirtualW;
-      const newVF = Math.max(0.005, Math.min(1, viewFraction * g.factor));
-      const newTotalVirtualW = seqAreaW / newVF;
-      let newSL = mouseFracGlobal * newTotalVirtualW - offsetX;
-      newSL = Math.max(0, Math.min(newTotalVirtualW - seqAreaW, newSL));
-      setViewFraction(newVF);
-      setScrollLeft(newSL);
-      targetScrollRef.current = newSL;
-    },
-    // Unmodified scrolling stays with the browser: this element scrolls natively.
-    { capturePan: false },
-  );
+  const setWheelEl = useWheelGestures<HTMLDivElement>((g) => {
+    if (g.kind === "pan") {
+      const saw = seqAreaWRef.current;
+      const tvw = totalVirtualWRef.current;
+      setScrollLeft((v) => Math.max(0, Math.min(tvw - saw, v + (g.dx || g.dy))));
+      return;
+    }
+    const rect = scrollRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const offsetX = Math.max(
+      0,
+      Math.min(seqAreaW, g.clientX - rect.left - labelWidth),
+    );
+    const currentTotalVirtualW = seqAreaW / viewFraction;
+    const mouseFracGlobal = (scrollLeft + offsetX) / currentTotalVirtualW;
+    const newVF = Math.max(minVF, Math.min(1, viewFraction * g.factor));
+    const newTotalVirtualW = seqAreaW / newVF;
+    let newSL = mouseFracGlobal * newTotalVirtualW - offsetX;
+    newSL = Math.max(0, Math.min(newTotalVirtualW - seqAreaW, newSL));
+    setViewFraction(newVF);
+    setScrollLeft(newSL);
+  });
 
   const setScrollEl = useCallback(
     (n: HTMLDivElement | null) => {
@@ -559,7 +554,9 @@ export function AlignmentView({
             Math.min(labelWidth + seqAreaW, labelWidth + (e + 1) * cellW - scrollLeft),
           );
           if (barX2 > barX1) {
-            ctx.fillStyle = isDark ? "#334155" : "#e2e8f0";
+            // the match fill is a true gray, not a slate: slate read as
+            // "blue" next to the red/blue event colors
+            ctx.fillStyle = isDark ? "#3f3f46" : "#e4e4e7";
             ctx.fillRect(barX1, y + 3, barX2 - barX1, ROW_HEIGHT - 6);
           }
         }
@@ -584,7 +581,7 @@ export function AlignmentView({
         for (let a = fCol; a <= lCol; a += colStep) {
           const x = labelWidth + a * cellW - scrollLeft;
           if (x + cellW < labelWidth || x > labelWidth + seqAreaW) continue;
-          let bg = isDark ? "#1e293b" : "#f3f4f6";
+          let bg = isDark ? "#27272a" : "#f4f4f5";
           let fg = isDark ? "#cbd5e1" : "#374151";
           let ch: string | null;
 
@@ -654,25 +651,41 @@ export function AlignmentView({
         if (r) {
           const snpLo = lowerBoundPos(r.snpList, fCol);
           const snpHi = lowerBoundPos(r.snpList, lCol + 1);
-          // Zoomed out, many SNPs land on the same pixel: draw one
-          // rect per pixel and binary-search straight to the next
-          // affected pixel, so the loop is bounded by the sequence area
-          // width rather than by the visible event count (a divergent
-          // query shows >100k SNPs in a whole-genome overview).
+          // Zoomed out, many SNPs land on the same pixel: draw one column per
+          // pixel, shaded by the share of the column's bases that differ, and
+          // binary-search straight to the next affected pixel, so the loop is
+          // bounded by the sequence area width rather than by the visible
+          // event count (a divergent query shows >100k SNPs in a whole-genome
+          // overview). Full-strength marks only once bases get pixel-wide:
+          // drawn solid, a 3% divergence read as a solid red row.
           const mergePixels = cellW < 1;
-          let i = snpLo;
-          while (i < snpHi) {
-            const x = Math.floor(labelWidth + r.snpList[i].pos * cellW - scrollLeft);
-            const w = Math.min(barW, labelWidth + seqAreaW - x);
-            if (w <= 0) break; // sorted: the rest are past the right edge
-            ctx.fillStyle = SNP_COLOR;
-            ctx.fillRect(x, y + 2, w, ROW_HEIGHT - 4);
-            if (!mergePixels) {
-              i++;
-            } else {
-              const nextPos = Math.ceil((x + 1 - labelWidth + scrollLeft) / cellW);
-              i = Math.max(i + 1, lowerBoundPos(r.snpList, nextPos));
+          if (!mergePixels) {
+            for (let i = snpLo; i < snpHi; i++) {
+              const x = Math.floor(labelWidth + r.snpList[i].pos * cellW - scrollLeft);
+              const w = Math.min(barW, labelWidth + seqAreaW - x);
+              if (w <= 0) break; // sorted: the rest are past the right edge
+              ctx.globalAlpha = 1;
+              ctx.fillStyle = SNP_COLOR;
+              ctx.fillRect(x, y + 2, w, ROW_HEIGHT - 4);
             }
+          } else {
+            let i = snpLo;
+            while (i < snpHi) {
+              const x = Math.floor(labelWidth + r.snpList[i].pos * cellW - scrollLeft);
+              if (x > labelWidth + seqAreaW) break;
+              const nextPos = Math.ceil((x + 1 - labelWidth + scrollLeft) / cellW);
+              const next = lowerBoundPos(r.snpList, nextPos);
+              if (x >= labelWidth) {
+                ctx.globalAlpha = Math.min(
+                  1,
+                  Math.max(MIN_DENSITY_INK, (next - i) * cellW),
+                );
+                ctx.fillStyle = SNP_COLOR;
+                ctx.fillRect(x, y + 2, 1, ROW_HEIGHT - 4);
+              }
+              i = Math.max(i + 1, next);
+            }
+            ctx.globalAlpha = 1;
           }
           for (const d of r.delList) {
             if (d.pos + d.len - 1 < fCol || d.pos > lCol) continue;
@@ -691,25 +704,38 @@ export function AlignmentView({
           const insLo = lowerBoundPos(r.insList, fCol);
           const insHi = lowerBoundPos(r.insList, lCol + 2);
           // same pixel merge for the 2px insertion ticks
-          let j = insLo;
-          while (j < insHi) {
-            const bx = Math.floor(labelWidth + r.insList[j].pos * cellW - scrollLeft);
-            if (bx > labelWidth + seqAreaW) break;
-            if (bx >= labelWidth) {
-              ctx.fillStyle = INS_COLOR;
-              ctx.fillRect(bx - 1, y + 2, 2, ROW_HEIGHT - 4);
+          if (!mergePixels) {
+            for (let j = insLo; j < insHi; j++) {
+              const bx = Math.floor(labelWidth + r.insList[j].pos * cellW - scrollLeft);
+              if (bx > labelWidth + seqAreaW) break;
+              if (bx >= labelWidth) {
+                ctx.fillStyle = INS_COLOR;
+                ctx.fillRect(bx - 1, y + 2, 2, ROW_HEIGHT - 4);
+              }
             }
-            if (!mergePixels) {
-              j++;
-            } else {
+          } else {
+            let j = insLo;
+            while (j < insHi) {
+              const bx = Math.floor(labelWidth + r.insList[j].pos * cellW - scrollLeft);
+              if (bx > labelWidth + seqAreaW) break;
               const nextPos = Math.ceil((bx + 2 - labelWidth + scrollLeft) / cellW);
-              j = Math.max(j + 1, lowerBoundPos(r.insList, nextPos));
+              const next = lowerBoundPos(r.insList, nextPos);
+              if (bx >= labelWidth) {
+                ctx.globalAlpha = Math.min(
+                  1,
+                  Math.max(MIN_DENSITY_INK, (next - j) * cellW),
+                );
+                ctx.fillStyle = INS_COLOR;
+                ctx.fillRect(bx - 1, y + 2, 2, ROW_HEIGHT - 4);
+              }
+              j = Math.max(j + 1, next);
             }
+            ctx.globalAlpha = 1;
           }
         }
       }
 
-      ctx.fillStyle = isDark ? "#1e293b" : "#f1f5f9";
+      ctx.fillStyle = isDark ? "#27272a" : "#f4f4f5";
       ctx.fillRect(labelWidth, y + ROW_HEIGHT - 0.5, seqAreaW, 0.5);
     }
 
@@ -1049,7 +1075,7 @@ export function AlignmentView({
         if (!el) return;
         const startX = e.clientX;
         const startY = e.clientY;
-        const startSL = el.scrollLeft;
+        const startSL = scrollLeft;
         const startST = el.scrollTop;
         panDragRef.current = { moved: false };
         setIsPanning(true);
@@ -1073,7 +1099,6 @@ export function AlignmentView({
           if (!panDragRef.current?.moved) return;
           const maxSL = Math.max(0, totalVirtualWRef.current - seqAreaWRef.current);
           const sl = Math.max(0, Math.min(maxSL, startSL - dx));
-          el.scrollLeft = sl;
           el.scrollTop = startST - dy;
           setScrollLeft(sl);
         };
@@ -1090,7 +1115,6 @@ export function AlignmentView({
           const tvw = totalVirtualWRef.current;
           const virtualX = startSL + ev.clientX - rect.left - labelWidth;
           const sl = Math.max(0, Math.min(Math.max(0, tvw - saw), virtualX - saw / 2));
-          el.scrollLeft = sl;
           setScrollLeft(sl);
         };
         document.addEventListener("mousemove", onMove);
@@ -1124,12 +1148,11 @@ export function AlignmentView({
         const s = Math.min(startC, endC);
         const e2 = Math.max(startC, endC);
         if (e2 - s >= 5) {
-          const newVF = Math.max(0.005, (e2 - s + 1) / anchorLen);
+          const newVF = Math.max(minVF, (e2 - s + 1) / anchorLen);
           const newTotalW = seqAreaW / newVF;
           const newSL = (s / anchorLen) * newTotalW;
           setViewFraction(newVF);
           setScrollLeft(newSL);
-          targetScrollRef.current = newSL;
         }
       };
       const onMove = (ev: MouseEvent) => {
@@ -1143,7 +1166,7 @@ export function AlignmentView({
       document.addEventListener("mouseup", onUp);
       e.preventDefault();
     },
-    [prepared, anchorLen, scrollLeft, cellW, seqAreaW, labelWidth],
+    [prepared, anchorLen, scrollLeft, cellW, seqAreaW, labelWidth, minVF],
   );
 
   /* ── position bar drag (ported) ── */
@@ -1159,7 +1182,6 @@ export function AlignmentView({
       let targetStart = frac - viewFractionRef.current / 2;
       targetStart = Math.max(0, Math.min(1 - viewFractionRef.current, targetStart));
       const sl = targetStart * totalVirtualWRef.current;
-      scrollRef.current.scrollLeft = sl;
       setScrollLeft(sl);
     };
     const onMouseMove = (ev: MouseEvent) => performMove(ev.clientX);
@@ -1221,7 +1243,6 @@ export function AlignmentView({
                   setViewMode("bars");
                   setViewFraction(1);
                   setScrollLeft(0);
-                  targetScrollRef.current = 0;
                 }}
                 className={`px-3 py-1 text-[13px] font-medium transition-colors ${
                   viewMode === "bars"
@@ -1244,7 +1265,6 @@ export function AlignmentView({
                   );
                   setViewFraction(newVF);
                   setScrollLeft(newSL);
-                  targetScrollRef.current = newSL;
                 }}
                 className={`border-l border-zinc-300 px-3 py-1 text-[13px] font-medium transition-colors dark:border-zinc-700 ${
                   viewMode === "letters"
@@ -1265,9 +1285,9 @@ export function AlignmentView({
               </button>
               <input
                 type="range"
-                min={0.005}
+                min={minVF}
                 max={1}
-                step={0.005}
+                step={(1 - minVF) / 200}
                 value={viewFraction}
                 onChange={(e) => {
                   const newVF = parseFloat(e.target.value);
@@ -1296,7 +1316,7 @@ export function AlignmentView({
           <span className="flex items-center gap-1">
             <span
               className="inline-block h-3 w-3 rounded-sm"
-              style={{ background: isDark ? "#334155" : "#e2e8f0" }}
+              style={{ background: isDark ? "#3f3f46" : "#e4e4e7" }}
             />
             Sequence / Match
           </span>
@@ -1368,13 +1388,14 @@ export function AlignmentView({
         {/* scrollable canvas area */}
         <div
           ref={setScrollEl}
-          className={`thin-scroll relative overscroll-contain ${viewFraction >= 0.99 ? "overflow-x-hidden" : "overflow-x-auto"}`}
+          /* horizontal movement is virtual (state), so no wide spacer and no
+             native horizontal scrollbar; vertical stays native for the rows */
+          className="thin-scroll relative overscroll-contain overflow-x-hidden overflow-y-auto"
           style={{ height: `${Math.min(totalH, MAX_VIEWER_HEIGHT)}px` }}
-          onScroll={handleScroll}
         >
           <div
             style={{
-              width: `${labelWidth + totalVirtualW}px`,
+              width: "100%",
               height: `${totalH}px`,
               position: "absolute",
               pointerEvents: "none",

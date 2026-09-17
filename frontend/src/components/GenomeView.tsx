@@ -377,7 +377,7 @@ export function GenomeView({
     // both panning and the zoom anchor are in row coordinates.
     const l = makeWrapLayout(base, rows, rect.width);
     if (g.kind === "pan") {
-      applyRange(panRange(base, (g.dx / rect.width) * l.rowSpan, seqLength));
+      applyRange(panRange(base, ((g.dx || g.dy) / rect.width) * l.rowSpan, seqLength));
       return;
     }
     const anchorBp = l.bpAtPoint(g.clientX - rect.left, g.clientY - rect.top);

@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  */
 export type WheelGesture =
   | { kind: "zoom"; factor: number; clientX: number; clientY: number }
-  | { kind: "pan"; dx: number };
+  | { kind: "pan"; dx: number; dy: number };
 
 /** What produced a wheel event. */
 export type WheelSource = "pinch" | "wheel" | "scroll";
@@ -114,8 +114,9 @@ export function useWheelGestures<T extends HTMLElement>(
       if (source === "scroll") {
         if (!capturePan) return;
         e.preventDefault();
-        // A vertical two-finger swipe pans too: the map has only one axis to move on.
-        cb.current({ kind: "pan", dx: dx || dy });
+        // Both axes are reported: single-axis maps combine them (dx || dy),
+        // viewers with a vertical axis spend them separately.
+        cb.current({ kind: "pan", dx, dy });
         return;
       }
 
