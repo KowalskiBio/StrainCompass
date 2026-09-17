@@ -302,16 +302,14 @@ export function AlignmentView({
     }
   }, [visibleBases, viewMode, prepared]);
 
-  /* ── container resize tracking (ported) ── */
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const obs = new ResizeObserver((e) => {
-      for (const entry of e) setAvailableWidth(entry.contentRect.width);
-    });
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, []);
+  /* ── container resize tracking ── */
+  // The observer lives in the setScrollEl callback ref, not in a mount
+  // effect: until the data arrives the component renders only the spinner,
+  // so a [] effect found no scroll container to observe and the map stayed
+  // at the 900px fallback width forever. ResizeObserver also fires once on
+  // observe, so the very first layout already gets the real width.
+  const resizeObsRef = useRef<ResizeObserver | null>(null);
+  useEffect(() => () => resizeObsRef.current?.disconnect(), []);
 
   /* ── sync programmatic scroll after render (ported) ── */
   useEffect(() => {
@@ -499,6 +497,15 @@ export function AlignmentView({
     (n: HTMLDivElement | null) => {
       scrollRef.current = n;
       setWheelEl(n);
+      resizeObsRef.current?.disconnect();
+      resizeObsRef.current = null;
+      if (n) {
+        const obs = new ResizeObserver((entries) => {
+          for (const entry of entries) setAvailableWidth(entry.contentRect.width);
+        });
+        obs.observe(n);
+        resizeObsRef.current = obs;
+      }
     },
     [setWheelEl],
   );
@@ -921,6 +928,7 @@ export function AlignmentView({
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       const cvs = canvasRef.current;
       if (!cvs || !prepared) return;
+      if (panDragRef.current) return;
       const rect = cvs.getBoundingClientRect();
       const mouseXRaw = e.clientX - rect.left;
       const mouseYRaw = e.clientY - rect.top;
@@ -1022,15 +1030,77 @@ export function AlignmentView({
     hoverRafRef.current = requestAnimationFrame(() => redrawRef.current());
   }, []);
 
-  /* ── right-drag = zoom to range (ported) ── */
+  /* ── left-drag = pan, left-click = center on the locus ── */
+  const panDragRef = useRef<{ moved: boolean } | null>(null);
+  const [isPanning, setIsPanning] = useState(false);
+
   const handleCanvasMouseDown = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
-      if (e.button !== 2 || !prepared) return;
+      if (!prepared) return;
       const cvs = canvasRef.current;
       if (!cvs) return;
       const rect = cvs.getBoundingClientRect();
       const mouseXCanvas = e.clientX - rect.left;
+      // the label column carries hover and the resize handle, no gestures
       if (mouseXCanvas < labelWidth) return;
+
+      if (e.button === 0) {
+        const el = scrollRef.current;
+        if (!el) return;
+        const startX = e.clientX;
+        const startY = e.clientY;
+        const startSL = el.scrollLeft;
+        const startST = el.scrollTop;
+        panDragRef.current = { moved: false };
+        setIsPanning(true);
+        // drop the tooltip anchored to the pre-pan position
+        setHoverInfo(null);
+        setLabelHover(null);
+        hoverColRef.current = null;
+        redrawRef.current();
+        document.body.style.userSelect = "none";
+
+        const onMove = (ev: MouseEvent) => {
+          if (!(ev.buttons & 1)) {
+            onUp(ev);
+            return;
+          }
+          const dx = ev.clientX - startX;
+          const dy = ev.clientY - startY;
+          if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+            panDragRef.current!.moved = true;
+          }
+          if (!panDragRef.current?.moved) return;
+          const maxSL = Math.max(0, totalVirtualWRef.current - seqAreaWRef.current);
+          const sl = Math.max(0, Math.min(maxSL, startSL - dx));
+          el.scrollLeft = sl;
+          el.scrollTop = startST - dy;
+          setScrollLeft(sl);
+        };
+        const onUp = (ev: MouseEvent) => {
+          document.removeEventListener("mousemove", onMove);
+          document.removeEventListener("mouseup", onUp);
+          document.body.style.userSelect = "";
+          setIsPanning(false);
+          const moved = panDragRef.current?.moved ?? false;
+          panDragRef.current = null;
+          if (moved) return;
+          // A clean click (no drag) re-centres the view on that locus.
+          const saw = seqAreaWRef.current;
+          const tvw = totalVirtualWRef.current;
+          const virtualX = startSL + ev.clientX - rect.left - labelWidth;
+          const sl = Math.max(0, Math.min(Math.max(0, tvw - saw), virtualX - saw / 2));
+          el.scrollLeft = sl;
+          setScrollLeft(sl);
+        };
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+        e.preventDefault();
+        return;
+      }
+
+      /* ── right-drag = zoom to range (ported) ── */
+      if (e.button !== 2) return;
       const startC = Math.max(
         0,
         Math.min(anchorLen - 1, Math.floor((scrollLeft + mouseXCanvas - labelWidth) / cellW)),
@@ -1243,7 +1313,8 @@ export function AlignmentView({
             Deletion
           </span>
           <span className="ml-auto italic text-zinc-400">
-            Ctrl/&#8984; + scroll to zoom. Right-drag to zoom to a range.
+            Drag to pan, click to center. Ctrl/&#8984; + scroll to zoom.
+            Right-drag to zoom to a range.
           </span>
         </div>
 
@@ -1312,7 +1383,14 @@ export function AlignmentView({
           <div style={{ position: "sticky", top: 0, left: 0, zIndex: 10, width: "fit-content" }}>
             <canvas
               ref={canvasRef}
-              style={{ display: "block", cursor: viewMode === "letters" ? "pointer" : "crosshair" }}
+              style={{
+                display: "block",
+                cursor: isPanning
+                  ? "grabbing"
+                  : viewMode === "letters"
+                    ? "pointer"
+                    : "crosshair",
+              }}
               onMouseDown={handleCanvasMouseDown}
               onMouseMove={handleCanvasMouseMove}
               onMouseLeave={handleCanvasMouseLeave}
