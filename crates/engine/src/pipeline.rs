@@ -448,6 +448,12 @@ pub fn gene_detail(
             let (ref_bases, qry_bases) = crate::msa::block_bases(a, ref_rec, qry_rec);
             let pw = crate::msa::reconstruct(a, &ref_bases, &qry_bases);
             let slice = crate::msa::slice_block_to_ref_range(&pw, a, gene.start, gene.end);
+            // Span overlap guarantees a non-empty slice in theory; a delta
+            // encoding odd enough to break that must not produce a block
+            // with a 0-0 span and no columns.
+            if slice.ref_row.is_empty() {
+                continue;
+            }
             let (mut ref_row, mut qry_row) =
                 crate::msa::orient_for_strand(gene.strand, slice.ref_row, slice.qry_row);
             if gene.strand < 0 {
@@ -466,6 +472,10 @@ pub fn gene_detail(
                 qry_seq: String::from_utf8_lossy(&qry_row).into_owned(),
             });
         }
+        // Reference order, so the frontend can tile blocks and unaligned
+        // stretches into one walk of the gene.
+        blocks.sort_by_key(|b| b.ref_start);
+
         // Unaligned stretches inside the gene.
         let aligned = delta
             .aligned_ref_intervals()

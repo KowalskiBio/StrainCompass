@@ -3,7 +3,7 @@ import { api } from "../api";
 import type { GeneDetail } from "../types";
 import { nuccoreRangeUrl } from "../types";
 import { CallBadge, Modal, Spinner } from "./ui";
-import { AlignmentBlock } from "./GeneAlignmentPanel";
+import { GeneAlignmentTiles, type TileGene } from "./GeneAlignmentPanel";
 
 /**
  * The gene alignment viewer: pairwise alignment of the reference gene
@@ -122,14 +122,13 @@ export function GeneMsaDialog({
           )}
 
           {detail.queries.map((q) => (
-            <QueryAlignment key={q.query_id} q={q} />
+            <QueryAlignment key={q.query_id} q={q} gene={detail} />
           ))}
 
           <p className="text-xs text-zinc-400 dark:text-zinc-500">
             Reference row on top, query below. Highlighted letters are
-            mismatches; dashes mark insertions or deletions. Blocks appear in
-            reference order; unaligned stretches between blocks are listed
-            below the blocks.
+            mismatches; dashes mark insertions or deletions; a dotted query
+            row marks reference stretches with no alignment to this query.
           </p>
         </div>
       )}
@@ -137,7 +136,13 @@ export function GeneMsaDialog({
   );
 }
 
-function QueryAlignment({ q }: { q: GeneDetail["queries"][number] }) {
+function QueryAlignment({
+  q,
+  gene,
+}: {
+  q: GeneDetail["queries"][number];
+  gene: TileGene;
+}) {
   const [expanded, setExpanded] = useState(true);
   const alignedLen = q.blocks.reduce((a, b) => a + b.qry_seq.replace(/-/g, "").length, 0);
   const stats = `${q.cov_pct.toFixed(1)}% covered${
@@ -178,27 +183,12 @@ function QueryAlignment({ q }: { q: GeneDetail["queries"][number] }) {
               {Math.floor(alignedLen / 3)}).
             </p>
           )}
-          {q.blocks.length === 0 && (
+          {q.blocks.length === 0 && q.unaligned.length === 0 && (
             <p className="text-sm text-zinc-400 dark:text-zinc-500">
               No part of this gene is aligned to this query.
             </p>
           )}
-          {q.blocks.map((b, i) => (
-            <AlignmentBlock key={i} block={b} />
-          ))}
-          {q.unaligned.length > 0 && (
-            <div className="text-xs text-zinc-500 dark:text-zinc-400">
-              {q.unaligned.map(([s, e], i) => (
-                <p
-                  key={i}
-                  className="font-mono bg-zinc-50 border border-zinc-200 rounded px-2 py-1 my-1 inline-block mr-2 dark:bg-zinc-800/60 dark:border-zinc-800"
-                >
-                  unaligned reference bases {s.toLocaleString("en-US")} -{" "}
-                  {e.toLocaleString("en-US")} ({(e - s + 1).toLocaleString("en-US")} bp)
-                </p>
-              ))}
-            </div>
-          )}
+          <GeneAlignmentTiles q={q} gene={gene} />
         </div>
       )}
     </div>

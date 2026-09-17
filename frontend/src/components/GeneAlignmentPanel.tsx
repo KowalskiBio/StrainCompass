@@ -149,11 +149,12 @@ export function GeneAlignmentPanel({
             This gene has no alignment data.
           </p>
         )}
-        {detail && q && <QueryAlignment q={q} />}
+        {detail && q && <QueryAlignment q={q} gene={detail} />}
         {detail && (
           <p className="text-xs text-zinc-400 mt-3 dark:text-zinc-500">
             Reference row on top, query below. Highlighted letters are
-            mismatches; dashes mark insertions or deletions.
+            mismatches; dashes mark insertions or deletions; a dotted query
+            row marks reference stretches with no alignment to this query.
           </p>
         )}
       </div>
@@ -162,7 +163,7 @@ export function GeneAlignmentPanel({
 }
 
 /** The clicked gene against one query: stats, then the alignment blocks. */
-function QueryAlignment({ q }: { q: GeneQueryAlignment }) {
+function QueryAlignment({ q, gene }: { q: GeneQueryAlignment; gene: TileGene }) {
   const alignedLen = q.blocks.reduce((a, b) => a + b.qry_seq.replace(/-/g, "").length, 0);
   return (
     <div className="space-y-4">
@@ -193,34 +194,108 @@ function QueryAlignment({ q }: { q: GeneQueryAlignment }) {
           {Math.floor(alignedLen / 3)}).
         </p>
       )}
-      {q.blocks.length === 0 && (
+      {q.blocks.length === 0 && q.unaligned.length === 0 && (
         <p className="text-sm text-zinc-400 dark:text-zinc-500">
           No part of this gene is aligned to this query.
         </p>
       )}
       <div className="space-y-4 max-h-96 overflow-y-auto thin-scroll">
-        {q.blocks.map((b, i) => (
-          <AlignmentBlock key={i} block={b} />
-        ))}
+        <GeneAlignmentTiles q={q} gene={gene} />
       </div>
-      {q.unaligned.length > 0 && (
-        <div className="text-xs text-zinc-500 dark:text-zinc-400">
-          {q.unaligned.map(([s, e], i) => (
-            <p
-              key={i}
-              className="font-mono bg-zinc-50 border border-zinc-200 rounded px-2 py-1 my-1 inline-block mr-2 dark:bg-zinc-800/60 dark:border-zinc-800"
-            >
-              unaligned reference bases {s.toLocaleString("en-US")} -{" "}
-              {e.toLocaleString("en-US")} ({(e - s + 1).toLocaleString("en-US")} bp)
-            </p>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
 
 const COLS = 60;
+
+/** The gene facts the tiling needs, from GeneDetail. */
+export type TileGene = Pick<GeneDetail, "reference_seq" | "start" | "end" | "strand">;
+
+/** One piece of the gene walk: an aligned block, or a stretch the query
+ * has no alignment to. */
+type Tile =
+  | { kind: "block"; block: GeneQueryAlignment["blocks"][number] }
+  | { kind: "unaligned"; start: number; end: number; seq: string };
+
+/**
+ * Interleave the aligned blocks and the unaligned stretches of one query
+ * into a single walk of the gene, so a partial gene reads as one picture:
+ * what aligned, then what did not, in order.
+ *
+ * The gene's own reference sequence supplies the unaligned bases (the
+ * blocks only carry what aligned), indexed through the gene-oriented
+ * `reference_seq`: a minus-strand gene's sequence is the reverse complement,
+ * so its tiles also run in descending reference order to read 5' -> 3'.
+ */
+export function GeneAlignmentTiles({ q, gene }: { q: GeneQueryAlignment; gene: TileGene }) {
+  const tiles: Tile[] = q.blocks.map((b) => ({ kind: "block" as const, block: b }));
+  for (const [s, e] of q.unaligned) {
+    const from = gene.strand < 0 ? gene.end - e : s - gene.start;
+    tiles.push({
+      kind: "unaligned",
+      start: s,
+      end: e,
+      seq: gene.reference_seq.slice(from, from + (e - s + 1)),
+    });
+  }
+  tiles.sort((a, b) =>
+    (a.kind === "block" ? a.block.ref_start : a.start) -
+    (b.kind === "block" ? b.block.ref_start : b.start),
+  );
+  const ordered = gene.strand < 0 ? tiles.reverse() : tiles;
+  return (
+    <>
+      {ordered.map((t, i) =>
+        t.kind === "block" ? (
+          <AlignmentBlock key={i} block={t.block} />
+        ) : (
+          <UnalignedBlock key={i} start={t.start} end={t.end} seq={t.seq} />
+        ),
+      )}
+    </>
+  );
+}
+
+/** A stretch of the reference with no alignment to the query: the
+ * reference bases shown, the query row dotted out. */
+function UnalignedBlock({
+  start,
+  end,
+  seq,
+}: {
+  start: number;
+  end: number;
+  seq: string;
+}) {
+  return (
+    <div>
+      <p className="text-xs text-zinc-400 mb-1 font-mono dark:text-zinc-500">
+        unaligned reference {start.toLocaleString("en-US")} -{" "}
+        {end.toLocaleString("en-US")} ({(end - start + 1).toLocaleString("en-US")} bp),
+        no alignment to this query
+      </p>
+      <div className="font-mono text-xs leading-5 overflow-x-auto thin-scroll">
+        {chunk(seq.length, COLS).map(([, colStart]) => (
+          <div key={colStart} className="whitespace-pre">
+            <span className="text-zinc-300 select-none inline-block w-16 text-right pr-2 dark:text-zinc-700">
+              {colStart + 1}
+            </span>
+            <span className="text-zinc-500 dark:text-zinc-500">
+              {seq.slice(colStart, colStart + COLS)}
+            </span>
+            {"\n"}
+            <span className="text-zinc-300 select-none inline-block w-16 text-right pr-2 dark:text-zinc-700">
+              {" "}
+            </span>
+            <span className="text-zinc-300 select-none dark:text-zinc-700">
+              {"\u00b7".repeat(Math.min(COLS, seq.length - colStart))}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 /** One aligned block: the shared rendering the gene dialog also uses. */
 export function AlignmentBlock({

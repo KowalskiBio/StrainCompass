@@ -148,12 +148,18 @@ pub fn slice_block_to_ref_range(
     let mut qry_row = Vec::new();
     let mut first_q: Option<u64> = None;
     let mut last_q: u64 = 0;
+    let mut ref_pos_of_first: u64 = 0;
+    let mut ref_pos_of_last: u64 = 0;
     for c in 0..pw.len() {
         let rp = pw.ref_pos[c];
         // A column belongs to the range if its reference position (last
         // emitted base) is inside; ref gap columns inherit the previous
         // position.
         if rp >= ref_from && rp <= ref_to {
+            if ref_row.is_empty() {
+                ref_pos_of_first = rp;
+            }
+            ref_pos_of_last = rp;
             ref_row.push(pw.ref_row[c]);
             qry_row.push(pw.qry_row[c]);
             if pw.qry_row[c] != b'-' {
@@ -166,11 +172,21 @@ pub fn slice_block_to_ref_range(
     let qry_start = first_q.unwrap_or(0);
     let qry_end = last_q;
     let _ = a;
+    // The span actually covered, not the range that was asked for: a gene
+    // whose alignment starts partway in would otherwise claim the whole gene
+    // in its block header while carrying only the aligned columns, and the
+    // unaligned stretches beside it would overlap it instead of tiling it.
+    // Both stay 0 on an empty slice, which the caller skips.
+    let (ref_start, ref_end) = if ref_row.is_empty() {
+        (0, 0)
+    } else {
+        (ref_pos_of_first, ref_pos_of_last)
+    };
     GeneSlice {
         ref_row,
         qry_row,
-        ref_start: ref_from,
-        ref_end: ref_to,
+        ref_start,
+        ref_end,
         qry_start,
         qry_end,
     }
@@ -261,4 +277,56 @@ pub fn block_bases<'a>(
     let ref_bases = crate::fasta::subseq(ref_rec, a.ref_start, a.ref_end, false);
     let qry_bases = crate::fasta::subseq(qry_rec, a.qry_lo, a.qry_hi, a.qry_rev);
     (ref_bases, qry_bases)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn alignment(ref_start: u64, ref_end: u64, qry_rev: bool) -> Alignment {
+        Alignment {
+            ref_seqid: "ctg".into(),
+            qry_seqid: "q".into(),
+            ref_start,
+            ref_end,
+            qry_lo: 1,
+            qry_hi: ref_end - ref_start + 1,
+            qry_rev,
+            errors: 0,
+            deltas: vec![],
+        }
+    }
+
+    /// A gene overlapping the alignment only partly must get the span that
+    /// is actually covered, not the gene's own range: the block used to
+    /// claim the whole gene while carrying only the aligned columns, which
+    /// made it overlap the unaligned stretches instead of tiling them.
+    #[test]
+    fn slice_reports_the_covered_span_not_the_requested_one() {
+        let a = alignment(10, 25, false);
+        let ref_bases = b"AAAAAAAAAAAAAAAA".to_vec();
+        let qry_bases = b"CCCCCCCCCCCCCCCC".to_vec();
+        let pw = reconstruct(&a, &ref_bases, &qry_bases);
+
+        // gene 5..30: alignment covers 10..25 of it
+        let s = slice_block_to_ref_range(&pw, &a, 5, 30);
+        assert_eq!(s.ref_row.len(), 16);
+        assert_eq!(
+            s.ref_start, 10,
+            "span must start at the alignment, not the gene"
+        );
+        assert_eq!(
+            s.ref_end, 25,
+            "span must end at the alignment, not the gene"
+        );
+
+        // gene 15..20: fully inside the alignment
+        let s = slice_block_to_ref_range(&pw, &a, 15, 20);
+        assert_eq!(s.ref_row.len(), 6);
+        assert_eq!((s.ref_start, s.ref_end), (15, 20));
+
+        // no overlap at all: empty slice, caller skips it
+        let s = slice_block_to_ref_range(&pw, &a, 40, 50);
+        assert!(s.ref_row.is_empty());
+    }
 }
