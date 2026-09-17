@@ -3,6 +3,7 @@ import { api } from "../api";
 import type { GeneDetail } from "../types";
 import { nuccoreRangeUrl } from "../types";
 import { CallBadge, Modal, Spinner } from "./ui";
+import { AlignmentBlock } from "./GeneAlignmentPanel";
 
 /**
  * The gene alignment viewer: pairwise alignment of the reference gene
@@ -202,72 +203,4 @@ function QueryAlignment({ q }: { q: GeneDetail["queries"][number] }) {
       )}
     </div>
   );
-}
-
-const COLS = 60;
-
-function AlignmentBlock({ block }: { block: GeneDetail["queries"][number]["blocks"][number] }) {
-  const ref = block.ref_seq;
-  const qry = block.qry_seq;
-  const nCols = Math.min(ref.length, qry.length);
-  return (
-    <div>
-      <p className="text-xs text-zinc-500 mb-1 font-mono dark:text-zinc-400">
-        block {block.ref_start.toLocaleString("en-US")} -{" "}
-        {block.ref_end.toLocaleString("en-US")} in the reference
-        {block.qry_rev ? ", query aligned on the reverse strand" : ""}, identity{" "}
-        {block.identity.toFixed(1)}%
-      </p>
-      <div className="font-mono text-xs leading-5 overflow-x-auto thin-scroll">
-        {chunk(nCols, COLS).map(([, colStart]) => (
-          <div key={colStart} className="whitespace-pre">
-            <span className="text-zinc-300 select-none inline-block w-16 text-right pr-2 dark:text-zinc-700">
-              {colStart + 1}
-            </span>
-            <Row seq={ref.slice(colStart, colStart + COLS)} kind="ref" other={qry.slice(colStart, colStart + COLS)} />
-            {"\n"}
-            <span className="text-zinc-300 select-none inline-block w-16 text-right pr-2 dark:text-zinc-700">
-              {" "}
-            </span>
-            <Row seq={qry.slice(colStart, colStart + COLS)} kind="qry" other={ref.slice(colStart, colStart + COLS)} />
-          </div>
-        ))}
-      </div>
-      <p className="text-xs text-zinc-400 mt-1 dark:text-zinc-500">{nCols} alignment columns</p>
-    </div>
-  );
-}
-
-/**
- * One monospace row. Mismatches are tinted red; gaps (dashes) amber.
- * The reference row is plain so the eye is drawn to query differences.
- */
-function Row({ seq, kind, other }: { seq: string; kind: "ref" | "qry"; other: string }) {
-  const out: React.ReactNode[] = [];
-  for (let i = 0; i < seq.length; i++) {
-    const c = seq[i];
-    const o = other[i];
-    let cls = "";
-    if (c === "-" || o === "-") {
-      cls = kind === "qry" ? "bg-amber-100 text-amber-900 dark:bg-amber-950/50 dark:text-amber-300" : "";
-    } else if (kind === "qry" && c !== o) {
-      cls = "bg-red-100 text-red-800 dark:bg-red-950/50 dark:text-red-300";
-    }
-    out.push(
-      cls ? (
-        <span key={i} className={cls}>
-          {c}
-        </span>
-      ) : (
-        <span key={i}>{c}</span>
-      ),
-    );
-  }
-  return <span className={kind === "qry" ? "text-zinc-800 dark:text-zinc-300" : "text-zinc-500 dark:text-zinc-500"}>{out}</span>;
-}
-
-function chunk(total: number, n: number): [number, number][] {
-  const out: [number, number][] = [];
-  for (let i = 0; i < total; i += n) out.push([i, i]);
-  return out;
 }

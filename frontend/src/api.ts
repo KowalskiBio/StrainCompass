@@ -119,6 +119,22 @@ function alignmentCached(runId: number): Promise<AlignmentData> {
   return p;
 }
 
+/** Gene detail payloads are immutable for a finished run, and the strain
+ * map's click-to-align panel, the results-table preview and the gene
+ * dialog all ask for the same gene; coalesce them into one fetch. */
+const geneDetailCache = new Map<string, Promise<GeneDetail>>();
+
+function geneDetailCached(runId: number, locus: string): Promise<GeneDetail> {
+  const key = `${runId}:${locus}`;
+  let p = geneDetailCache.get(key);
+  if (!p) {
+    p = request<GeneDetail>(`/runs/${runId}/gene/${encodeURIComponent(locus)}`);
+    p.catch(() => geneDetailCache.delete(key));
+    geneDetailCache.set(key, p);
+  }
+  return p;
+}
+
 export const api = {
   listProjects: () => request<Project[]>("/projects"),
   createProject: (name: string, organism?: string) =>
@@ -232,10 +248,7 @@ export const api = {
     request<RefseqWindow>(
       `/runs/${runId}/refseq?seqid=${encodeURIComponent(seqid)}&start=${start}&end=${end}`,
     ),
-  geneDetail: (runId: number, locus: string) =>
-    request<GeneDetail>(
-      `/runs/${runId}/gene/${encodeURIComponent(locus)}`,
-    ),
+  geneDetail: geneDetailCached,
   listRunFiles: (runId: number) =>
     request<{ run_id: number; status: string; files: RunFile[] }>(
       `/runs/${runId}/files`,

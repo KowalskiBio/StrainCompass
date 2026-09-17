@@ -764,24 +764,19 @@ function GenePreview({
   onOpen: () => void;
   onClose: () => void;
 }) {
-  const cache = GenePreviewCache.get(runId, locus);
-  const [detail, setDetail] = useState<GeneDetail | null>(cache);
+  const [detail, setDetail] = useState<GeneDetail | null>(null);
   useEffect(() => {
-    if (cache) return;
     let cancelled = false;
     api
       .geneDetail(runId, locus)
       .then((d) => {
-        if (!cancelled) {
-          GenePreviewCache.set(runId, locus, d);
-          setDetail(d);
-        }
+        if (!cancelled) setDetail(d);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [runId, locus, cache]);
+  }, [runId, locus]);
   const ref = usePopoverDismiss(true, onClose);
   if (!detail) return null;
   return (
@@ -866,12 +861,3 @@ function GenePreview({
   );
 }
 
-const genePreviewCache = new Map<string, GeneDetail>();
-const GenePreviewCache = {
-  get(runId: number, locus: string) {
-    return genePreviewCache.get(`${runId}:${locus}`) ?? null;
-  },
-  set(runId: number, locus: string, d: GeneDetail) {
-    genePreviewCache.set(`${runId}:${locus}`, d);
-  },
-};

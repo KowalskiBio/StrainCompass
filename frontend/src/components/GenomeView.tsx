@@ -10,6 +10,7 @@ import type {
 } from "../types";
 import { Spinner } from "./ui";
 import { GeneSearch } from "./GeneSearch";
+import { GeneAlignmentPanel } from "./GeneAlignmentPanel";
 import { useWheelGestures } from "./useWheelGestures";
 import { MIN_SPAN, clampRange, panRange, zoomRange } from "./genomeRange";
 import type { Range } from "./genomeRange";
@@ -107,12 +108,16 @@ export function GenomeView({
    * ranges set elsewhere in the component. */
   const lastCommittedRef = useRef<Range | null>(null);
   const initialGeneRef = useRef(initialGene);
+  /**
+   * The gene last clicked on the map: its alignment to the query the map is
+   * colored by is shown beneath the map, until closed or another gene is
+   * clicked (clicking the same gene again also closes it).
+   */
+  const [alignLocus, setAlignLocus] = useState<string | null>(null);
   const [popup, setPopup] = useState<{
     x: number;
     y: number;
-    gene?: WgaGene;
-    gi?: number;
-    variant?: VariantPopupInfo;
+    variant: VariantPopupInfo;
   } | null>(null);
   const dragRef = useRef<{ x: number; start: number; moved: boolean } | null>(null);
   /** Set on mouseup after a drag, so the click that follows is ignored. */
@@ -844,13 +849,9 @@ export function GenomeView({
               const hit = geneAt(e.target);
               if (!hit) return;
               e.preventDefault();
-              const rect = svgRef.current!.getBoundingClientRect();
-              setPopup({
-                x: e.clientX - rect.left,
-                y: layout.baselineY(hit.row) + geneH / 2,
-                gene: hit.g,
-                gi: hit.gi,
-              });
+              setAlignLocus((cur) =>
+                cur === hit.g.locus_tag ? null : hit.g.locus_tag,
+              );
             }}
           >
             {/* A gene that crosses a row boundary is drawn once per row, with a
@@ -1153,30 +1154,32 @@ export function GenomeView({
           </>
         )}
         <span>
-          Pinch or scroll-wheel to zoom, two-finger scroll or drag to pan. Click a
-          gene for details.
+          Pinch or scroll-wheel to zoom, two-finger scroll or drag to pan. Click
+          a gene to align it against {selectedQuery ? selectedQuery.query_name : "a query"} beneath
+          the map; click a variant marker for details.
         </span>
       </div>
 
+      {alignLocus &&
+        (() => {
+          const gene = data.genes.find((g) => g.locus_tag === alignLocus);
+          if (!gene) return null;
+          return (
+            <GeneAlignmentPanel
+              runId={run.id}
+              gene={gene}
+              queryId={colorBy ?? data.queries[0]?.query_id}
+              onClose={() => setAlignLocus(null)}
+              onOpenAll={onOpenGene}
+            />
+          );
+        })()}
+
       {popup && (
-        <GenePopup
+        <VariantPopup
           popup={popup}
           maxLeft={Math.max(4, width - 296)}
           onClose={() => setPopup(null)}
-          onOpenGene={(locus) => {
-            setPopup(null);
-            onOpenGene(locus);
-          }}
-          callInfo={
-            selectedQuery && popup.gi !== undefined
-              ? {
-                  name: selectedQuery.query_name,
-                  call: selectedQuery.calls?.[popup.gi] ?? "ABSENT",
-                  covPct: selectedQuery.cov_pcts?.[popup.gi] ?? 0,
-                  identity: selectedQuery.identities?.[popup.gi] ?? 0,
-                }
-              : null
-          }
         />
       )}
     </div>
@@ -1346,17 +1349,14 @@ function truncateLabel(label: string, maxPx: number): string {
   return `${label.slice(0, Math.max(1, maxChars - 1))}\u2026`;
 }
 
-function GenePopup({
+/** The card opened by clicking a variant marker on the map. */
+function VariantPopup({
   popup,
   onClose,
-  onOpenGene,
-  callInfo,
   maxLeft,
 }: {
-  popup: { x: number; y: number; gene?: WgaGene; variant?: VariantPopupInfo };
+  popup: { x: number; y: number; variant: VariantPopupInfo };
   onClose: () => void;
-  onOpenGene: (locus: string) => void;
-  callInfo?: { name: string; call: Call; covPct: number; identity: number } | null;
   /** Rightmost left edge that still keeps the card inside the map. */
   maxLeft: number;
 }) {
@@ -1374,84 +1374,45 @@ function GenePopup({
       className="absolute z-30 bg-white border border-zinc-200 rounded-lg shadow-lg p-3 w-72 dark:bg-zinc-900 dark:border-zinc-800"
       style={{ left: Math.max(4, Math.min(popup.x, maxLeft)), top: popup.y + 16 }}
     >
-      {popup.gene && (
-        <>
-          <p className="font-semibold text-[15px]">{popup.gene.locus_tag}</p>
-          <p className="text-xs text-zinc-500 mt-1 dark:text-zinc-400">
-            {popup.gene.symbol ? `${popup.gene.symbol} - ` : ""}
-            {popup.gene.biotype} on {popup.gene.seqid}
-          </p>
-          <p className="text-xs text-zinc-500 mt-1 font-mono dark:text-zinc-400">
-            {popup.gene.start.toLocaleString("en-US")} -{" "}
-            {popup.gene.end.toLocaleString("en-US")} (
-            {popup.gene.strand > 0 ? "+" : "-"} strand)
-          </p>
-          {popup.gene.product && (
-            <p className="text-xs text-zinc-600 mt-2 leading-snug dark:text-zinc-300">
-              {popup.gene.product}
-            </p>
-          )}
-          <FunctionBadges product={popup.gene.product} />
-          {callInfo && (
-            <div className="mt-2 flex items-center gap-2 text-xs">
-              <CallBadge call={callInfo.call} />
-              <span className="font-mono text-zinc-500 dark:text-zinc-400">
-                {callInfo.covPct.toFixed(1)}% coverage,{" "}
-                {callInfo.identity.toFixed(1)}% identity
-              </span>
-            </div>
-          )}
-          <button
-            className="mt-3 w-full h-10 rounded-md bg-zinc-900 text-white text-sm hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-            onClick={() => onOpenGene(popup.gene!.locus_tag)}
-          >
-            Show alignment
-          </button>
-        </>
+      <p className="font-semibold text-[15px]">
+        {popup.variant.kind === "snp"
+          ? "SNP"
+          : popup.variant.kind === "del"
+            ? "Deletion"
+            : "Insertion"}
+      </p>
+      <p className="text-xs text-zinc-500 mt-1 dark:text-zinc-400">
+        {popup.variant.queryName}
+      </p>
+      <p className="text-xs text-zinc-500 mt-1 font-mono dark:text-zinc-400">
+        {popup.variant.kind === "ins"
+          ? `after reference position ${popup.variant.pos.toLocaleString("en-US")}`
+          : `reference position ${popup.variant.pos.toLocaleString("en-US")}`}
+      </p>
+      {popup.variant.kind === "snp" && (
+        <p className="text-xs mt-1 font-mono dark:text-zinc-300">
+          {String.fromCharCode(popup.variant.r)} &rarr;{" "}
+          <span style={{ color: SNP_COLOR }}>
+            {String.fromCharCode(popup.variant.q)}
+          </span>
+        </p>
       )}
-      {popup.variant && (
-        <>
-          <p className="font-semibold text-[15px]">
-            {popup.variant.kind === "snp"
-              ? "SNP"
-              : popup.variant.kind === "del"
-                ? "Deletion"
-                : "Insertion"}
-          </p>
-          <p className="text-xs text-zinc-500 mt-1 dark:text-zinc-400">
-            {popup.variant.queryName}
-          </p>
-          <p className="text-xs text-zinc-500 mt-1 font-mono dark:text-zinc-400">
-            {popup.variant.kind === "ins"
-              ? `after reference position ${popup.variant.pos.toLocaleString("en-US")}`
-              : `reference position ${popup.variant.pos.toLocaleString("en-US")}`}
-          </p>
-          {popup.variant.kind === "snp" && (
-            <p className="text-xs mt-1 font-mono dark:text-zinc-300">
-              {String.fromCharCode(popup.variant.r)} &rarr;{" "}
-              <span style={{ color: SNP_COLOR }}>
-                {String.fromCharCode(popup.variant.q)}
-              </span>
-            </p>
-          )}
-          {popup.variant.kind === "del" && (
-            <p className="text-xs mt-1 font-mono dark:text-zinc-300">
-              <span style={{ color: DEL_COLOR }}>
-                {popup.variant.len.toLocaleString("en-US")} bp
-              </span>{" "}
-              missing from the query
-            </p>
-          )}
-          {popup.variant.kind === "ins" && (
-            <p className="text-xs mt-1 font-mono break-all dark:text-zinc-300">
-              <span style={{ color: INS_COLOR }}>
-                {popup.variant.seq.length.toLocaleString("en-US")} bp
-              </span>{" "}
-              inserted: {popup.variant.seq.slice(0, 200)}
-              {popup.variant.seq.length > 200 ? "\u2026" : ""}
-            </p>
-          )}
-        </>
+      {popup.variant.kind === "del" && (
+        <p className="text-xs mt-1 font-mono dark:text-zinc-300">
+          <span style={{ color: DEL_COLOR }}>
+            {popup.variant.len.toLocaleString("en-US")} bp
+          </span>{" "}
+          missing from the query
+        </p>
+      )}
+      {popup.variant.kind === "ins" && (
+        <p className="text-xs mt-1 font-mono break-all dark:text-zinc-300">
+          <span style={{ color: INS_COLOR }}>
+            {popup.variant.seq.length.toLocaleString("en-US")} bp
+          </span>{" "}
+          inserted: {popup.variant.seq.slice(0, 200)}
+          {popup.variant.seq.length > 200 ? "\u2026" : ""}
+        </p>
       )}
     </div>
   );
