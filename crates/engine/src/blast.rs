@@ -2,11 +2,11 @@
 
 use crate::tools::ToolPaths;
 use crate::{friendly, Result};
-use straincompass_types::{Call, PanelRow};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 use std::process::Command;
+use straincompass_types::{Call, PanelRow};
 
 /// Run the panel recheck for one query. `workdir` receives the blast
 /// database files; it must be writable and private to this comparison.

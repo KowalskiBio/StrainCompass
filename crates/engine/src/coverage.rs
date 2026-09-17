@@ -5,8 +5,8 @@ use crate::fasta::FastaRecord;
 use crate::gff::Gene;
 use crate::msa;
 use crate::{friendly, Result};
-use straincompass_types::{Call, GeneCoverageRow};
 use std::collections::HashMap;
+use straincompass_types::{Call, GeneCoverageRow};
 
 /// Compute the genes coverage table for one query.
 ///

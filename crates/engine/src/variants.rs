@@ -11,9 +11,9 @@ use crate::delta::{Alignment, DeltaFile};
 use crate::fasta::{self, FastaRecord};
 use crate::msa;
 use crate::Result;
-use straincompass_types::{AlignmentEvents, DelEvent, InsEvent, SnpEvent};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
+use straincompass_types::{AlignmentEvents, DelEvent, InsEvent, SnpEvent};
 
 /// Extract variant events per reference seqid for one query against the
 /// reference, walking the reconstructed pairwise alignment of every

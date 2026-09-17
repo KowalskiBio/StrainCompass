@@ -9,14 +9,14 @@ use crate::gff;
 use crate::tools::ToolPaths;
 use crate::variants;
 use crate::Result;
-use straincompass_types::{
-    AlignmentEvents, GapRow, GeneCoverageRow, PanelRow, RunParams, WgaBlock, WgaGene,
-};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use straincompass_types::{
+    AlignmentEvents, GapRow, GeneCoverageRow, PanelRow, RunParams, WgaBlock, WgaGene,
+};
 
 /// Everything one comparison produces (one query against the reference).
 #[derive(Debug, Serialize, Deserialize, Default)]

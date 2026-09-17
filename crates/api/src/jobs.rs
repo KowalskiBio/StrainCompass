@@ -2,15 +2,15 @@
 
 use crate::error::ApiResult;
 use crate::state::SharedState;
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use straincompass_engine::pipeline::{
     self, ComparisonInputs, ComparisonResult, QueryAlignmentSource, WorkDirs,
 };
 use straincompass_engine::tools::ToolPaths;
 use straincompass_types::{MatrixRow, RunParams};
-use std::io::Write;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 
 pub fn spawn_run(state: SharedState, run_id: i64) {
     tokio::spawn(async move {
@@ -511,7 +511,10 @@ fn backfill_protein_ids(
     if rows.is_empty() || rows.iter().all(|r| !r.protein_id.is_empty()) {
         return;
     }
-    let staged = state.project_dir(project_id).join("reference").join("ref.gff");
+    let staged = state
+        .project_dir(project_id)
+        .join("reference")
+        .join("ref.gff");
     let gff_path = match std::fs::exists(&staged) {
         Ok(true) => staged,
         _ => match crate::routes::uploads::reference_paths(state, project_id) {
@@ -654,14 +657,11 @@ impl QueryAlignmentSourceOwned {
 /// duplicate the heavy walk, while different queries compute in
 /// parallel (the alignment viewer fans out one blocking task per query).
 static VARIANT_LOCKS: std::sync::OnceLock<
-    std::sync::Mutex<
-        std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<()>>>,
-    >,
+    std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<()>>>>,
 > = std::sync::OnceLock::new();
 
 fn variant_lock(path: &std::path::Path) -> std::sync::Arc<std::sync::Mutex<()>> {
-    let map =
-        VARIANT_LOCKS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let map = VARIANT_LOCKS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     let mut guard = map.lock().unwrap();
     std::sync::Arc::clone(guard.entry(path.to_path_buf()).or_default())
 }

@@ -1,10 +1,10 @@
 //! End-to-end engine test against real MUMmer + BLAST+.
 //! Skipped when the tools are not on this machine (e.g. plain CI).
 
+use std::io::Write;
 use straincompass_engine::pipeline::{self, ComparisonInputs, WorkDirs};
 use straincompass_engine::tools::ToolPaths;
 use straincompass_types::{Call, RunParams};
-use std::io::Write;
 
 fn tools_available() -> Option<ToolPaths> {
     ToolPaths::discover().ok()

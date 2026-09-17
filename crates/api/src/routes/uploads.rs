@@ -5,8 +5,8 @@ use crate::models::FileDto;
 use crate::state::SharedState;
 use axum::extract::{Multipart, Path, State};
 use axum::Json;
-use straincompass_engine::fasta;
 use std::io::Write;
+use straincompass_engine::fasta;
 use uuid::Uuid;
 
 const MAX_UPLOAD_BYTES: usize = 512 * 1024 * 1024;

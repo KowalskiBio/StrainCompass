@@ -9,8 +9,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::header;
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
-use straincompass_types::{Call, GeneCoverageRow, TableQuery};
 use serde::Deserialize;
+use straincompass_types::{Call, GeneCoverageRow, TableQuery};
 
 #[derive(Debug, Deserialize)]
 pub struct ExportQuery {

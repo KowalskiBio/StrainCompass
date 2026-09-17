@@ -5,9 +5,9 @@ use crate::models::{RunDto, RunLogDto, RunQueryDto};
 use crate::state::SharedState;
 use axum::extract::{Path, State};
 use axum::Json;
-use straincompass_types::{validate_params, RunParams};
 use serde::Deserialize;
 use std::sync::MutexGuard;
+use straincompass_types::{validate_params, RunParams};
 
 fn run_dto(conn: &MutexGuard<'_, rusqlite::Connection>, run_id: i64) -> ApiResult<Option<RunDto>> {
     let Ok(row) = conn.query_row(
@@ -215,7 +215,9 @@ pub async fn rename(
         rusqlite::params![name, run_id],
     )?;
     if n == 0 {
-        return Err(ApiError::NotFound("This run does not exist (anymore).".into()));
+        return Err(ApiError::NotFound(
+            "This run does not exist (anymore).".into(),
+        ));
     }
     let dto = run_dto(&conn, run_id)?;
     drop(conn);

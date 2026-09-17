@@ -6,11 +6,11 @@ use crate::jobs;
 use crate::state::SharedState;
 use axum::extract::{Path, Query, State};
 use axum::Json;
+use serde_json::Value;
 use straincompass_types::{
     Call, GapRow, GeneCoverageRow, GeneDetail, MatrixRow, Page, PanelRow, TableQuery, WgaData,
     WgaQuery,
 };
-use serde_json::Value;
 
 fn resolve_query_id(
     state: &SharedState,
@@ -461,14 +461,15 @@ pub async fn refseq(
 mod tests {
     use super::*;
     use crate::state::AppState;
-    use straincompass_types::RunParams;
     use std::sync::{Arc, Mutex};
+    use straincompass_types::RunParams;
 
     /// A tiny finished run on disk: one reference (chr1, 8 bp) and one
     /// query whose delta encodes an insertion, two deletions and a SNP
     /// (the same fixture the engine variant tests use).
     fn seeded_state() -> (SharedState, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!("straincompass-api-test-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("straincompass-api-test-{}", uuid::Uuid::new_v4()));
         let run_dir = dir.join("projects/1/runs/1");
         let qdir = run_dir.join("queries/10");
         std::fs::create_dir_all(qdir.join("work")).unwrap();
@@ -556,7 +557,10 @@ mod tests {
         assert_eq!((ev.del_pos[0], ev.del_len[0]), (1, 2));
         assert_eq!((ev.del_pos[1], ev.del_len[1]), (4, 1));
         assert_eq!(ev.snp_pos.len(), 1);
-        assert_eq!((ev.snp_pos[0], ev.snp_ref[0], ev.snp_qry[0]), (6, b'C', b'A'));
+        assert_eq!(
+            (ev.snp_pos[0], ev.snp_ref[0], ev.snp_qry[0]),
+            (6, b'C', b'A')
+        );
 
         // the events were cached next to result.json
         let cache = dir.join("projects/1/runs/1/queries/10/variants.json");

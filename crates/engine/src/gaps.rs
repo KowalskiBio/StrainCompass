@@ -2,8 +2,8 @@
 
 use crate::delta::DeltaFile;
 use crate::gff::Gene;
-use straincompass_types::GapRow;
 use std::collections::HashMap;
+use straincompass_types::GapRow;
 
 /// Compute unaligned regions (>= min_gap bp) per reference sequence, with
 /// the genes overlapping each region.
