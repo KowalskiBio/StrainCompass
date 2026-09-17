@@ -687,19 +687,52 @@ export function AlignmentView({
             }
             ctx.globalAlpha = 1;
           }
-          for (const d of r.delList) {
-            if (d.pos + d.len - 1 < fCol || d.pos > lCol) continue;
-            const x1 = Math.max(
-              labelWidth,
-              Math.floor(labelWidth + d.pos * cellW - scrollLeft),
-            );
-            const x2 = Math.ceil(
-              labelWidth + Math.min(d.pos + d.len - 1, lCol + 1) * cellW - scrollLeft,
-            );
-            const w = Math.max(1, Math.min(x2 - x1, labelWidth + seqAreaW - x1));
-            if (w <= 0 || x1 > labelWidth + seqAreaW) continue;
+          if (!mergePixels) {
+            for (const d of r.delList) {
+              if (d.pos + d.len - 1 < fCol || d.pos > lCol) continue;
+              const x1 = Math.max(
+                labelWidth,
+                Math.floor(labelWidth + d.pos * cellW - scrollLeft),
+              );
+              const x2 = Math.ceil(
+                labelWidth + Math.min(d.pos + d.len - 1, lCol + 1) * cellW - scrollLeft,
+              );
+              const w = Math.max(1, Math.min(x2 - x1, labelWidth + seqAreaW - x1));
+              if (w <= 0 || x1 > labelWidth + seqAreaW) continue;
+              ctx.fillStyle = DEL_COLOR;
+              ctx.fillRect(x1, y + 2, w, ROW_HEIGHT - 4);
+            }
+          } else {
+            // Same density contract as the point events: a short del must not
+            // paint a solid column for a pixel it barely touches — only a
+            // column whose bases are mostly missing stays solid purple.
             ctx.fillStyle = DEL_COLOR;
-            ctx.fillRect(x1, y + 2, w, ROW_HEIGHT - 4);
+            const cover = new Float32Array(Math.ceil(seqAreaW) + 1);
+            for (const d of r.delList) {
+              if (d.pos + d.len - 1 < fCol || d.pos > lCol) continue;
+              const a = Math.max(d.pos, fCol);
+              const b = Math.min(d.pos + d.len, lCol + 1); // half-open
+              const pxA = Math.max(
+                labelWidth,
+                Math.floor(labelWidth + a * cellW - scrollLeft),
+              );
+              const pxB = Math.min(
+                labelWidth + seqAreaW - 1,
+                Math.floor(labelWidth + b * cellW - scrollLeft),
+              );
+              for (let px = pxA; px <= pxB; px++) {
+                const colA = (px - labelWidth + scrollLeft) / cellW;
+                const ov = Math.max(0, Math.min(b, colA + 1 / cellW) - Math.max(a, colA));
+                if (ov > 0)
+                  cover[px - labelWidth] = Math.min(1, cover[px - labelWidth] + ov * cellW);
+              }
+            }
+            for (let px = 0; px < cover.length; px++) {
+              if (cover[px] === 0) continue;
+              ctx.globalAlpha = Math.max(MIN_DENSITY_INK, cover[px]);
+              ctx.fillRect(labelWidth + px, y + 2, 1, ROW_HEIGHT - 4);
+            }
+            ctx.globalAlpha = 1;
           }
           const insLo = lowerBoundPos(r.insList, fCol);
           const insHi = lowerBoundPos(r.insList, lCol + 2);
