@@ -454,6 +454,36 @@ export function GenomeView({
     [setWheelEl],
   );
 
+  /**
+   * The two gained memos live here, above the loading early-returns, and
+   * must never move below them: they are hooks, and the first render (data
+   * still loading) returns before reaching code below. Having them after
+   * the returns made the first successful render call two more hooks than
+   * the loading one had, which is React error #310 and a dead genome view.
+   */
+  const gainedMarkers = useMemo(
+    () =>
+      gainedOn && gained && range
+        ? gained.filter(
+            (g) =>
+              g.anchor !== "unanchored" &&
+              g.anchor_seqid === seqid &&
+              g.anchor_start <= range.end &&
+              g.anchor_end >= range.start,
+          )
+        : [],
+    [gainedOn, gained, range, seqid],
+  );
+  /**
+   * Regions on query contigs with no alignment at all. They have no
+   * reference position, so they cannot be drawn here; the legend says how
+   * many there are rather than letting them vanish.
+   */
+  const unanchored = useMemo(
+    () => (gained ?? []).filter((g) => g.anchor === "unanchored"),
+    [gained],
+  );
+
   if (error) return <p className="text-red-700 py-4 dark:text-red-400">{error}</p>;
   if (!data || !range || !seqid)
     return (
@@ -612,30 +642,6 @@ export function GenomeView({
     const row = el ? Number(el.getAttribute("data-row")) : NaN;
     return Number.isFinite(gx) && Number.isFinite(row) ? { gx, row } : null;
   };
-
-  /** Gained regions placed on the visible contig and inside the window. */
-  const gainedMarkers = useMemo(
-    () =>
-      gainedOn && gained
-        ? gained.filter(
-            (g) =>
-              g.anchor !== "unanchored" &&
-              g.anchor_seqid === seqid &&
-              g.anchor_start <= range.end &&
-              g.anchor_end >= range.start,
-          )
-        : [],
-    [gainedOn, gained, seqid, range.start, range.end],
-  );
-  /**
-   * Regions on query contigs with no alignment at all. They have no
-   * reference position, so they cannot be drawn here; the legend says how
-   * many there are rather than letting them vanish.
-   */
-  const unanchored = useMemo(
-    () => (gained ?? []).filter((g) => g.anchor === "unanchored"),
-    [gained],
-  );
 
   // Variant markers of the selected query inside the visible range.
   const markers = showMarkers && variantEvents
