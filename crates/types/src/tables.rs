@@ -56,6 +56,113 @@ pub struct GapRow {
     pub genes: Vec<String>,
 }
 
+/// Where a gained region sits relative to the reference. A gained region
+/// has no reference coordinates of its own, so it is placed by the
+/// alignment blocks that flank it on the query contig.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GainedAnchor {
+    /// Both flanking blocks land close together on the same reference
+    /// sequence: the region sits between `anchor_start` and `anchor_end`.
+    Between,
+    /// Only one flank is usable - the region is at a query contig end, or
+    /// the two flanks pointed at different places and we fell back to the
+    /// left one. The position is that flank's junction, half a placement.
+    Flank,
+    /// The query contig has no alignment to the reference at all, so the
+    /// region cannot be placed. A whole extra replicon (a plasmid, a
+    /// phage) lands here.
+    #[default]
+    Unanchored,
+}
+
+impl GainedAnchor {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GainedAnchor::Between => "BETWEEN",
+            GainedAnchor::Flank => "FLANK",
+            GainedAnchor::Unanchored => "UNANCHORED",
+        }
+    }
+}
+
+/// One gene predicted inside a gained region.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GainedOrf {
+    /// 1-based inclusive, in QUERY CONTIG coordinates (not relative to the
+    /// region), so the ORF can be pulled straight out of the query fasta.
+    pub start: u64,
+    pub end: u64,
+    pub strand: i8,
+    /// The ORF runs off an edge of the region, so it is probably truncated
+    /// rather than a whole gene.
+    pub partial: bool,
+    /// The gene finder's confidence in the call (0-100).
+    pub confidence: f64,
+}
+
+/// One stretch of a query genome with no alignment to the reference, and
+/// the genes predicted inside it.
+///
+/// "No alignment" is weaker than "not in the reference": nucmer anchors on
+/// matches unique to the reference, so a query copy of a gene the reference
+/// carries several times over may have nothing unique to seed from and land
+/// here anyway. The wording everywhere downstream says "has no alignment to
+/// the reference", never "is new".
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GainedRow {
+    /// Query contig the region sits on (sanitized id, as in query.fa).
+    pub qry_seqid: String,
+    /// 1-based inclusive coordinates on the query contig.
+    pub start: u64,
+    pub end: u64,
+    pub length: u64,
+    /// G+C percent over the unambiguous bases of the region. Far from the
+    /// genome's own GC is the classic hint of horizontally acquired DNA.
+    pub gc_pct: f64,
+    /// True when the region touches either end of its query contig, where a
+    /// draft assembly's breaks routinely look like gained sequence.
+    pub at_contig_end: bool,
+    pub anchor: GainedAnchor,
+    /// Reference sequence the anchor is on; empty when unanchored.
+    pub anchor_seqid: String,
+    /// The reference interval the region is placed at (1-based inclusive).
+    /// Both ends are the junction position for `Flank`; both are 0 when
+    /// unanchored.
+    pub anchor_start: u64,
+    pub anchor_end: u64,
+    /// Set when both flanks exist but tell different stories (different
+    /// reference sequences, far apart, or opposite orientations): the anchor
+    /// fell back to the left flank and should be read with care.
+    pub flanks_disagree: bool,
+    /// Locus tag of the reference gene at the left flank, and at the right.
+    /// Empty when there is no gene there.
+    pub left_gene: String,
+    pub right_gene: String,
+    /// Genes predicted inside the region. `None` means gene prediction did
+    /// not run - which is not the same as having looked and found none.
+    pub n_orfs: Option<u32>,
+    /// Of those, the ones with both a start and a stop inside the region.
+    /// This is the number worth quoting: an ORF running off an edge is
+    /// usually a gene the insertion interrupted, or one a contig break cut.
+    pub n_orfs_complete: Option<u32>,
+    /// The predicted genes themselves.
+    pub orfs: Vec<GainedOrf>,
+}
+
+/// Whether the genes inside the gained regions could be predicted.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(tag = "state", content = "reason", rename_all = "snake_case")]
+pub enum GainedOrfStatus {
+    /// Predicted successfully.
+    Predicted,
+    /// Not attempted or not possible; carries a plain language reason.
+    Unavailable(String),
+    /// The run predates the feature, so nothing is known either way.
+    #[default]
+    Unknown,
+}
+
 /// One row of the strict panel recheck (per query).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PanelRow {
@@ -351,6 +458,11 @@ pub struct TableQuery {
     #[serde(default)]
     pub search: Option<String>,
     /// Filter by call: present | partial | absent.
+    ///
+    /// Tables without a call column reuse this field for their own one
+    /// filter rather than growing the struct the export endpoints share:
+    /// the matrix takes `not_present`, and gained regions take
+    /// `anchored` | `unanchored`.
     #[serde(default)]
     pub call: Option<String>,
     /// For exports: comma separated column keys; empty = all.

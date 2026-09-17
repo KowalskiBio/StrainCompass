@@ -39,6 +39,10 @@ pub struct RunDto {
     pub finished_at: Option<String>,
     pub queries: Vec<RunQueryDto>,
     pub has_panel: bool,
+    /// Whether this run carries gained regions. Runs computed before the
+    /// feature existed do not, and cannot without being re-run, so the UI
+    /// hides the tab rather than showing one that always errors.
+    pub has_gained: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

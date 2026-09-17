@@ -11,7 +11,7 @@ use straincompass_types::{validate_params, RunParams};
 
 fn run_dto(conn: &MutexGuard<'_, rusqlite::Connection>, run_id: i64) -> ApiResult<Option<RunDto>> {
     let Ok(row) = conn.query_row(
-        "SELECT id, project_id, status, step, error, created_at, started_at, finished_at, query_ids, name
+        "SELECT id, project_id, status, step, error, created_at, started_at, finished_at, query_ids, name, params_json
          FROM runs WHERE id = ?1",
         [run_id],
         |r| {
@@ -26,13 +26,31 @@ fn run_dto(conn: &MutexGuard<'_, rusqlite::Connection>, run_id: i64) -> ApiResul
                 r.get::<_, Option<String>>(7)?,
                 r.get::<_, String>(8)?,
                 r.get::<_, Option<String>>(9)?,
+                r.get::<_, String>(10)?,
             ))
         },
     ) else {
         return Ok(None);
     };
-    let (id, project_id, status, step, error, created_at, started_at, finished_at, query_ids, name) =
-        row;
+    let (
+        id,
+        project_id,
+        status,
+        step,
+        error,
+        created_at,
+        started_at,
+        finished_at,
+        query_ids,
+        name,
+        params_json,
+    ) = row;
+    // The params a run was started with are the honest record of whether it
+    // could have gained regions: min_gained did not exist before they did.
+    let has_gained = serde_json::from_str::<serde_json::Value>(&params_json)
+        .ok()
+        .and_then(|v| v.get("min_gained").cloned())
+        .is_some();
     let has_panel: bool = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM files WHERE project_id = ?1 AND role = 'panel')",
@@ -64,6 +82,7 @@ fn run_dto(conn: &MutexGuard<'_, rusqlite::Connection>, run_id: i64) -> ApiResul
         finished_at,
         queries,
         has_panel,
+        has_gained,
     }))
 }
 

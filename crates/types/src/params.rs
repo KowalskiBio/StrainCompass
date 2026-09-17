@@ -46,6 +46,29 @@ pub struct RunParams {
     /// Run the overall alignment report (dnadiff) or skip it.
     #[garde(skip)]
     pub dnadiff: bool,
+    /// Minimum gained region reported (bp): a stretch of the query with no
+    /// alignment to the reference.
+    ///
+    /// The serde default is load bearing. Every run's params_json is stored
+    /// in the database, and none of the ones written before this field
+    /// existed carry it; without a default those runs stop deserializing
+    /// and stop opening at all.
+    #[garde(range(min = 0, max = 100_000))]
+    #[serde(default = "default_min_gained")]
+    pub min_gained: u64,
+    /// Predict the genes inside gained regions (needs a gene finder on the
+    /// server). See `min_gained` on why the serde default is required.
+    #[garde(skip)]
+    #[serde(default = "default_gained_orfs")]
+    pub gained_orfs: bool,
+}
+
+fn default_min_gained() -> u64 {
+    500
+}
+
+fn default_gained_orfs() -> bool {
+    true
 }
 
 impl Default for RunParams {
@@ -60,6 +83,8 @@ impl Default for RunParams {
             nucmer_minmatch: None,
             nucmer_breaklen: None,
             dnadiff: true,
+            min_gained: default_min_gained(),
+            gained_orfs: default_gained_orfs(),
         }
     }
 }
@@ -74,6 +99,7 @@ pub fn preset(name: &str) -> Option<RunParams> {
             blast_cov: 95.0,
             blast_pid: 95.0,
             blast_evalue: 1e-20,
+            min_gained: 300,
             ..RunParams::default()
         }),
         "loose" => Some(RunParams {
@@ -82,6 +108,7 @@ pub fn preset(name: &str) -> Option<RunParams> {
             blast_cov: 80.0,
             blast_pid: 85.0,
             blast_evalue: 1e-5,
+            min_gained: 1000,
             ..RunParams::default()
         }),
         _ => None,
@@ -102,6 +129,24 @@ pub fn param_schema() -> Vec<ParamSpec> {
                 min: 0,
                 max: 100_000,
             },
+        },
+        ParamSpec {
+            name: "min_gained".into(),
+            label: "Minimum gained region".into(),
+            help: "Stretches of a query genome that have no counterpart in the reference are reported when they are at least this long, in base pairs. Shorter ones are usually the edges of an assembly rather than real gains.".into(),
+            layer: ParamLayer::Postprocess,
+            kind: ParamKind::Int {
+                default: 500,
+                min: 0,
+                max: 100_000,
+            },
+        },
+        ParamSpec {
+            name: "gained_orfs".into(),
+            label: "Predict genes in gained regions".into(),
+            help: "Look for protein coding genes inside the gained regions. This needs the gene finder on the server; when it is missing the regions are still reported, just without gene counts.".into(),
+            layer: ParamLayer::Postprocess,
+            kind: ParamKind::Bool { default: true },
         },
         ParamSpec {
             name: "present_cov".into(),
@@ -239,6 +284,12 @@ impl RunParams {
         if self.dnadiff != other.dnadiff {
             changed.push("dnadiff".into());
         }
+        if self.min_gained != other.min_gained {
+            changed.push("min_gained".into());
+        }
+        if self.gained_orfs != other.gained_orfs {
+            changed.push("gained_orfs".into());
+        }
         changed
     }
 
@@ -292,10 +343,56 @@ pub fn validate_params(params: &RunParams) -> Result<(), BTreeMap<String, String
 
 fn friendly_range_error(field: &str, _raw: &str) -> String {
     let limit = match field {
-        "min_gap" => "between 0 and 100000",
+        "min_gap" | "min_gained" => "between 0 and 100000",
         "present_cov" | "partial_cov" | "blast_cov" | "blast_pid" => "between 0 and 100",
         "blast_evalue" => "between 1e-50 and 10",
         _ => "within the allowed range",
     };
     format!("Please enter a value {limit}.")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every run ever started has its params_json in the database, and none
+    /// written before gained regions existed carry `min_gained`. If this
+    /// test fails, those runs stop opening entirely - not just their gained
+    /// tab.
+    #[test]
+    fn params_written_before_gained_regions_still_load() {
+        let old = r#"{
+            "min_gap": 200,
+            "present_cov": 95.0,
+            "partial_cov": 1.0,
+            "blast_cov": 90.0,
+            "blast_pid": 90.0,
+            "blast_evalue": 1e-10,
+            "nucmer_minmatch": null,
+            "nucmer_breaklen": null,
+            "dnadiff": true
+        }"#;
+        let p: RunParams = serde_json::from_str(old).expect("old params must still deserialize");
+        assert_eq!(p.min_gained, 500, "the default fills in");
+        assert!(p.gained_orfs);
+        assert_eq!(p.min_gap, 200, "the stored values are untouched");
+    }
+
+    /// Gained parameters are postprocess-only. Letting either reach the
+    /// alignment signature would invalidate every cached delta in every
+    /// project the first time someone changed a threshold.
+    #[test]
+    fn gained_params_do_not_invalidate_the_alignment_cache() {
+        let a = RunParams::default();
+        let b = RunParams {
+            min_gained: 2000,
+            gained_orfs: false,
+            ..RunParams::default()
+        };
+        assert_eq!(a.align_signature(), b.align_signature());
+        assert!(a.changed_align_params(&b).is_empty());
+        let changed = a.changed_params(&b);
+        assert!(changed.contains(&"min_gained".to_string()));
+        assert!(changed.contains(&"gained_orfs".to_string()));
+    }
 }

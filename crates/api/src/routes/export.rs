@@ -124,6 +124,98 @@ pub async fn export_table(
                 lines.join("\n") + "\n",
             )
         }
+        "gained" => {
+            let res = jobs::load_query_result(&state, project_id, run_id, qid)?;
+            let mut rows = res.gained.ok_or_else(|| {
+                ApiError::BadRequest(
+                    "This run was computed before gained regions were available. Please run the comparison again to see them."
+                        .into(),
+                )
+            })?;
+            rows.retain(|r| {
+                let text = format!(
+                    "{} {} {} {}",
+                    r.qry_seqid, r.anchor_seqid, r.left_gene, r.right_gene
+                );
+                match &q.search {
+                    Some(s) if !s.trim().is_empty() => {
+                        text.to_lowercase().contains(&s.trim().to_lowercase())
+                    }
+                    _ => true,
+                }
+            });
+            match q.call.as_deref() {
+                Some("anchored") => rows.retain(|r| {
+                    r.anchor != straincompass_types::GainedAnchor::Unanchored
+                }),
+                Some("unanchored") => rows.retain(|r| {
+                    r.anchor == straincompass_types::GainedAnchor::Unanchored
+                }),
+                _ => {}
+            }
+            let mut lines = vec![join(
+                &[
+                    "qry_seqid".into(),
+                    "start".into(),
+                    "end".into(),
+                    "length".into(),
+                    "gc_pct".into(),
+                    "at_contig_end".into(),
+                    "anchor".into(),
+                    "anchor_seqid".into(),
+                    "anchor_start".into(),
+                    "anchor_end".into(),
+                    "flanks_disagree".into(),
+                    "left_gene".into(),
+                    "right_gene".into(),
+                    "n_orfs".into(),
+                    "n_orfs_complete".into(),
+                    "orfs".into(),
+                ],
+                sep,
+            )];
+            for r in &rows {
+                lines.push(join(
+                    &[
+                        r.qry_seqid.clone(),
+                        r.start.to_string(),
+                        r.end.to_string(),
+                        r.length.to_string(),
+                        format!("{:.2}", r.gc_pct),
+                        r.at_contig_end.to_string(),
+                        r.anchor.as_str().to_string(),
+                        r.anchor_seqid.clone(),
+                        r.anchor_start.to_string(),
+                        r.anchor_end.to_string(),
+                        r.flanks_disagree.to_string(),
+                        r.left_gene.clone(),
+                        r.right_gene.clone(),
+                        // Empty, never 0: "we did not look" has to survive
+                        // into the file the user downloads.
+                        r.n_orfs.map(|v| v.to_string()).unwrap_or_default(),
+                        r.n_orfs_complete.map(|v| v.to_string()).unwrap_or_default(),
+                        r.orfs
+                            .iter()
+                            .map(|o| {
+                                format!(
+                                    "{}..{}({}){}",
+                                    o.start,
+                                    o.end,
+                                    if o.strand < 0 { "-" } else { "+" },
+                                    if o.partial { "[partial]" } else { "" }
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(";"),
+                    ],
+                    sep,
+                ));
+            }
+            (
+                format!("{}_gained_regions.{}", res.query_name, if csv { "csv" } else { "tsv" }),
+                lines.join("\n") + "\n",
+            )
+        }
         "panel_recheck" => {
             let res = jobs::load_query_result(&state, project_id, run_id, qid)?;
             let mut rows = res.panel.ok_or_else(|| {
@@ -214,7 +306,7 @@ pub async fn export_table(
         }
         _ => {
             return Err(ApiError::BadRequest(
-                "Unknown table for export. Choose genes_coverage, unaligned_gaps, panel_recheck or matrix.".into(),
+                "Unknown table for export. Choose genes_coverage, unaligned_gaps, gained, panel_recheck or matrix.".into(),
             ))
         }
     };

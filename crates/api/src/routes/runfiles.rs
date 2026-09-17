@@ -58,6 +58,18 @@ pub async fn list_run_files(
         );
         push_artifact(
             &mut files,
+            &qdir.join("gained_regions.tsv"),
+            "Gained regions table",
+            &format!("{stem}_gained_regions.tsv"),
+        );
+        push_artifact(
+            &mut files,
+            &qdir.join("gained_regions.fa"),
+            "Gained regions (FASTA)",
+            &format!("{stem}_gained_regions.fa"),
+        );
+        push_artifact(
+            &mut files,
             &qdir.join("panel_recheck.tsv"),
             "Gene panel recheck table",
             &format!("{stem}_panel_recheck.tsv"),
@@ -196,6 +208,14 @@ fn scan_dirs(run_dir: &std::path::Path, query_ids: &[i64]) -> ApiResult<Vec<(Pat
             out.push((
                 qdir.join("unaligned_gaps.tsv"),
                 format!("{stem}_unaligned_gaps.tsv"),
+            ));
+            out.push((
+                qdir.join("gained_regions.tsv"),
+                format!("{stem}_gained_regions.tsv"),
+            ));
+            out.push((
+                qdir.join("gained_regions.fa"),
+                format!("{stem}_gained_regions.fa"),
             ));
             out.push((
                 qdir.join("panel_recheck.tsv"),

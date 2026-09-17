@@ -298,6 +298,14 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
         let qdir = run_dir.join("queries").join(qid.to_string());
         pipeline::write_genes_coverage_tsv(&res.genes_coverage, &qdir.join("genes_coverage.tsv"))?;
         pipeline::write_gaps_tsv(&res.unaligned_gaps, &qdir.join("unaligned_gaps.tsv"))?;
+        pipeline::write_gained_tsv(&res.gained, &qdir.join("gained_regions.tsv"))?;
+        // The engine wrote the region sequences under its own work dir (it
+        // knows nothing about this layout); lift them next to the tables so
+        // the files panel can serve them.
+        let regions_fa = qdir.join("work").join(pipeline::GAINED_FASTA);
+        if regions_fa.is_file() {
+            let _ = std::fs::copy(&regions_fa, qdir.join(pipeline::GAINED_FASTA));
+        }
         if let Some(p) = &res.panel {
             pipeline::write_panel_tsv(p, &qdir.join("panel_recheck.tsv"))?;
         }
@@ -310,6 +318,8 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
                 query_name: name.clone(),
                 genes_coverage: res.genes_coverage.clone(),
                 unaligned_gaps: res.unaligned_gaps.clone(),
+                gained: Some(res.gained.clone()),
+                gained_orfs: res.gained_orfs.clone(),
                 panel: res.panel.clone(),
                 blocks: res.blocks.clone(),
                 ref_lengths: res.ref_lengths.clone(),
@@ -416,6 +426,14 @@ pub struct ComparisonResultJson {
     pub genes_coverage: Vec<straincompass_types::GeneCoverageRow>,
     pub unaligned_gaps: Vec<straincompass_types::GapRow>,
     pub panel: Option<Vec<straincompass_types::PanelRow>>,
+    /// `None` marks a run computed before gained regions existed;
+    /// `Some(vec![])` means we looked and found none. The endpoint has to
+    /// tell them apart, and `load_query_result` hard-errors on a parse
+    /// failure, so the serde default is what keeps old runs readable.
+    #[serde(default)]
+    pub gained: Option<Vec<straincompass_types::GainedRow>>,
+    #[serde(default)]
+    pub gained_orfs: straincompass_types::GainedOrfStatus,
     pub blocks: Vec<straincompass_types::WgaBlock>,
     pub ref_lengths: Vec<(String, u64)>,
 }

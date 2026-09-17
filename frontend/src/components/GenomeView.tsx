@@ -3,6 +3,7 @@ import { api } from "../api";
 import type {
   AlignmentData,
   Call,
+  GainedRow,
   RefseqWindow,
   Run,
   WgaData,
@@ -54,6 +55,26 @@ const FOCUS_MIN_ROW_SPAN = 500;
 const SNP_COLOR = "#dc2626";
 const INS_COLOR = "#3b82f6";
 const DEL_COLOR = "#9333ea";
+/**
+ * Gained sequence. Teal, so it reads as neither an insertion variant (blue),
+ * a SNP (red), a deletion (purple) nor any of the call colors.
+ */
+const GAINED_COLOR = "#0d9488";
+/**
+ * How big a gained marker's caret is drawn, by region length. The x axis is
+ * reference coordinates, so the length of gained sequence cannot be drawn
+ * as width - 40 kb inserted between two adjacent reference bases is a
+ * zero-width line. The caret carries it instead, in discrete steps so the
+ * glyph stays legible and two markers stay comparable at a glance.
+ */
+const GAINED_SIZES: { max: number; half: number; stroke: number }[] = [
+  { max: 1_000, half: 3, stroke: 1.5 },
+  { max: 5_000, half: 5, stroke: 2 },
+  { max: 20_000, half: 7, stroke: 2.5 },
+  { max: Infinity, half: 9, stroke: 3 },
+];
+const gainedSize = (length: number) =>
+  GAINED_SIZES.find((s) => length < s.max) ?? GAINED_SIZES[GAINED_SIZES.length - 1];
 
 /**
  * Strain map: the reference genome as a line of gene rectangles (beads on a
@@ -143,6 +164,21 @@ export function GenomeView({
   const alignmentFetched = useRef(false);
   /** Master switch for the variant layer. Off also skips fetching it at all. */
   const [variantsOn, setVariantsOn] = useState(true);
+  /**
+   * Master switch for the gained layer. Off by default and off also skips
+   * fetching: a draft assembly can carry hundreds of regions, and the map
+   * has to open the way it always has.
+   */
+  const [gainedOn, setGainedOn] = useState(false);
+  const [gained, setGained] = useState<GainedRow[] | null>(null);
+  const [gainedPending, setGainedPending] = useState(false);
+  const [gainedError, setGainedError] = useState<string | null>(null);
+  /** Keyed by run and query, so changing the colored-by query refetches. */
+  const gainedFetched = useRef<string | null>(null);
+  /** The hovered gained region: its index into `gainedMarkers`, and its row. */
+  const [hoverGained, setHoverGained] = useState<{ gx: number; row: number } | null>(
+    null,
+  );
   /** Which kinds of variant are drawn, toggled from the legend. */
   const [variantKinds, setVariantKinds] = useState({
     snp: true,
@@ -270,6 +306,27 @@ export function GenomeView({
       })
       .finally(() => setAlignmentPending(false));
   }, [wantVariants, run.id]);
+
+  // Gained regions of the colored-by query, fetched the first time the
+  // layer is switched on. Not folded into /wga: that payload is fetched at
+  // page load and blocks the map, and this layer is off by default.
+  useEffect(() => {
+    if (!gainedOn || colorBy == null) return;
+    const key = `${run.id}:${colorBy}`;
+    if (gainedFetched.current === key) return;
+    gainedFetched.current = key;
+    setGainedError(null);
+    setGainedPending(true);
+    api
+      .gainedAll(run.id, colorBy)
+      .then(setGained)
+      .catch((e: Error) => {
+        // Let toggling it again retry rather than silently showing nothing.
+        gainedFetched.current = null;
+        setGainedError(e.message);
+      })
+      .finally(() => setGainedPending(false));
+  }, [gainedOn, colorBy, run.id]);
 
   /** Variant events of the selected query on the visible seqid. */
   const variantEvents = useMemo(() => {
@@ -543,6 +600,43 @@ export function GenomeView({
       : null;
   };
 
+  /**
+   * The gained region under an event target. Deliberately separate from
+   * `markerAt`: that one indexes the variant array and feeds the variant
+   * tooltip and popup, and conflating the two would make a gained marker
+   * open a variant.
+   */
+  const gainedAt = (target: EventTarget | null): { gx: number; row: number } | null => {
+    const el = (target as Element | null)?.closest?.("[data-gx]");
+    const gx = el ? Number(el.getAttribute("data-gx")) : NaN;
+    const row = el ? Number(el.getAttribute("data-row")) : NaN;
+    return Number.isFinite(gx) && Number.isFinite(row) ? { gx, row } : null;
+  };
+
+  /** Gained regions placed on the visible contig and inside the window. */
+  const gainedMarkers = useMemo(
+    () =>
+      gainedOn && gained
+        ? gained.filter(
+            (g) =>
+              g.anchor !== "unanchored" &&
+              g.anchor_seqid === seqid &&
+              g.anchor_start <= range.end &&
+              g.anchor_end >= range.start,
+          )
+        : [],
+    [gainedOn, gained, seqid, range.start, range.end],
+  );
+  /**
+   * Regions on query contigs with no alignment at all. They have no
+   * reference position, so they cannot be drawn here; the legend says how
+   * many there are rather than letting them vanish.
+   */
+  const unanchored = useMemo(
+    () => (gained ?? []).filter((g) => g.anchor === "unanchored"),
+    [gained],
+  );
+
   // Variant markers of the selected query inside the visible range.
   const markers = showMarkers && variantEvents
     ? [
@@ -740,6 +834,7 @@ export function GenomeView({
           setPopup(null);
           setHover(null);
           setHoverVariant(null);
+          setHoverGained(null);
         }}
       >
         <svg
@@ -841,8 +936,9 @@ export function GenomeView({
               const hit = geneAt(e.target);
               setHover(hit ? { gi: hit.gi, row: hit.row } : null);
               // Markers sit on top of this layer, so reaching it means the
-              // cursor has left any variant it was over.
+              // cursor has left any variant or gained mark it was over.
               setHoverVariant(null);
+              setHoverGained(null);
             }}
             onMouseOut={() => setHover(null)}
             onClick={(e) => {
@@ -921,6 +1017,84 @@ export function GenomeView({
                   strokeWidth={2}
                 />
               ))}
+            </g>
+          )}
+
+          {/*
+            Gained sequence, placed where the alignments flanking it land on
+            the reference. An insertion point is a boundary between two
+            reference bases, so the mark is a line there rather than a span,
+            the same shape an insertion variant takes - but taller, so the
+            two can never be confused, and carrying a caret whose size gives
+            the length the x axis cannot.
+
+            A region placed by one flank only, or by flanks that disagree,
+            is drawn dashed and faded. On a fragmented assembly most of them
+            are, and drawing a half-confident placement like a confident one
+            would be the misleading part.
+          */}
+          {gainedMarkers.length > 0 && (
+            <g
+              onMouseOver={(e) => setHoverGained(gainedAt(e.target))}
+              onMouseOut={() => setHoverGained(null)}
+            >
+              {gainedMarkers.flatMap((g, i) => {
+                const { half, stroke } = gainedSize(g.length);
+                const approximate = g.anchor === "flank" || g.flanks_disagree;
+                const dash = approximate ? "3 2" : undefined;
+                const opacity = approximate ? 0.6 : 1;
+                const row = layout.rowOfBp(g.anchor_start);
+                const y1 = markerY1(row) - 4;
+                const y2 = markerY2(row) + 4;
+                const x1 = layout.xInRow(g.anchor_start, row);
+                const x2 = layout.xInRow(g.anchor_end, row);
+                const wide = g.anchor === "between" && x2 - x1 >= 1;
+                const caretX = wide ? (x1 + x2) / 2 : x1;
+                return [
+                  // The replaced stretch of reference, when the flanks are
+                  // far enough apart to be worth showing as a span.
+                  ...(wide
+                    ? rowPieces(layout, g.anchor_start, g.anchor_end + 1).map(
+                        (piece) => (
+                          <rect
+                            key={`gr${i}-${piece.row}`}
+                            data-gx={i}
+                            data-row={piece.row}
+                            x={piece.x}
+                            y={markerY1(piece.row) - 4}
+                            width={Math.max(1, piece.w)}
+                            height={markerY2(piece.row) + 4 - (markerY1(piece.row) - 4)}
+                            fill={GAINED_COLOR}
+                            fillOpacity={0.45 * opacity}
+                          />
+                        ),
+                      )
+                    : [
+                        <line
+                          key={`gl${i}`}
+                          data-gx={i}
+                          data-row={row}
+                          x1={x1}
+                          x2={x1}
+                          y1={y1}
+                          y2={y2}
+                          stroke={GAINED_COLOR}
+                          strokeWidth={stroke}
+                          strokeDasharray={dash}
+                          strokeLinecap="round"
+                          opacity={opacity}
+                        />,
+                      ]),
+                  <polygon
+                    key={`gc${i}`}
+                    data-gx={i}
+                    data-row={row}
+                    points={`${caretX - half},${y1 - half} ${caretX + half},${y1 - half} ${caretX},${y1}`}
+                    fill={GAINED_COLOR}
+                    opacity={opacity}
+                  />,
+                ];
+              })}
             </g>
           )}
 
@@ -1055,8 +1229,22 @@ export function GenomeView({
           />
         )}
 
+        {hoverGained !== null && gainedMarkers[hoverGained.gx] && (
+          <GainedTooltip
+            region={gainedMarkers[hoverGained.gx]}
+            x={layout.xInRow(
+              gainedMarkers[hoverGained.gx].anchor_start,
+              hoverGained.row,
+            )}
+            y={layout.baselineY(hoverGained.row) + geneH / 2 + 6}
+            queryName={selectedQuery?.query_name ?? ""}
+            svgWidth={width}
+          />
+        )}
+
         {hover !== null &&
           hoverVariant === null &&
+          hoverGained === null &&
           data.genes[hover.gi] &&
           data.genes[hover.gi].seqid === seqid && (
             <GeneTooltip
@@ -1100,6 +1288,35 @@ export function GenomeView({
             <span className="text-zinc-400 dark:text-zinc-500">
               in {selectedQuery.query_name}
             </span>
+            <KindToggle
+              on={gainedOn}
+              color={GAINED_COLOR}
+              label="gained"
+              wide
+              onToggle={() => setGainedOn((v) => !v)}
+            />
+            {gainedOn && gainedPending && (
+              <span className="inline-flex items-center gap-1.5">
+                <Spinner /> loading gained regions...
+              </span>
+            )}
+            {gainedOn && gainedError && (
+              <span className="text-red-700 dark:text-red-400">
+                Gained regions could not be loaded ({gainedError}).
+              </span>
+            )}
+            {gainedOn && unanchored.length > 0 && (
+              <span
+                className="text-zinc-400 dark:text-zinc-500"
+                title="These regions sit on query contigs with no alignment to the reference at all - usually a plasmid or a phage - so they have no position on this map. Open the Gained table to see them."
+              >
+                +{unanchored.length} not placed (
+                {Math.round(
+                  unanchored.reduce((a, g) => a + g.length, 0) / 1000,
+                ).toLocaleString("en-US")}{" "}
+                kb)
+              </span>
+            )}
             {!variantsOn ? (
               <span className="text-zinc-400 dark:text-zinc-500">
                 variant markers off
@@ -1291,6 +1508,65 @@ function KindToggle({
       />
       <span className={on ? "" : "line-through"}>{label}</span>
     </button>
+  );
+}
+
+/**
+ * What a gained region is, on hover. The copy never says the sequence is
+ * new - only that nothing in the reference aligns to it - and never claims
+ * a position more precisely than the flanks support.
+ */
+function GainedTooltip({
+  region,
+  x,
+  y,
+  queryName,
+  svgWidth,
+}: {
+  region: GainedRow;
+  x: number;
+  y: number;
+  queryName: string;
+  svgWidth: number;
+}) {
+  return (
+    <div
+      className="pointer-events-none absolute z-30 w-64 rounded-lg border border-zinc-200 bg-white p-2.5 text-xs shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
+      style={{ left: Math.max(4, Math.min(x - 128, svgWidth - 260)), top: y }}
+    >
+      <p className="font-semibold text-[13px]" style={{ color: GAINED_COLOR }}>
+        Gained sequence
+      </p>
+      <p className="mt-1 text-[12px]">
+        {region.length.toLocaleString("en-US")} bp with no alignment to the
+        reference &middot; GC {region.gc_pct.toFixed(1)}%
+      </p>
+      <p className="mt-1 font-mono text-[11px] text-zinc-500 dark:text-zinc-400">
+        {region.qry_seqid}:{region.start.toLocaleString("en-US")}-
+        {region.end.toLocaleString("en-US")}
+        {queryName && ` in ${queryName}`}
+      </p>
+      <p className="mt-1.5 text-[12px] text-zinc-600 dark:text-zinc-300">
+        {region.anchor === "between"
+          ? region.left_gene && region.right_gene
+            ? `between ${region.left_gene} and ${region.right_gene}`
+            : `between reference ${region.anchor_start.toLocaleString("en-US")} and ${region.anchor_end.toLocaleString("en-US")}`
+          : region.left_gene || region.right_gene
+            ? `at the junction with ${region.left_gene || region.right_gene}`
+            : `at reference ${region.anchor_start.toLocaleString("en-US")}`}
+      </p>
+      {region.flanks_disagree && (
+        <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-400">
+          The flanking alignments disagree, so this position is approximate.
+        </p>
+      )}
+      <p className="mt-1.5 text-[12px] text-zinc-500 dark:text-zinc-400">
+        {region.n_orfs_complete === null
+          ? "Gene prediction was not available for this run."
+          : `${region.n_orfs_complete.toLocaleString("en-US")} predicted gene${region.n_orfs_complete === 1 ? "" : "s"}`}
+        {region.at_contig_end && " \u00b7 at a contig end"}
+      </p>
+    </div>
   );
 }
 

@@ -36,6 +36,8 @@ export interface Run {
   finished_at: string | null;
   queries: RunQuery[];
   has_panel: boolean;
+  /** Runs computed before gained regions existed do not carry them. */
+  has_gained: boolean;
 }
 
 export interface RunWithLogs {
@@ -67,6 +69,45 @@ export interface GapRow {
   length: number;
   n_genes: number;
   genes: string[];
+}
+
+/** Where a gained region sits relative to the reference. */
+export type GainedAnchor = "between" | "flank" | "unanchored";
+
+export interface GainedOrf {
+  /** 1-based inclusive, in query contig coordinates. */
+  start: number;
+  end: number;
+  strand: number;
+  /** The ORF runs off an edge of the region, so it is probably truncated. */
+  partial: boolean;
+  confidence: number;
+}
+
+/**
+ * One stretch of a query genome with no alignment to the reference.
+ *
+ * "No alignment" is weaker than "not in the reference" - see the engine's
+ * gained module - so nothing here should be labelled as simply new.
+ */
+export interface GainedRow {
+  qry_seqid: string;
+  start: number;
+  end: number;
+  length: number;
+  gc_pct: number;
+  at_contig_end: boolean;
+  anchor: GainedAnchor;
+  anchor_seqid: string;
+  anchor_start: number;
+  anchor_end: number;
+  flanks_disagree: boolean;
+  left_gene: string;
+  right_gene: string;
+  /** null means gene prediction did not run, which is not a count of zero. */
+  n_orfs: number | null;
+  n_orfs_complete: number | null;
+  orfs: GainedOrf[];
 }
 
 export interface PanelRow {

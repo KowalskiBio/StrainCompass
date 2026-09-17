@@ -6,6 +6,7 @@ pub mod blast;
 pub mod coverage;
 pub mod delta;
 pub mod fasta;
+pub mod gained;
 pub mod gaps;
 pub mod gff;
 pub mod msa;

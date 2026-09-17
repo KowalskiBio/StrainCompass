@@ -72,6 +72,7 @@ fn routes() -> Router<SharedState> {
             "/runs/{id}/unaligned_gaps",
             get(routes::results::unaligned_gaps),
         )
+        .route("/runs/{id}/gained", get(routes::results::gained))
         .route(
             "/runs/{id}/panel_recheck",
             get(routes::results::panel_recheck),

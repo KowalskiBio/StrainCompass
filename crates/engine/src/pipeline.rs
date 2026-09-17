@@ -4,6 +4,7 @@ use crate::blast;
 use crate::coverage;
 use crate::delta::DeltaFile;
 use crate::fasta;
+use crate::gained;
 use crate::gaps;
 use crate::gff;
 use crate::tools::ToolPaths;
@@ -15,7 +16,8 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use straincompass_types::{
-    AlignmentEvents, GapRow, GeneCoverageRow, PanelRow, RunParams, WgaBlock, WgaGene,
+    AlignmentEvents, GainedOrfStatus, GainedRow, GapRow, GeneCoverageRow, PanelRow, RunParams,
+    WgaBlock, WgaGene,
 };
 
 /// Everything one comparison produces (one query against the reference).
@@ -24,6 +26,10 @@ pub struct ComparisonResult {
     pub query_name: String,
     pub genes_coverage: Vec<GeneCoverageRow>,
     pub unaligned_gaps: Vec<GapRow>,
+    /// Stretches of the query with no alignment to the reference.
+    pub gained: Vec<GainedRow>,
+    /// Whether the genes inside those stretches could be predicted.
+    pub gained_orfs: GainedOrfStatus,
     pub panel: Option<Vec<PanelRow>>,
     /// Per seqid reference lengths from the reference fasta.
     pub ref_lengths: Vec<(String, u64)>,
@@ -46,6 +52,11 @@ pub struct ComparisonInputs<'a> {
     pub panel_fasta: Option<&'a Path>,
     pub params: &'a RunParams,
 }
+
+/// The gained-region sequences, written under the comparison's work dir.
+/// The caller lifts it next to the other artifacts; the engine deliberately
+/// knows nothing about that layout.
+pub const GAINED_FASTA: &str = "gained_regions.fa";
 
 /// Where the engine works and caches.
 pub struct WorkDirs<'a> {
@@ -146,6 +157,18 @@ pub fn run_comparison(
     )?;
     let gap_rows = gaps::unaligned_gaps(&genes, &delta, &ref_lengths, inputs.params.min_gap);
 
+    progress("Looking for sequence gained by the query", 2, 3);
+    let (gained_rows, gained_orfs) = gained::gained_regions(
+        tools,
+        &delta,
+        &qry_records,
+        &genes,
+        &dirs.work.join(GAINED_FASTA),
+        dirs.work,
+        inputs.params.min_gained,
+        inputs.params.gained_orfs,
+    )?;
+
     let panel = match inputs.panel_fasta {
         Some(p) => {
             let panel_dir = dirs.work.join("panel");
@@ -212,6 +235,8 @@ pub fn run_comparison(
         query_name: inputs.query_name.to_string(),
         genes_coverage: cov_rows,
         unaligned_gaps: gap_rows,
+        gained: gained_rows,
+        gained_orfs,
         panel,
         ref_lengths: ref_lengths_vec,
         genes: wga_genes,
@@ -261,6 +286,55 @@ pub fn write_gaps_tsv(rows: &[GapRow], out: &Path) -> std::io::Result<()> {
             r.length,
             r.n_genes,
             r.genes.join(";")
+        )?;
+    }
+    Ok(())
+}
+
+pub fn write_gained_tsv(rows: &[GainedRow], out: &Path) -> std::io::Result<()> {
+    let mut w = std::io::BufWriter::new(std::fs::File::create(out)?);
+    writeln!(
+        w,
+        "qry_seqid\tstart\tend\tlength\tgc_pct\tat_contig_end\tanchor\tanchor_seqid\tanchor_start\tanchor_end\tflanks_disagree\tleft_gene\tright_gene\tn_orfs\tn_orfs_complete\torfs"
+    )?;
+    for r in rows {
+        // An absent ORF count is written as the empty string, never as 0:
+        // "we did not look" has to survive into the file a user downloads.
+        let n_orfs = r.n_orfs.map(|v| v.to_string()).unwrap_or_default();
+        let n_complete = r.n_orfs_complete.map(|v| v.to_string()).unwrap_or_default();
+        let orfs = r
+            .orfs
+            .iter()
+            .map(|o| {
+                format!(
+                    "{}..{}({}){}",
+                    o.start,
+                    o.end,
+                    if o.strand < 0 { "-" } else { "+" },
+                    if o.partial { "[partial]" } else { "" }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(";");
+        writeln!(
+            w,
+            "{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            r.qry_seqid,
+            r.start,
+            r.end,
+            r.length,
+            r.gc_pct,
+            r.at_contig_end,
+            r.anchor.as_str(),
+            r.anchor_seqid,
+            r.anchor_start,
+            r.anchor_end,
+            r.flanks_disagree,
+            r.left_gene,
+            r.right_gene,
+            n_orfs,
+            n_complete,
+            orfs
         )?;
     }
     Ok(())

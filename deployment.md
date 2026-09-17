@@ -279,6 +279,12 @@ sudo systemctl restart straincompass.service
 
 - Decide the public hostname (nginx server_name) and TLS cert source;
   mirror whatever the existing sites do.
+- Prodigal is an optional seventh tool, found the same way (PATH or
+  `STRAINCOMPASS_TOOLS_DIRS`). It only predicts the genes inside gained
+  regions; when it is absent every run still succeeds and the gained
+  tables simply report no gene counts. It also adds two small per-query
+  artifacts, `gained_regions.tsv` and `gained_regions.fa`, the latter
+  bounded by the divergent fraction of the query genome.
 - Confirm MUMmer + BLAST+ versions to install in `~/straincompass/tools`
   (user local, no sudo needed) and pin them.
 - Decide backup schedule for the nightly app-side backup (systemd

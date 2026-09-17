@@ -116,6 +116,25 @@ impl DeltaFile {
         }
         map
     }
+
+    /// Merged aligned intervals on the query: qry_seqid -> sorted,
+    /// non-overlapping intervals in forward query coordinates.
+    ///
+    /// Reverse-strand blocks need no special handling here: the parser has
+    /// already normalized every block to ascending `qry_lo`/`qry_hi` and
+    /// kept the direction in `qry_rev`.
+    pub fn aligned_qry_intervals(&self) -> HashMap<String, Vec<(u64, u64)>> {
+        let mut map: HashMap<String, Vec<(u64, u64)>> = HashMap::new();
+        for a in &self.alignments {
+            map.entry(a.qry_seqid.clone())
+                .or_default()
+                .push((a.qry_lo, a.qry_hi));
+        }
+        for ivs in map.values_mut() {
+            merge_intervals(ivs);
+        }
+        map
+    }
 }
 
 /// Sort and merge overlapping/adjacent intervals in place.

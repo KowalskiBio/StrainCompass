@@ -8,8 +8,8 @@ use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde_json::Value;
 use straincompass_types::{
-    Call, GapRow, GeneCoverageRow, GeneDetail, MatrixRow, Page, PanelRow, TableQuery, WgaData,
-    WgaQuery,
+    Call, GainedAnchor, GainedRow, GapRow, GeneCoverageRow, GeneDetail, MatrixRow, Page, PanelRow,
+    TableQuery, WgaData, WgaQuery,
 };
 
 fn resolve_query_id(
@@ -151,6 +151,95 @@ pub async fn unaligned_gaps(
     let total = rows.len() as u64;
     let page = apply_page(&rows, q.page, q.page_size);
     Ok(Json(Page { rows: page, total }))
+}
+
+/// GET /runs/{id}/gained : stretches of one query with no alignment to the
+/// reference, and the genes predicted inside them.
+pub async fn gained(
+    State(state): State<SharedState>,
+    Path(run_id): Path<i64>,
+    Query(q): Query<TableQuery>,
+) -> ApiResult<Json<Page<GainedRow>>> {
+    let (project_id, run_id, qid) = resolve_query_id(&state, run_id, q.query_id)?;
+    let res = jobs::load_query_result(&state, project_id, run_id, qid)?;
+    // A run from before this feature has no gained rows and cannot grow
+    // them without being re-run: the gene finder may be missing and the old
+    // params never recorded a minimum length, so a backfill would cache a
+    // result the user never asked for.
+    let mut rows = res.gained.ok_or_else(|| {
+        ApiError::BadRequest(
+            "This run was computed before gained regions were available. Please run the comparison again to see them."
+                .into(),
+        )
+    })?;
+    rows.retain(|r| {
+        matches_search(
+            &format!(
+                "{} {} {} {}",
+                r.qry_seqid, r.anchor_seqid, r.left_gene, r.right_gene
+            ),
+            &q.search,
+        )
+    });
+    // The anchor filter reuses `call`, as matrix() already does for
+    // "not_present", rather than adding a field to the query struct the
+    // export endpoints share.
+    match q.call.as_deref() {
+        Some("anchored") => rows.retain(|r| r.anchor != GainedAnchor::Unanchored),
+        Some("unanchored") => rows.retain(|r| r.anchor == GainedAnchor::Unanchored),
+        _ => {}
+    }
+    let asc = q.sort_dir.as_deref() != Some("desc");
+    let by = q.sort_by.clone().unwrap_or_default();
+    rows.sort_by(|a, b| {
+        let ord = match by.as_str() {
+            "start" => a.start.cmp(&b.start),
+            "end" => a.end.cmp(&b.end),
+            "length" => a.length.cmp(&b.length),
+            "gc_pct" => a.gc_pct.total_cmp(&b.gc_pct),
+            "anchor" => a.anchor.as_str().cmp(b.anchor.as_str()),
+            "anchor_seqid" => a.anchor_seqid.cmp(&b.anchor_seqid),
+            "anchor_start" => a.anchor_start.cmp(&b.anchor_start),
+            // An absent count sorts last whichever way the column is
+            // pointing: "not measured" is not a small number.
+            "n_orfs" => none_last(a.n_orfs, b.n_orfs, asc),
+            "n_orfs_complete" => none_last(a.n_orfs_complete, b.n_orfs_complete, asc),
+            _ => (a.qry_seqid.clone(), a.start).cmp(&(b.qry_seqid.clone(), b.start)),
+        };
+        if asc {
+            ord
+        } else {
+            ord.reverse()
+        }
+    });
+    let total = rows.len() as u64;
+    let page = apply_page(&rows, q.page, q.page_size);
+    Ok(Json(Page { rows: page, total }))
+}
+
+/// Order two optional counts so that `None` ends up at the end of the table
+/// regardless of direction. The caller reverses the result for a descending
+/// sort, so the comparison is pre-flipped here.
+fn none_last(a: Option<u32>, b: Option<u32>, asc: bool) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        (Some(_), None) => {
+            if asc {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            }
+        }
+        (None, Some(_)) => {
+            if asc {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            }
+        }
+        (None, None) => Ordering::Equal,
+    }
 }
 
 /// GET /runs/{id}/panel_recheck
@@ -590,6 +679,97 @@ mod tests {
         assert_eq!(res["start"], 3);
         assert_eq!(res["end"], 6);
         assert_eq!(res["seq"], "GTAC");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Rewrite the seeded result.json with gained rows, as a run computed
+    /// after the feature landed would have.
+    fn seed_gained(dir: &std::path::Path) {
+        let p = dir.join("projects/1/runs/1/queries/10/result.json");
+        let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+        v["gained"] = serde_json::json!([
+            {
+                "qry_seqid": "ctg1", "start": 1001u64, "end": 4000u64, "length": 3000u64,
+                "gc_pct": 61.5f64, "at_contig_end": false, "anchor": "between",
+                "anchor_seqid": "chr1", "anchor_start": 1000u64, "anchor_end": 1001u64,
+                "flanks_disagree": false, "left_gene": "G1", "right_gene": "G2",
+                "n_orfs": 3u32, "n_orfs_complete": 2u32, "orfs": []
+            },
+            {
+                "qry_seqid": "ctg2", "start": 1u64, "end": 9000u64, "length": 9000u64,
+                "gc_pct": 48.0f64, "at_contig_end": true, "anchor": "unanchored",
+                "anchor_seqid": "", "anchor_start": 0u64, "anchor_end": 0u64,
+                "flanks_disagree": false, "left_gene": "", "right_gene": "",
+                "n_orfs": null, "n_orfs_complete": null, "orfs": []
+            }
+        ]);
+        std::fs::write(&p, serde_json::to_vec(&v).unwrap()).unwrap();
+    }
+
+    fn gained_query(call: Option<&str>) -> TableQuery {
+        TableQuery {
+            query_id: None,
+            page: 0,
+            page_size: 200,
+            sort_by: None,
+            sort_dir: None,
+            search: None,
+            call: call.map(|s| s.to_string()),
+            cols: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn gained_returns_rows_and_filters_by_anchor() {
+        let (state, dir) = seeded_state();
+        seed_gained(&dir);
+
+        let page = gained(State(state.clone()), Path(1), Query(gained_query(None)))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(page.total, 2);
+        assert_eq!(
+            page.rows[0].qry_seqid, "ctg1",
+            "default sort is contig then start"
+        );
+        assert_eq!(page.rows[0].n_orfs, Some(3));
+        // An absent count stays absent: it must never arrive as 0.
+        assert_eq!(page.rows[1].n_orfs, None);
+
+        let page = gained(
+            State(state.clone()),
+            Path(1),
+            Query(gained_query(Some("unanchored"))),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(page.total, 1);
+        assert_eq!(page.rows[0].qry_seqid, "ctg2");
+
+        let page = gained(State(state), Path(1), Query(gained_query(Some("anchored"))))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(page.total, 1);
+        assert_eq!(page.rows[0].anchor, GainedAnchor::Between);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn gained_asks_an_older_run_to_be_rerun() {
+        // The seeded result.json predates the feature: no "gained" key at
+        // all. It must still load (the other tables keep working) and this
+        // endpoint must explain itself rather than fail.
+        let (state, dir) = seeded_state();
+        let err = gained(State(state), Path(1), Query(gained_query(None)))
+            .await
+            .unwrap_err();
+        match err {
+            ApiError::BadRequest(m) => assert!(m.contains("run the comparison again"), "got {m}"),
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -12,6 +12,11 @@ pub struct ToolPaths {
     pub dnadiff: PathBuf,
     pub makeblastdb: PathBuf,
     pub blastn: PathBuf,
+    /// The gene finder, used only to predict the genes inside gained
+    /// regions. Optional on purpose: `discover` is all-or-nothing, and
+    /// every deployment made before gained regions existed lacks this
+    /// binary, so requiring it would fail every run on every one of them.
+    pub prodigal: Option<PathBuf>,
 }
 
 fn find_tool(name: &str, extra_dirs: &[PathBuf]) -> std::result::Result<PathBuf, EngineError> {
@@ -64,6 +69,7 @@ impl ToolPaths {
             dnadiff: find_tool("dnadiff", &extra)?,
             makeblastdb: find_tool("makeblastdb", &extra)?,
             blastn: find_tool("blastn", &extra)?,
+            prodigal: find_tool("prodigal", &extra).ok(),
         })
     }
 

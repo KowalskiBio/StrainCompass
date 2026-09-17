@@ -3,6 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { api } from "../api";
 import type {
   Call,
+  GainedRow,
   GapRow,
   GeneDetail,
   GeneCoverageRow,
@@ -15,7 +16,20 @@ import type {
 import { nuccoreRangeUrl } from "../types";
 import { CallBadge, Spinner, usePopoverDismiss } from "./ui";
 
-export type TableKind = "genes_coverage" | "unaligned_gaps" | "panel_recheck" | "matrix";
+export type TableKind =
+  | "genes_coverage"
+  | "unaligned_gaps"
+  | "gained"
+  | "panel_recheck"
+  | "matrix";
+
+/** Every row shape the table can render. */
+type AnyRow = GapRow | GeneCoverageRow | PanelRow | MatrixRow | GainedRow;
+
+/** Stable identity of a gained region within one query's table. */
+function gainedKey(row: GainedRow): string {
+  return `${row.qry_seqid}:${row.start}`;
+}
 
 interface Column {
   key: string;
@@ -50,6 +64,22 @@ const GAP_COLUMNS: Column[] = [
   { key: "genes", label: "Locus tags of genes inside", width: 420 },
 ];
 
+const GAINED_COLUMNS: Column[] = [
+  { key: "qry_seqid", label: "Query contig", width: 150 },
+  { key: "start", label: "Start", numeric: true, width: 100 },
+  { key: "end", label: "End", numeric: true, width: 100 },
+  { key: "length", label: "Length", numeric: true, width: 100 },
+  { key: "gc_pct", label: "GC %", numeric: true, width: 80 },
+  { key: "anchor", label: "Placed", width: 120 },
+  { key: "anchor_seqid", label: "Reference sequence", width: 160 },
+  { key: "anchor_start", label: "Reference position", numeric: true, width: 140 },
+  { key: "anchor_end", label: "Reference end", numeric: true, width: 130 },
+  { key: "left_gene", label: "After gene", width: 140 },
+  { key: "right_gene", label: "Before gene", width: 140 },
+  { key: "n_orfs_complete", label: "Genes predicted", numeric: true, width: 130 },
+  { key: "n_orfs", label: "Genes incl. partial", numeric: true, width: 150 },
+];
+
 const PANEL_COLUMNS: Column[] = [
   { key: "gene_id", label: "Gene", width: 180 },
   { key: "qlen", label: "Length", numeric: true, width: 100 },
@@ -72,6 +102,7 @@ const HIDDEN_COLS_KEY = "straincompass-hidden-cols";
 // Columns picker (then their choice is remembered instead).
 const DEFAULT_HIDDEN_COLS: Partial<Record<TableKind, string[]>> = {
   genes_coverage: ["start", "end", "length", "cov_bp"],
+  gained: ["end", "anchor_end", "n_orfs"],
 };
 
 export function ResultsTables({
@@ -88,7 +119,8 @@ export function ResultsTables({
   onOpenGene: (locus: string) => void;
 }) {
   const safeInitialTable: TableKind =
-    initialTable === "panel_recheck" && !run.has_panel
+    (initialTable === "panel_recheck" && !run.has_panel) ||
+    (initialTable === "gained" && !run.has_gained)
       ? "genes_coverage"
       : initialTable;
   const [table, setTable] = useState<TableKind>(safeInitialTable);
@@ -105,7 +137,7 @@ export function ResultsTables({
       return {};
     }
   });
-  const [data, setData] = useState<Page<GapRow | GeneCoverageRow | PanelRow | MatrixRow> | null>(null);
+  const [data, setData] = useState<Page<AnyRow> | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pinnedGene, setPinnedGene] = useState<string | null>(null);
@@ -157,6 +189,7 @@ export function ResultsTables({
   const columns: Column[] = useMemo(() => {
     if (table === "genes_coverage") return COVERAGE_COLUMNS;
     if (table === "unaligned_gaps") return GAP_COLUMNS;
+    if (table === "gained") return GAINED_COLUMNS;
     if (table === "panel_recheck") return PANEL_COLUMNS;
     // matrix: fixed columns + one per query
     return [
@@ -202,6 +235,7 @@ export function ResultsTables({
       const q: TableQuery = { ...query, page, page_size: FETCH_PAGE_SIZE };
       if (table === "genes_coverage") return api.genesCoverage(run.id, q);
       if (table === "unaligned_gaps") return api.unalignedGaps(run.id, q);
+      if (table === "gained") return api.gained(run.id, q);
       if (table === "panel_recheck") return api.panelRecheck(run.id, q);
       return api.matrix(run.id, q);
     }
@@ -210,7 +244,7 @@ export function ResultsTables({
     // every page and concatenate so the whole filtered/sorted table renders
     // in one virtualized scroll instead of behind Previous/Next.
     async function fetchAll() {
-      const rows: (GapRow | GeneCoverageRow | PanelRow | MatrixRow)[] = [];
+      const rows: AnyRow[] = [];
       let total = 0;
       let page = 0;
       for (;;) {
@@ -238,6 +272,17 @@ export function ResultsTables({
 
   const total = data?.total ?? 0;
 
+  // The pin slot holds a locus tag for the gene tables and a synthetic
+  // "contig:start" for gained regions, which have no locus tag of their own.
+  const pinnedGainedRow = useMemo(() => {
+    if (table !== "gained" || !pinnedGene) return null;
+    return (
+      ((data?.rows ?? []) as GainedRow[]).find(
+        (r) => gainedKey(r) === pinnedGene,
+      ) ?? null
+    );
+  }, [table, pinnedGene, data]);
+
   function toggleSort(key: string) {
     if (sortBy === key) {
       setSortDir(sortDir === "asc" ? "desc" : "asc");
@@ -256,11 +301,16 @@ export function ResultsTables({
             [
               ["genes_coverage", "Genes coverage"],
               ["unaligned_gaps", "Unaligned gaps"],
+              ["gained", "Gained"],
               ["panel_recheck", "Panel recheck"],
               ["matrix", "Presence / absence"],
             ] as [TableKind, string][]
           )
-            .filter(([k]) => k !== "panel_recheck" || run.has_panel)
+            .filter(
+              ([k]) =>
+                (k !== "panel_recheck" || run.has_panel) &&
+                (k !== "gained" || run.has_gained),
+            )
             .map(([k, label]) => (
             <button
               key={k}
@@ -276,7 +326,9 @@ export function ResultsTables({
           ))}
         </div>
 
-        {(table === "genes_coverage" || table === "panel_recheck") &&
+        {(table === "genes_coverage" ||
+          table === "panel_recheck" ||
+          table === "gained") &&
           run.queries.length > 1 && (
             <select
               value={queryId ?? ""}
@@ -305,6 +357,28 @@ export function ResultsTables({
               ["present", "Present"],
               ["partial", "Partial"],
               ["absent", "Absent"],
+            ].map(([v, label]) => (
+              <button
+                key={v}
+                onClick={() => setCall(v)}
+                className={`px-3 text-sm font-medium transition-colors ${
+                  call === v
+                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : "bg-white text-zinc-600 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {table === "gained" && (
+          <div className="flex rounded-lg border border-zinc-300 overflow-hidden h-11 dark:border-zinc-700">
+            {[
+              ["", "All"],
+              ["anchored", "Placed on the reference"],
+              ["unanchored", "Not placed"],
             ].map(([v, label]) => (
               <button
                 key={v}
@@ -391,6 +465,12 @@ export function ResultsTables({
           onClose={() => setPinnedGene(null)}
         />
       )}
+      {pinnedGene && table === "gained" && pinnedGainedRow && (
+        <GainedOrfsCard
+          row={pinnedGainedRow}
+          onClose={() => setPinnedGene(null)}
+        />
+      )}
     </div>
   );
 }
@@ -409,7 +489,7 @@ function VirtualTable({
   onResizeColumn,
 }: {
   columns: Column[];
-  rows: (GapRow | GeneCoverageRow | PanelRow | MatrixRow)[];
+  rows: AnyRow[];
   table: TableKind;
   sortBy: string | null;
   sortDir: "asc" | "desc";
@@ -539,6 +619,10 @@ function VirtualTable({
                   // Right-clicking the row whose preview is already open closes
                   // it; any other row moves the preview over to that row.
                   onPinGene((prev) => (prev === locus ? null : locus));
+                } else if (table === "gained") {
+                  e.preventDefault();
+                  const key = gainedKey(row as unknown as GainedRow);
+                  onPinGene((prev) => (prev === key ? null : key));
                 }
               }}
               onClick={() => {
@@ -580,6 +664,24 @@ function Cell({
 }) {
   const v = row[col];
   if (col === "call") return <CallBadge call={v as Call} />;
+  if (table === "gained") {
+    if (col === "anchor") return <AnchorBadge row={row as unknown as GainedRow} />;
+    if (col === "gc_pct") return <span>{(v as number).toFixed(1)}</span>;
+    if (col === "n_orfs" || col === "n_orfs_complete") {
+      // null is "the gene finder did not run", which is not a count of
+      // zero and must never be rendered as one.
+      if (v === null || v === undefined)
+        return (
+          <span
+            className="text-zinc-400 text-sm dark:text-zinc-500"
+            title="The gene finder was not available for this run, so the genes inside this region were not predicted."
+          >
+            not available
+          </span>
+        );
+      return <span>{(v as number).toLocaleString("en-US")}</span>;
+    }
+  }
   if (col === "protein_id" && v) {
     return (
       <a
@@ -639,6 +741,112 @@ function Cell({
   }
   if (v === null || v === undefined || v === "") return <span className="text-zinc-300 dark:text-zinc-700">-</span>;
   return <span className="truncate">{String(v)}</span>;
+}
+
+/**
+ * How confidently a gained region is placed. A region flanked on one side
+ * only, or flanked inconsistently, must not read the same as one pinned
+ * between two agreeing blocks - on a fragmented assembly most of them are.
+ */
+function AnchorBadge({ row }: { row: GainedRow }) {
+  if (row.anchor === "unanchored")
+    return (
+      <span
+        className="px-2 py-0.5 rounded text-xs bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
+        title="This region is on a query contig with no alignment to the reference at all - usually a plasmid or a phage - so it cannot be placed."
+      >
+        not placed
+      </span>
+    );
+  if (row.anchor === "flank" || row.flanks_disagree)
+    return (
+      <span
+        className="px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+        title={
+          row.flanks_disagree
+            ? "The alignments on either side point at different places, so this position is approximate."
+            : "Only one side of this region aligns to the reference, so it is placed at that junction alone."
+        }
+      >
+        junction
+      </span>
+    );
+  return (
+    <span
+      className="px-2 py-0.5 rounded text-xs bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-300"
+      title="Both flanking alignments agree on where this region sits."
+    >
+      between
+    </span>
+  );
+}
+
+/** The genes predicted inside one gained region, pinned by right-click. */
+function GainedOrfsCard({
+  row,
+  onClose,
+}: {
+  row: GainedRow;
+  onClose: () => void;
+}) {
+  const ref = usePopoverDismiss(true, onClose);
+  return (
+    <div
+      ref={ref}
+      className="mt-3 rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="font-semibold text-[15px]">
+            {row.qry_seqid}:{row.start.toLocaleString("en-US")}-
+            {row.end.toLocaleString("en-US")}
+          </p>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            {row.length.toLocaleString("en-US")} bp with no alignment to the
+            reference, GC {row.gc_pct.toFixed(1)}%
+            {row.at_contig_end && " - at a contig end"}
+          </p>
+        </div>
+        <button
+          onClick={onClose}
+          className="text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+        >
+          Close
+        </button>
+      </div>
+      {row.n_orfs === null ? (
+        <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
+          The gene finder was not available for this run, so the genes inside
+          this region were not predicted.
+        </p>
+      ) : row.orfs.length === 0 ? (
+        <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
+          No genes were predicted inside this region.
+        </p>
+      ) : (
+        <ul className="mt-3 space-y-1">
+          {row.orfs.map((o, i) => (
+            <li key={i} className="font-mono text-sm tabular-nums">
+              {o.start.toLocaleString("en-US")}-{o.end.toLocaleString("en-US")}{" "}
+              ({o.strand < 0 ? "-" : "+"}){" "}
+              <span
+                className={
+                  o.partial
+                    ? "text-amber-700 dark:text-amber-400"
+                    : "text-zinc-500 dark:text-zinc-400"
+                }
+              >
+                {o.partial ? "partial" : "complete"}
+              </span>{" "}
+              <span className="text-zinc-400 dark:text-zinc-500">
+                confidence {o.confidence.toFixed(1)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function ColumnPicker({

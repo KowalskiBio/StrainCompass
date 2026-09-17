@@ -2,6 +2,7 @@ import type {
   AlignmentData,
   AlignmentDataWire,
   GeneDetail,
+  GainedRow,
   GapRow,
   GeneCoverageRow,
   MatrixRow,
@@ -66,6 +67,35 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
  * Failures are evicted, letting a later call retry.
  */
 const alignmentCache = new Map<number, Promise<AlignmentData>>();
+
+/**
+ * Every gained region of one query, as one list rather than pages. The
+ * gained table and the strain map's gained layer want exactly the same
+ * rows, so one fetch serves both and switching between them is free.
+ * Small - a few hundred rows at worst - so no eviction is needed.
+ */
+const gainedCache = new Map<string, Promise<GainedRow[]>>();
+
+function gainedAll(runId: number, queryId: number): Promise<GainedRow[]> {
+  const key = `${runId}:${queryId}`;
+  const hit = gainedCache.get(key);
+  if (hit) return hit;
+  const p = (async () => {
+    const rows: GainedRow[] = [];
+    for (let page = 0; ; page++) {
+      const d = await request<Page<GainedRow>>(
+        `/runs/${runId}/gained${qs({ query_id: queryId, page, page_size: 1000 })}`,
+      );
+      rows.push(...d.rows);
+      if (d.rows.length === 0 || rows.length >= d.total) break;
+    }
+    return rows;
+  })();
+  // Let a later call retry rather than caching the failure forever.
+  p.catch(() => gainedCache.delete(key));
+  gainedCache.set(key, p);
+  return p;
+}
 /** Payloads are tens of MB each for big runs: keep the cache shallow. */
 const ALIGNMENT_CACHE_MAX = 4;
 
@@ -238,6 +268,9 @@ export const api = {
     ) as unknown as Promise<Page<GeneCoverageRow>>,
   unalignedGaps: (runId: number, q: TableQuery) =>
     request<Page<GapRow>>(`/runs/${runId}/unaligned_gaps${qs(q)}`),
+  gained: (runId: number, q: TableQuery) =>
+    request<Page<GainedRow>>(`/runs/${runId}/gained${qs(q)}`),
+  gainedAll,
   panelRecheck: (runId: number, q: TableQuery) =>
     request<Page<PanelRow>>(`/runs/${runId}/panel_recheck${qs(q)}`),
   matrix: (runId: number, q: TableQuery) =>

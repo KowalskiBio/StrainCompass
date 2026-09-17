@@ -416,6 +416,47 @@ GET    /projects/{id}/usage          storage used by the project
   with the BLAST recheck panel.
 - A fully aligned gene can still carry a premature stop codon; sequence
   presence does not prove a functional ORF.
+- Gained regions are query stretches with *no alignment to the reference*,
+  which is weaker than *absent from the reference*. nucmer anchors on
+  matches unique to the reference (`--mumreference`), so a query copy of a
+  multicopy reference family (rRNA operon, IS element, transposase) may
+  have nothing unique to seed from and be reported as gained even though
+  the reference carries it several times over. This is the query-side
+  mirror of the first caveat above. The rows flag what they can -
+  `at_contig_end`, `flanks_disagree`, and the complete-ORF count rather
+  than the raw one - but confirming a gain means BLASTing the region back
+  against the reference, which the pipeline does not yet do.
+- A draft query assembly contributes an unaligned tip at every contig end,
+  so `min_gained` (500 bp by default) and the `at_contig_end` flag are load
+  bearing on fragmented input.
+
+## Gained regions (added 2026-09-17)
+
+Each query now also gets the mirror image of the unaligned-gaps table:
+stretches of the *query* genome that no alignment covers, placed on the
+reference by the alignment blocks flanking them, with the genes inside
+them predicted by prodigal.
+
+- `crates/engine/src/gained.rs` complements `DeltaFile::aligned_qry_intervals()`
+  against the query contig lengths, then anchors each region as `Between`
+  (both flanks agree), `Flank` (one usable flank, or a fallback from
+  disagreeing ones) or `Unanchored` (the contig has no alignment at all -
+  a plasmid).
+- **prodigal is optional.** `ToolPaths::prodigal` is an `Option`, because
+  `discover()` is all-or-nothing and no deployment made before this
+  feature has the binary. Without it the regions are still computed and
+  the run still succeeds; the ORF counts are `None`, which the tables and
+  the map render as "not available" and never as zero.
+- Surfaced as a per-query **Gained** tab (hidden on runs that predate the
+  feature, via `RunDto.has_gained`) and a **gained** toggle in the strain
+  map's legend, which draws a teal mark at each anchor. The parameters are
+  `min_gained` and `gained_orfs`, both postprocess-layer, so changing them
+  re-runs cheaply and does not invalidate a cached delta.
+- Gained rows are per query in query coordinates, so they deliberately do
+  not enter the presence/absence matrix, whose call arrays are positionally
+  parallel to the reference gene list. "Which gains do strains A and B
+  share?" is therefore not answerable yet; that needs cross-query
+  clustering of the regions by sequence identity.
 
 ## NCBI cross references (added 2026-09-15)
 
