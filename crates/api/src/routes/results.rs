@@ -242,6 +242,94 @@ fn none_last(a: Option<u32>, b: Option<u32>, asc: bool) -> std::cmp::Ordering {
     }
 }
 
+#[derive(serde::Deserialize)]
+pub struct GainedVerifyQuery {
+    pub query_id: Option<i64>,
+    pub seqid: String,
+    pub start: u64,
+    pub end: u64,
+}
+
+/// GET /runs/{id}/gained/verify?query_id&seqid&start&end : blastn one
+/// gained region back against the reference genome.
+///
+/// "No alignment to the reference" is the anchor-based definition of a
+/// gained region and is weaker than "absent from the reference"; this is
+/// the closer test, run on demand because it costs a blast database and
+/// a search per region and most rows are never questioned.
+pub async fn gained_verify(
+    State(state): State<SharedState>,
+    Path(run_id): Path<i64>,
+    Query(q): Query<GainedVerifyQuery>,
+) -> ApiResult<Json<straincompass_types::GainedVerify>> {
+    let (project_id, run_id, qid) = resolve_query_id(&state, run_id, q.query_id)?;
+    let res = jobs::load_query_result(&state, project_id, run_id, qid)?;
+    let rows = res.gained.ok_or_else(|| {
+        ApiError::BadRequest(
+            "This run was computed before gained regions were available. Please run the comparison again to see them."
+                .into(),
+        )
+    })?;
+    // The endpoint reads the query fasta, so it answers only for regions
+    // this run actually reported - not for arbitrary coordinates.
+    if !rows
+        .iter()
+        .any(|r| r.qry_seqid == q.seqid && r.start == q.start && r.end == q.end)
+    {
+        return Err(ApiError::BadRequest(
+            "This region is not in this query's gained table.".into(),
+        ));
+    }
+
+    let run_dir = state.run_dir(project_id, run_id);
+    let qry_fa = run_dir
+        .join("queries")
+        .join(qid.to_string())
+        .join("query.fa");
+    let ref_fa = state
+        .project_dir(project_id)
+        .join("reference")
+        .join("ref.fa");
+    for f in [&qry_fa, &ref_fa] {
+        if !f.is_file() {
+            return Err(ApiError::NotFound(
+                "This run's input files are no longer on the server, so the region cannot be re-examined.".into(),
+            ));
+        }
+    }
+
+    let work = run_dir
+        .join("queries")
+        .join(qid.to_string())
+        .join("work")
+        .join(format!("gained_verify_{}", uuid::Uuid::new_v4()));
+    let scratch = work.clone();
+    let seqid = q.seqid;
+    let (start, end) = (q.start, q.end);
+    // One check at a time holds a cpu slot, like the alignment backfill:
+    // the blast search is seconds, but it is still a whole-genome search.
+    let _permit = state
+        .cpu_slots
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| ApiError::Internal("The server is shutting down.".into()))?;
+    let result = tokio::task::spawn_blocking(move || {
+        let tools = straincompass_engine::tools::ToolPaths::discover()?;
+        straincompass_engine::blast::gained_verify(
+            &tools, &ref_fa, &qry_fa, &seqid, start, end, &work,
+        )
+        .map_err(ApiError::from)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("The reference check crashed. ({e})")))?;
+    drop(_permit);
+    // The scratch dir is per call; leaving it behind would grow the run
+    // by one blast database per click.
+    let _ = std::fs::remove_dir_all(&scratch);
+    result.map(Json)
+}
+
 /// GET /runs/{id}/panel_recheck
 pub async fn panel_recheck(
     State(state): State<SharedState>,
@@ -717,6 +805,121 @@ mod tests {
             call: call.map(|s| s.to_string()),
             cols: None,
         }
+    }
+
+    /// Rewrite the seeded result.json with one gained region on the query
+    /// contig that query.fa actually carries ("q1", 6 bp), so the verify
+    /// endpoint can find both the row and its sequence.
+    fn seed_gained_on_real_contig(dir: &std::path::Path) {
+        let p = dir.join("projects/1/runs/1/queries/10/result.json");
+        let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
+        v["gained"] = serde_json::json!([{
+            "qry_seqid": "q1", "start": 1u64, "end": 6u64, "length": 6u64,
+            "gc_pct": 50.0f64, "at_contig_end": true, "anchor": "unanchored",
+            "anchor_seqid": "", "anchor_start": 0u64, "anchor_end": 0u64,
+            "flanks_disagree": false, "left_gene": "", "right_gene": "",
+            "n_orfs": 1u32, "n_orfs_complete": 1u32, "orfs": []
+        }]);
+        std::fs::write(&p, serde_json::to_vec(&v).unwrap()).unwrap();
+    }
+
+    /// Stand-in blast binaries, as the engine tests do for prodigal: the
+    /// makeblastdb does nothing, the blastn writes a fixed hit table to
+    /// whatever path follows -out. STRAINCOMPASS_TOOLS_DIRS points
+    /// discovery at them, so no test needs BLAST+ installed.
+    fn stub_blast_tools(dir: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("stubbin");
+        std::fs::create_dir_all(&bin).unwrap();
+        // discovery is all-or-nothing, so the tools the back-check never
+        // runs still have to exist by name.
+        for name in ["nucmer", "show-coords", "show-snps", "dnadiff"] {
+            std::fs::write(bin.join(name), "#!/bin/sh\nexit 1\n").unwrap();
+        }
+        std::fs::write(bin.join("makeblastdb"), "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::write(
+            bin.join("blastn"),
+            "#!/bin/sh\nout=\"\"\nprev=\"\"\nfor a in \"$@\"; do\n  if [ \"$prev\" = \"-out\" ]; then out=\"$a\"; fi\n  prev=\"$a\"\ndone\ncat > \"$out\" <<'HITS'\nchr1\t100\t200\t99.5\t101\t1\t101\t1e-30\t185\nHITS\n",
+        )
+        .unwrap();
+        for f in [
+            "nucmer",
+            "show-coords",
+            "show-snps",
+            "dnadiff",
+            "makeblastdb",
+            "blastn",
+        ] {
+            std::fs::set_permissions(bin.join(f), std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::env::set_var("STRAINCOMPASS_TOOLS_DIRS", &bin);
+    }
+
+    #[tokio::test]
+    async fn gained_verify_blats_the_region_back() {
+        let (state, dir) = seeded_state();
+        seed_gained_on_real_contig(&dir);
+        stub_blast_tools(&dir);
+
+        let v = gained_verify(
+            State(state.clone()),
+            Path(1),
+            Query(GainedVerifyQuery {
+                query_id: None,
+                seqid: "q1".into(),
+                start: 1,
+                end: 6,
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(v.hits.len(), 1);
+        assert_eq!(v.hits[0].ref_seqid, "chr1");
+        assert_eq!((v.hits[0].ref_start, v.hits[0].ref_end), (100, 200));
+
+        // A region that is not one of the run's rows is refused, not
+        // searched: the endpoint reads the query fasta.
+        let err = gained_verify(
+            State(state.clone()),
+            Path(1),
+            Query(GainedVerifyQuery {
+                query_id: None,
+                seqid: "q1".into(),
+                start: 2,
+                end: 5,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
+
+        std::env::remove_var("STRAINCOMPASS_TOOLS_DIRS");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn gained_verify_asks_an_older_run_to_be_rerun() {
+        let (state, dir) = seeded_state();
+        stub_blast_tools(&dir);
+        let err = gained_verify(
+            State(state),
+            Path(1),
+            Query(GainedVerifyQuery {
+                query_id: None,
+                seqid: "q1".into(),
+                start: 1,
+                end: 6,
+            }),
+        )
+        .await
+        .unwrap_err();
+        match err {
+            ApiError::BadRequest(m) => assert!(m.contains("run the comparison again"), "got {m}"),
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+        std::env::remove_var("STRAINCOMPASS_TOOLS_DIRS");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

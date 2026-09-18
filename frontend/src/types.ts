@@ -110,6 +110,33 @@ export interface GainedRow {
   orfs: GainedOrf[];
 }
 
+/** One blastn hit of a gained region searched back against the reference. */
+export interface GainedBlastHit {
+  ref_seqid: string;
+  /** 1-based inclusive, ordered low..high regardless of the hit's strand. */
+  ref_start: number;
+  ref_end: number;
+  identity: number;
+  length: number;
+  /** Interval on the region itself, not the whole query contig. */
+  qry_start: number;
+  qry_end: number;
+  evalue: number;
+  bitscore: number;
+}
+
+/**
+ * The reference back-check of one gained region: the region's sequence
+ * searched against the reference genome with a sensitive blastn. Empty
+ * hits is the evidence "no alignment" cannot give on its own.
+ */
+export interface GainedVerify {
+  qry_seqid: string;
+  start: number;
+  end: number;
+  hits: GainedBlastHit[];
+}
+
 export interface PanelRow {
   gene_id: string;
   qlen: number;

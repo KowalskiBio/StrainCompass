@@ -163,6 +163,45 @@ pub enum GainedOrfStatus {
     Unknown,
 }
 
+/// One blastn hit of a gained region searched back against the
+/// reference genome.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GainedBlastHit {
+    /// Reference sequence the hit is on.
+    pub ref_seqid: String,
+    /// 1-based inclusive reference interval of the hit, ordered
+    /// low..high regardless of the hit's strand.
+    pub ref_start: u64,
+    pub ref_end: u64,
+    /// Percent identity over the aligned length.
+    pub identity: f64,
+    /// Alignment length in bases.
+    pub length: u64,
+    /// 1-based inclusive interval on the region itself (relative to the
+    /// sequence that was searched, not the whole query contig).
+    pub qry_start: u64,
+    pub qry_end: u64,
+    pub evalue: f64,
+    pub bitscore: f64,
+}
+
+/// The reference back-check of one gained region: the region's sequence
+/// searched against the reference genome with a sensitive blastn, which
+/// is the evidence "no alignment to the reference" cannot supply on its
+/// own.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GainedVerify {
+    /// The region that was searched, echoed so a cached answer can be
+    /// matched to its question.
+    pub qry_seqid: String,
+    /// 1-based inclusive coordinates on the query contig.
+    pub start: u64,
+    pub end: u64,
+    /// Hits ordered by bitscore, best first. Empty means the search found
+    /// nothing similar anywhere in the reference.
+    pub hits: Vec<GainedBlastHit>,
+}
+
 /// One row of the strict panel recheck (per query).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PanelRow {

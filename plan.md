@@ -424,8 +424,10 @@ GET    /projects/{id}/usage          storage used by the project
   the reference carries it several times over. This is the query-side
   mirror of the first caveat above. The rows flag what they can -
   `at_contig_end`, `flanks_disagree`, and the complete-ORF count rather
-  than the raw one - but confirming a gain means BLASTing the region back
-  against the reference, which the pipeline does not yet do.
+  than the raw one - and the Gained tab's region card offers the
+  confirming search on demand: the region's sequence blasted back
+  against the reference (`GET /runs/{id}/gained/verify`), with no hits
+  reported as consistent with a true gain.
 - A draft query assembly contributes an unaligned tip at every contig end,
   so `min_gained` (500 bp by default) and the `at_contig_end` flag are load
   bearing on fragmented input.
@@ -457,6 +459,18 @@ them predicted by prodigal.
   parallel to the reference gene list. "Which gains do strains A and B
   share?" is therefore not answerable yet; that needs cross-query
   clustering of the regions by sequence identity.
+- **Reference back-check** (added 2026-09-18): the region card in the
+  Gained tab can search the region's sequence against the whole
+  reference genome on demand (`crates/engine/src/blast.rs::
+  gained_verify`, `GET /runs/{id}/gained/verify`). The search is
+  deliberately *more* sensitive than the pipeline's aligner (`-task
+  blastn` seeds on 11-mers, `-dust no` leaves low-complexity unmasked),
+  because it exists to catch what the aligner's unique-reference anchors
+  miss. No hits is the closest available evidence of absence; hits are
+  shown with identity and coverage so the multicopy caveat can be seen
+  directly. Results are cached client-side per region; the server keeps
+  no cache, so the check always runs against the reference as it stands
+  now.
 
 ## NCBI cross references (added 2026-09-15)
 

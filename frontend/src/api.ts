@@ -4,6 +4,7 @@ import type {
   GeneDetail,
   GainedRow,
   GapRow,
+  GainedVerify,
   GeneCoverageRow,
   MatrixRow,
   Page,
@@ -165,6 +166,31 @@ function geneDetailCached(runId: number, locus: string): Promise<GeneDetail> {
   return p;
 }
 
+/** Reference back-checks are immutable for a finished run and cost a
+ * blast search on the server, so each region is fetched at most once
+ * per session and repeated opens of its verdict panel coalesce. */
+const gainedVerifyCache = new Map<string, Promise<GainedVerify>>();
+
+function gainedVerifyCached(
+  runId: number,
+  queryId: number,
+  seqid: string,
+  start: number,
+  end: number,
+): Promise<GainedVerify> {
+  const key = `${runId}:${queryId}:${seqid}:${start}`;
+  let p = gainedVerifyCache.get(key);
+  if (!p) {
+    p = request<GainedVerify>(
+      `/runs/${runId}/gained/verify?query_id=${queryId}` +
+        `&seqid=${encodeURIComponent(seqid)}&start=${start}&end=${end}`,
+    );
+    p.catch(() => gainedVerifyCache.delete(key));
+    gainedVerifyCache.set(key, p);
+  }
+  return p;
+}
+
 export const api = {
   listProjects: () => request<Project[]>("/projects"),
   createProject: (name: string, organism?: string) =>
@@ -282,6 +308,7 @@ export const api = {
       `/runs/${runId}/refseq?seqid=${encodeURIComponent(seqid)}&start=${start}&end=${end}`,
     ),
   geneDetail: geneDetailCached,
+  gainedVerify: gainedVerifyCached,
   listRunFiles: (runId: number) =>
     request<{ run_id: number; status: string; files: RunFile[] }>(
       `/runs/${runId}/files`,

@@ -1,4 +1,5 @@
-//! Strict BLAST recheck of a gene panel against each query genome.
+//! Strict BLAST recheck of a gene panel against each query genome, and
+//! the reference back-check of gained regions.
 
 use crate::tools::ToolPaths;
 use crate::{friendly, Result};
@@ -6,7 +7,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 use std::process::Command;
-use straincompass_types::{Call, PanelRow};
+use straincompass_types::{Call, GainedBlastHit, GainedVerify, PanelRow};
 
 /// Run the panel recheck for one query. `workdir` receives the blast
 /// database files; it must be writable and private to this comparison.
@@ -154,4 +155,138 @@ fn format_evalue(e: f64) -> String {
     } else {
         format!("{e:.1e}")
     }
+}
+
+/// Back-check one gained region: search its sequence against the whole
+/// reference genome with blastn.
+///
+/// The gained table calls a region gained when the whole-genome aligner
+/// produced no alignment covering it, and nucmer's default matcher can
+/// only seed alignments from matches that are unique on the reference
+/// side, so a query copy of a multicopy reference family lands there
+/// with no alignment at all. This search is the closer test of
+/// "absent from the reference", and it must therefore be *more*
+/// sensitive than the aligner, not equally sensitive: `-task blastn`
+/// seeds on 11-mers where the default megablast needs 28, and `-dust no`
+/// leaves low-complexity sequence unmasked. For proving absence, every
+/// hit counts.
+///
+/// `work_dir` receives the scratch files (the region fasta, the blast
+/// database, the hit table); it must be writable and private to this
+/// call. The caller owns its lifetime.
+pub fn gained_verify(
+    tools: &ToolPaths,
+    ref_fasta: &Path,
+    qry_fasta: &Path,
+    seqid: &str,
+    start: u64,
+    end: u64,
+    work_dir: &Path,
+) -> Result<GainedVerify> {
+    let records = crate::fasta::parse_fasta(qry_fasta)?;
+    let rec = records.iter().find(|r| r.id == seqid).ok_or_else(|| {
+        friendly(format!(
+            "The query contig {seqid} is not in this query's fasta file."
+        ))
+    })?;
+    let seq = crate::fasta::subseq(rec, start, end, false);
+    if seq.is_empty() {
+        return Err(friendly(
+            "The region is empty or lies outside its query contig.",
+        ));
+    }
+
+    std::fs::create_dir_all(work_dir)?;
+    let region_fasta = work_dir.join("region.fa");
+    {
+        use std::io::Write;
+        let mut w = std::io::BufWriter::new(std::fs::File::create(&region_fasta)?);
+        writeln!(w, ">region {seqid}:{start}-{end}")?;
+        for chunk in seq.chunks(60) {
+            w.write_all(chunk)?;
+            w.write_all(b"\n")?;
+        }
+        w.flush()?;
+    }
+
+    let db = work_dir.join("ref_db");
+    let make_db = Command::new(&tools.makeblastdb)
+        .args(["-in"])
+        .arg(ref_fasta)
+        .args(["-dbtype", "nucl", "-out"])
+        .arg(&db)
+        .output()
+        .map_err(|e| crate::EngineError::ToolMissing(format!("makeblastdb: {e}")))?;
+    if !make_db.status.success() {
+        return Err(friendly(format!(
+            "The reference back-check could not be prepared. {}",
+            String::from_utf8_lossy(&make_db.stderr).trim()
+        )));
+    }
+
+    let out = work_dir.join("hits.tsv");
+    let blast = Command::new(&tools.blastn)
+        .args(["-query"])
+        .arg(&region_fasta)
+        .args(["-db"])
+        .arg(&db)
+        .args([
+            "-task",
+            "blastn",
+            "-dust",
+            "no",
+            "-evalue",
+            "1e-5",
+            "-outfmt",
+            "6 sseqid sstart send pident length qstart qend evalue bitscore",
+        ])
+        .arg("-out")
+        .arg(&out)
+        .output()
+        .map_err(|e| crate::EngineError::ToolMissing(format!("blastn: {e}")))?;
+    if !blast.status.success() {
+        return Err(friendly(format!(
+            "The reference back-check did not finish correctly. {}",
+            String::from_utf8_lossy(&blast.stderr).trim()
+        )));
+    }
+
+    let mut hits = Vec::new();
+    let mut text = String::new();
+    std::fs::File::open(&out)?.read_to_string(&mut text)?;
+    for line in text.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() < 9 {
+            continue;
+        }
+        let (Ok(sstart), Ok(send)) = (f[1].parse::<u64>(), f[2].parse::<u64>()) else {
+            continue;
+        };
+        hits.push(GainedBlastHit {
+            ref_seqid: f[0].to_string(),
+            // blastn reports the subject span against the plus strand, so
+            // a hit on the reverse strand arrives as sstart > send; the
+            // row reports the interval either way, like every other
+            // reference coordinate in the app.
+            ref_start: sstart.min(send),
+            ref_end: sstart.max(send),
+            identity: f[3].parse().unwrap_or(0.0),
+            length: f[4].parse().unwrap_or(0),
+            qry_start: f[5].parse().unwrap_or(1),
+            qry_end: f[6].parse().unwrap_or(0),
+            evalue: f[7].parse().unwrap_or(f64::INFINITY),
+            bitscore: f[8].parse().unwrap_or(0.0),
+        });
+    }
+    // Best first, and bounded: a region that really is a repeat can
+    // produce thousands of HSPs, and the table only ever shows the top.
+    hits.sort_by(|a, b| b.bitscore.total_cmp(&a.bitscore));
+    hits.truncate(50);
+
+    Ok(GainedVerify {
+        qry_seqid: seqid.to_string(),
+        start,
+        end,
+        hits,
+    })
 }

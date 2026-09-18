@@ -3,7 +3,9 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { api } from "../api";
 import type {
   Call,
+  GainedBlastHit,
   GainedRow,
+  GainedVerify,
   GapRow,
   GeneDetail,
   GeneCoverageRow,
@@ -476,6 +478,8 @@ export function ResultsTables({
       {pinnedGene && table === "gained" && pinnedGainedRow && (
         <GainedOrfsCard
           row={pinnedGainedRow}
+          runId={run.id}
+          queryId={queryId ?? run.queries[0].file_id}
           onClose={() => setPinnedGene(null)}
         />
       )}
@@ -794,15 +798,34 @@ function AnchorBadge({ row }: { row: GainedRow }) {
   );
 }
 
-/** The genes predicted inside one gained region, pinned by right-click. */
+/** The genes predicted inside one gained region, pinned by right-click,
+ * plus the reference back-check of the region itself. */
 function GainedOrfsCard({
   row,
+  runId,
+  queryId,
   onClose,
 }: {
   row: GainedRow;
+  runId: number;
+  queryId: number;
   onClose: () => void;
 }) {
   const ref = usePopoverDismiss(true, onClose);
+  const [verify, setVerify] = useState<GainedVerify | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+
+  function check() {
+    setChecking(true);
+    setVerifyError(null);
+    api
+      .gainedVerify(runId, queryId, row.qry_seqid, row.start, row.end)
+      .then(setVerify)
+      .catch((e) => setVerifyError((e as Error).message))
+      .finally(() => setChecking(false));
+  }
+
   return (
     <div
       ref={ref}
@@ -858,6 +881,142 @@ function GainedOrfsCard({
           ))}
         </ul>
       )}
+      <div className="mt-4 pt-3 border-t border-zinc-100 dark:border-zinc-800">
+        {verify ? (
+          <GainedVerifyResult v={verify} regionLength={row.length} />
+        ) : verifyError ? (
+          <div>
+            <p className="text-sm text-red-700 dark:text-red-400">{verifyError}</p>
+            <button
+              onClick={check}
+              className="mt-2 text-sm text-zinc-500 underline hover:text-zinc-900 dark:hover:text-zinc-100"
+            >
+              Try again
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={check}
+              disabled={checking}
+              className="h-9 px-3 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+            >
+              {checking ? "Searching the reference..." : "Check against the reference"}
+            </button>
+            {checking && <Spinner className="text-zinc-400" />}
+            {!checking && (
+              <p className="text-xs text-zinc-400 dark:text-zinc-500">
+                Searches the region's sequence against the whole reference
+                genome with a sensitive blastn, the back-check of "no
+                alignment".
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Share of a gained region covered by any hit, in percent. Hit intervals
+ * are 1-based inclusive on the region. */
+function unionCoverage(hits: GainedBlastHit[], regionLength: number): number {
+  const ivs = hits
+    .map((h) => [h.qry_start, h.qry_end] as [number, number])
+    .sort((a, b) => a[0] - b[0]);
+  let covered = 0;
+  let last = 0;
+  for (const [s, e] of ivs) {
+    if (e > last) {
+      covered += e - Math.max(s - 1, last);
+      last = e;
+    }
+  }
+  return (100 * covered) / Math.max(regionLength, 1);
+}
+
+function fmtE(e: number): string {
+  if (e === 0) return "0.0";
+  if (e >= 0.001) return e.toFixed(2);
+  return e.toExponential(1);
+}
+
+/**
+ * The verdict of the reference back-check. No hits is the confirmation
+ * the word "gained" wants; hits mean the aligner could not use a match
+ * the reference does carry, which is exactly the caveat the gained
+ * table exists with.
+ */
+function GainedVerifyResult({
+  v,
+  regionLength,
+}: {
+  v: GainedVerify;
+  regionLength: number;
+}) {
+  if (v.hits.length === 0) {
+    return (
+      <div>
+        <span
+          className="px-2 py-0.5 rounded text-xs bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-300"
+          title="A sensitive blastn search (word size 11, low-complexity unmasked, E <= 1e-5) of this region found nothing similar anywhere in the reference genome."
+        >
+          not found in the reference
+        </span>
+        <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+          A sensitive blastn search of this region found no similar sequence
+          anywhere in the reference genome. This is the back-check the
+          alignment alone cannot give, and it is consistent with the region
+          being truly gained.
+        </p>
+      </div>
+    );
+  }
+  const covered = unionCoverage(v.hits, regionLength);
+  const best = v.hits.reduce((m, h) => Math.max(m, h.identity), 0);
+  const probablyPresent = covered >= 80 && best >= 95;
+  return (
+    <div>
+      <span
+        className="px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+        title={`${covered.toFixed(0)}% of the region matched the reference at up to ${best.toFixed(1)}% identity.`}
+      >
+        {probablyPresent
+          ? "similar sequence in the reference"
+          : "partial similarity in the reference"}
+      </span>
+      <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+        {probablyPresent
+          ? `About ${covered.toFixed(0)}% of this region matched the reference at up to ${best.toFixed(1)}% identity. The whole-genome aligner anchors on matches unique to the reference side, so a copy of something the reference carries several times over can fail to align - this region is probably not a true gain.`
+          : `About ${covered.toFixed(0)}% of the region matched at up to ${best.toFixed(1)}% identity. Short or divergent matches can be shared repeats, conserved domains or the remains of a longer gain - read the hits below before concluding.`}
+      </p>
+      <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-x-4 text-sm">
+        {v.hits.slice(0, 8).map((h, i) => (
+          <div key={i} className="contents">
+            <span className="font-mono tabular-nums truncate">
+              {h.ref_seqid}:{h.ref_start.toLocaleString("en-US")}-
+              {h.ref_end.toLocaleString("en-US")}
+            </span>
+            <span className="text-right font-mono tabular-nums">
+              {h.identity.toFixed(1)}%
+            </span>
+            <span className="text-right font-mono tabular-nums">
+              {h.length.toLocaleString("en-US")} bp
+            </span>
+            <span
+              className="text-right font-mono tabular-nums text-zinc-400 dark:text-zinc-500"
+              title={`bitscore ${h.bitscore}`}
+            >
+              {fmtE(h.evalue)}
+            </span>
+          </div>
+        ))}
+        {v.hits.length > 8 && (
+          <span className="col-span-4 text-xs text-zinc-400 dark:text-zinc-500">
+            +{v.hits.length - 8} more hit{v.hits.length - 8 === 1 ? "" : "s"}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
