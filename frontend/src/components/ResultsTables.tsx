@@ -1087,61 +1087,71 @@ function GainedVerifyResult({
         {v.weak_hits.length > 0 && <WeakTier hits={v.weak_hits} />}
       </>
     );
-  } else if (v.weak_hits.length > 0) {
+  } else {
+    // No strong nucleotide hit and no translated hit. What remains is
+    // the weak tier, and it decides the tone: a genome-sized search
+    // produces dozens of fragmentary matches below the threshold by
+    // chance, so only a substantial one (80+ bases aligned, longer
+    // than the noise floor) is worth an amber "no clear similarity" -
+    // otherwise the fragments stay collapsed under the green verdict.
+    const substantial = v.weak_hits.some((h) => h.length >= 80);
     const wCovered = unionCoverage(v.weak_hits, regionLength);
     const wBest = v.weak_hits.reduce((m, h) => Math.max(m, h.identity), 0);
-    badge = (
-      <span
-        className="px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
-        title="Only matches below the detection threshold were found."
-      >
-        no clear similarity in the reference
-      </span>
-    );
-    body = (
-      <>
-        <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-          The only matches found are below the detection threshold (E
-          between 1e-5 and 10): about {wCovered.toFixed(0)}% of the region
-          matched at up to {wBest.toFixed(1)}% identity, which shared
-          repeats and chance can produce.
-          {v.tx_hits !== null
-            ? " The translated search also found nothing."
-            : ""}
-        </p>
-        <WeakTier hits={v.weak_hits} />
-      </>
-    );
-  } else {
     const txRan = v.tx_hits !== null;
-    badge = (
-      <span
-        className="px-2 py-0.5 rounded text-xs bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-300"
-        title={
-          txRan
-            ? "A sensitive nucleotide search and a translated (amino-acid) search of this region both found nothing similar anywhere in the reference genome."
-            : "A sensitive nucleotide search of this region found nothing similar anywhere in the reference genome."
-        }
-      >
-        {txRan
-          ? "not found in the reference, even translated"
-          : "not found in the reference"}
-      </span>
-    );
-    body = (
-      <>
-        <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-          {txRan
-            ? "Sensitive nucleotide and translated searches of this region found no similar sequence anywhere in the reference genome, at either the nucleotide or the amino-acid level. This is the closest available evidence of a true gain - with the standing limit that no sequence search can prove absence outright."
-            : "A sensitive nucleotide search of this region found no similar sequence anywhere in the reference genome. This is the back-check the alignment alone cannot give, and it is consistent with the region being truly gained."}
-        </p>
-        {v.tx_note && (
-          <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
-            {v.tx_note}
+    if (substantial) {
+      badge = (
+        <span
+          className="px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+          title="Only matches below the detection threshold were found."
+        >
+          no clear similarity in the reference
+        </span>
+      );
+      body = (
+        <>
+          <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+            The only matches found are below the detection threshold (E
+            between 1e-5 and 10): about {wCovered.toFixed(0)}% of the
+            region matched at up to {wBest.toFixed(1)}% identity, including
+            a stretch long enough that it may mean something.
+            {txRan
+              ? " The translated search found nothing."
+              : ""}
           </p>
-        )}
-      </>
-    );
+          <WeakTier hits={v.weak_hits} />
+        </>
+      );
+    } else {
+      badge = (
+        <span
+          className="px-2 py-0.5 rounded text-xs bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-300"
+          title={
+            txRan
+              ? "A sensitive nucleotide search and a translated (amino-acid) search of this region both found nothing similar anywhere in the reference genome."
+              : "A sensitive nucleotide search of this region found nothing similar anywhere in the reference genome."
+          }
+        >
+          {txRan
+            ? "not found in the reference, even translated"
+            : "not found in the reference"}
+        </span>
+      );
+      body = (
+        <>
+          <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+            {txRan
+              ? "Sensitive nucleotide and translated searches of this region found no similar sequence anywhere in the reference genome, at either the nucleotide or the amino-acid level. This is the closest available evidence of a true gain - with the standing limit that no sequence search can prove absence outright."
+              : "A sensitive nucleotide search of this region found no similar sequence anywhere in the reference genome. This is the back-check the alignment alone cannot give, and it is consistent with the region being truly gained."}
+          </p>
+          {v.tx_note && (
+            <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+              {v.tx_note}
+            </p>
+          )}
+          {v.weak_hits.length > 0 && <WeakTier hits={v.weak_hits} />}
+        </>
+      );
+    }
   }
 
   return (
