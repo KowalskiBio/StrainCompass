@@ -273,19 +273,33 @@ fn an_unknown_contig_is_a_friendly_error() {
 }
 
 /// One identification run over the check() fixtures: reference chr1
-/// ("ACGTACGT", gene G1 = protein "TY" from its two clean codons) and
+/// ("ACGTACGT...", gene G1 = protein "TY" from its two clean codons) and
 /// query ctg1 ("ACGTACGTAC"), with one predicted ORF spanning ctg1:1-9.
+/// `real_stop` swaps in the realistic reference layout - a CDS whose
+/// span ends in a stop codon, as NCBI GFF3 annotates them - because the
+/// naive "a stop disqualifies the protein" rule silently discards the
+/// entire proteome of a real genome.
 fn identify(
     dir: &Path,
     orfs: &[straincompass_types::GainedOrf],
     blastx_hits: &str,
+    real_stop: bool,
 ) -> straincompass_types::GainedIdentify {
-    std::fs::write(dir.join("ref.fa"), ">chr1\nACGTACGT\n").unwrap();
+    let (ref_fa, gene_span) = if real_stop {
+        // ATG TAA: a complete two-codon gene, stop included in the span.
+        (">chr1\nATGTAA\n", "1\t6")
+    } else {
+        (">chr1\nACGTACGT\n", "1\t8")
+    };
+    std::fs::write(dir.join("ref.fa"), ref_fa).unwrap();
     std::fs::write(
         dir.join("ref.gff"),
-        "##gff-version 3\n\
-         chr1\t.\tgene\t1\t8\t.\t+\t.\tlocus_tag=G1;gene=glx;gene_biotype=protein_coding\n\
-         chr1\t.\tCDS\t1\t8\t.\t+\t0\tlocus_tag=G1;product=glucose oxidase;protein_id=WP_G1\n",
+        format!(
+            "##gff-version 3\n\
+             chr1\t.\tgene\t{span}\t.\t+\t.\tlocus_tag=G1;gene=glx;gene_biotype=protein_coding\n\
+             chr1\t.\tCDS\t{span}\t.\t+\t0\tlocus_tag=G1;product=glucose oxidase;protein_id=WP_G1\n",
+            span = gene_span
+        ),
     )
     .unwrap();
     std::fs::write(dir.join("qry.fa"), ">ctg1\nACGTACGTAC\n").unwrap();
@@ -331,6 +345,7 @@ fn the_best_reference_protein_names_the_orf() {
         &orfs,
         // Two hits for the same ORF: the better bitscore wins.
         "o0\tG1\t80.0\t70.0\t1e-5\t40\no0\tG1\t99.0\t100.0\t1e-30\t50\n",
+        false,
     );
     assert_eq!(v.orfs.len(), 1);
     assert_eq!(v.orfs[0].seq, "ACGTACGTA");
@@ -342,6 +357,24 @@ fn the_best_reference_protein_names_the_orf() {
     assert_eq!(m.coverage, 100.0);
     assert_eq!(m.evalue, 1e-30);
     assert_eq!(v.region_seq, "ACGTACGTA");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn a_cds_ending_in_a_stop_codon_still_yields_its_protein() {
+    let d = test_dir("identify_stop");
+    let orfs = vec![straincompass_types::GainedOrf {
+        start: 1,
+        end: 9,
+        strand: 1,
+        partial: false,
+        confidence: 99.0,
+    }];
+    let v = identify(&d, &orfs, "o0\tG1\t99.0\t100.0\t1e-30\t50\n", true);
+    // If the terminal stop had disqualified the gene, the proteome
+    // would be empty and the search would never have run at all.
+    let m = v.orfs[0].best.as_ref().expect("the ORF must be named");
+    assert_eq!(m.locus_tag, "G1");
     let _ = std::fs::remove_dir_all(&d);
 }
 
@@ -364,7 +397,7 @@ fn an_orf_without_a_reference_match_stays_unnamed() {
             confidence: 50.0,
         },
     ];
-    let v = identify(&d, &orfs, "");
+    let v = identify(&d, &orfs, "", false);
     assert_eq!(v.orfs.len(), 2);
     assert!(v.orfs[0].best.is_none());
     // A reverse-strand ORF still arrives as its own plus sequence.
@@ -378,7 +411,7 @@ fn a_region_without_orfs_is_answered_without_searching() {
     // The blastx stub would fail the run if the engine called it, which
     // is the point: there is nothing to name, so nothing may run.
     std::fs::write(d.join("sentinel"), "").unwrap();
-    let v = identify(&d, &[], "");
+    let v = identify(&d, &[], "", false);
     assert!(v.orfs.is_empty());
     assert_eq!(v.region_seq, "ACGTACGTA");
     let _ = std::fs::remove_dir_all(&d);

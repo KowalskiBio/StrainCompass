@@ -540,7 +540,14 @@ pub fn gained_identify(
             continue;
         };
         let cds = crate::fasta::subseq(rec, g.start, g.end, g.strand < 0);
-        let prot = translate(&cds);
+        let mut prot = translate(&cds);
+        // NCBI GFF3 CDS spans include the terminal stop codon: part of
+        // the span, not of the protein. An internal stop means the
+        // annotation and the coordinates disagree somewhere, and a
+        // corrupted db entry would return to haunt every future search.
+        if prot.ends_with('*') {
+            prot.pop();
+        }
         if prot.is_empty() || prot.contains('*') {
             continue;
         }
