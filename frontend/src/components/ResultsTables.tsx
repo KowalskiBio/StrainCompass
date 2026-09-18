@@ -137,7 +137,13 @@ export function ResultsTables({
       return {};
     }
   });
-  const [data, setData] = useState<Page<AnyRow> | null>(null);
+  /** The fetched page, tagged with the table it belongs to: right after a
+   * tab switch the columns are already the new table's while the rows are
+   * still the old one's, and rendering e.g. gc_pct over a genes row
+   * crashed the page (the error boundary caught `toFixed of undefined`).
+   * Rows that do not belong to the shown table are treated as absent
+   * until their own fetch lands. */
+  const [data, setData] = useState<(Page<AnyRow> & { table: TableKind }) | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pinnedGene, setPinnedGene] = useState<string | null>(null);
@@ -255,7 +261,7 @@ export function ResultsTables({
         if (d.rows.length === 0 || rows.length >= total) break;
         page++;
       }
-      if (!cancelled) setData({ rows, total });
+      if (!cancelled) setData({ table, rows, total });
     }
 
     fetchAll()
@@ -270,16 +276,18 @@ export function ResultsTables({
     };
   }, [run.id, table, JSON.stringify(query)]);
 
-  const total = data?.total ?? 0;
+  const total = data && data.table === table ? data.total : 0;
 
   // The pin slot holds a locus tag for the gene tables and a synthetic
   // "contig:start" for gained regions, which have no locus tag of their own.
   const pinnedGainedRow = useMemo(() => {
-    if (table !== "gained" || !pinnedGene) return null;
+    if (table !== "gained" || !pinnedGene || data?.table !== "gained") {
+      return null;
+    }
     return (
-      ((data?.rows ?? []) as GainedRow[]).find(
-        (r) => gainedKey(r) === pinnedGene,
-      ) ?? null
+      (data.rows.find(
+        (r) => gainedKey(r as GainedRow) === pinnedGene,
+      ) as GainedRow | undefined) ?? null
     );
   }, [table, pinnedGene, data]);
 
@@ -435,7 +443,7 @@ export function ResultsTables({
       <div className="border border-zinc-200 rounded-xl bg-white overflow-hidden dark:border-zinc-800 dark:bg-zinc-900">
         <VirtualTable
           columns={visibleColumns}
-          rows={data?.rows ?? []}
+          rows={data && data.table === table ? data.rows : []}
           table={table}
           sortBy={sortBy}
           sortDir={sortDir}
@@ -666,7 +674,12 @@ function Cell({
   if (col === "call") return <CallBadge call={v as Call} />;
   if (table === "gained") {
     if (col === "anchor") return <AnchorBadge row={row as unknown as GainedRow} />;
-    if (col === "gc_pct") return <span>{(v as number).toFixed(1)}</span>;
+    if (col === "gc_pct")
+      return (
+        <span>
+          {typeof v === "number" ? v.toFixed(1) : "-"}
+        </span>
+      );
     if (col === "n_orfs" || col === "n_orfs_complete") {
       // null is "the gene finder did not run", which is not a count of
       // zero and must never be rendered as one.
