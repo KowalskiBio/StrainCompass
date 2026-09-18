@@ -17,6 +17,10 @@ pub struct ToolPaths {
     /// nucleotide search that found nothing. Ships in the same BLAST+
     /// package as blastn, so every deployment with blastn has it.
     pub tblastx: PathBuf,
+    /// Translated nucleotide-vs-protein search, used only to name the
+    /// predicted genes inside a gained region after the reference's own
+    /// proteins. Same package again.
+    pub blastx: PathBuf,
     /// The gene finder, used only to predict the genes inside gained
     /// regions. Optional on purpose: `discover` is all-or-nothing, and
     /// every deployment made before gained regions existed lacks this
@@ -75,6 +79,7 @@ impl ToolPaths {
             makeblastdb: find_tool("makeblastdb", &extra)?,
             blastn: find_tool("blastn", &extra)?,
             tblastx: find_tool("tblastx", &extra)?,
+            blastx: find_tool("blastx", &extra)?,
             prodigal: find_tool("prodigal", &extra).ok(),
         })
     }

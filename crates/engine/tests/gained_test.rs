@@ -61,7 +61,8 @@ fn no_tools() -> ToolPaths {
         dnadiff: p.clone(),
         makeblastdb: p.clone(),
         blastn: p.clone(),
-        tblastx: p,
+        tblastx: p.clone(),
+        blastx: p,
         prodigal: None,
     }
 }

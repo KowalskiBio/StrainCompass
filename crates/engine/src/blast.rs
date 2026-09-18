@@ -1,13 +1,17 @@
 //! Strict BLAST recheck of a gene panel against each query genome, and
 //! the reference back-check of gained regions.
 
+use crate::gff::Gene;
 use crate::tools::ToolPaths;
 use crate::{friendly, Result};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 use std::process::Command;
-use straincompass_types::{Call, GainedBlastHit, GainedVerify, PanelRow};
+use straincompass_types::{
+    Call, GainedBlastHit, GainedIdentify, GainedOrf, GainedVerify, IdentifiedOrf, OrfMatch,
+    PanelRow,
+};
 
 /// Run the panel recheck for one query. `workdir` receives the blast
 /// database files; it must be writable and private to this comparison.
@@ -198,16 +202,23 @@ const MAX_HITS: usize = 50;
 /// `work_dir` receives the scratch files (the region fasta, the blast
 /// database, the hit tables); it must be writable and private to this
 /// call. The caller owns its lifetime.
+/// The input files a gained-region examination reads: the reference
+/// with its annotation, and the query fasta the region is cut from.
+pub struct RegionInputs<'a> {
+    pub ref_fasta: &'a Path,
+    pub ref_gff: &'a Path,
+    pub qry_fasta: &'a Path,
+}
+
 pub fn gained_verify(
     tools: &ToolPaths,
-    ref_fasta: &Path,
-    qry_fasta: &Path,
+    inputs: &RegionInputs,
     seqid: &str,
     start: u64,
     end: u64,
     work_dir: &Path,
 ) -> Result<GainedVerify> {
-    let records = crate::fasta::parse_fasta(qry_fasta)?;
+    let records = crate::fasta::parse_fasta(inputs.qry_fasta)?;
     let rec = records.iter().find(|r| r.id == seqid).ok_or_else(|| {
         friendly(format!(
             "The query contig {seqid} is not in this query's fasta file."
@@ -236,7 +247,7 @@ pub fn gained_verify(
     let db = work_dir.join("ref_db");
     let make_db = Command::new(&tools.makeblastdb)
         .args(["-in"])
-        .arg(ref_fasta)
+        .arg(inputs.ref_fasta)
         .args(["-dbtype", "nucl", "-out"])
         .arg(&db)
         .output()
@@ -278,7 +289,7 @@ pub fn gained_verify(
     // so it only runs when there is nothing strong to second-guess.
     // tblastx reports its coordinates in nucleotide bases but its
     // identity and length over aligned amino acids.
-    let (tx_hits, tx_note) = if hits.is_empty() {
+    let (mut tx_hits, tx_note) = if hits.is_empty() {
         if seq.len() as u64 <= TX_MAX_BP {
             (
                 Some(top_owned(run_search(
@@ -308,8 +319,19 @@ pub fn gained_verify(
 
     // Cutoff-free and tool-free: the longest exact match anywhere. The
     // reference is parsed here because no caller has it loaded.
-    let ref_records = crate::fasta::parse_fasta(ref_fasta)?;
+    let ref_records = crate::fasta::parse_fasta(inputs.ref_fasta)?;
     let lcs = crate::longest_match::longest_exact_match(&seq, &ref_records);
+
+    // Say what each hit hits: a row of reference coordinates alone
+    // answers nothing until it is joined to the annotation.
+    let ref_genes = crate::gff::parse_gff(inputs.ref_gff).unwrap_or_default();
+    for h in hits
+        .iter_mut()
+        .chain(weak_hits.iter_mut())
+        .chain(tx_hits.iter_mut().flatten())
+    {
+        h.genes = overlapping_genes(&ref_genes, &h.ref_seqid, h.ref_start, h.ref_end);
+    }
 
     Ok(GainedVerify {
         qry_seqid: seqid.to_string(),
@@ -326,6 +348,74 @@ pub fn gained_verify(
         longest_exact_qry_start: lcs.qry_start,
         longest_exact_qry_end: lcs.qry_end,
     })
+}
+
+/// Reference genes overlapping an interval, formatted for display as
+/// "locus_tag (symbol)" - symbol preferred, product as fallback,
+/// bare locus tag when the annotation says nothing more.
+fn overlapping_genes(genes: &[Gene], seqid: &str, start: u64, end: u64) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for g in genes {
+        if g.seqid == seqid && g.start <= end && g.end >= start {
+            let label = if !g.symbol.is_empty() {
+                format!("{} ({})", g.locus_tag, g.symbol)
+            } else if !g.product.is_empty() {
+                format!("{} ({})", g.locus_tag, truncate_product(&g.product))
+            } else {
+                g.locus_tag.clone()
+            };
+            out.push(label);
+        }
+    }
+    out
+}
+
+/// A product can be a whole sentence; the label wants a clause.
+fn truncate_product(p: &str) -> String {
+    const MAX: usize = 60;
+    if p.len() <= MAX {
+        p.to_string()
+    } else {
+        format!(
+            "{}...",
+            &p[..p
+                .char_indices()
+                .take(MAX)
+                .last()
+                .map(|(i, _)| i)
+                .unwrap_or(MAX)]
+        )
+    }
+}
+
+/// The standard genetic code over the four unambiguous bases, indexed
+/// first base x 16 + second x 4 + third (T=0, C=1, A=2, G=3). Table 11,
+/// the bacterial code, differs only in which starts count as M, and
+/// that difference does not matter to a similarity search. Partial
+/// trailing codons are dropped; ambiguous bases translate to X.
+fn translate(seq: &[u8]) -> String {
+    const TABLE: [char; 64] = [
+        'F', 'F', 'L', 'L', 'S', 'S', 'S', 'S', 'Y', 'Y', '*', '*', 'C', 'C', '*', 'W', //
+        'L', 'L', 'L', 'L', 'P', 'P', 'P', 'P', 'H', 'H', 'Q', 'Q', 'R', 'R', 'R', 'R', //
+        'I', 'I', 'I', 'M', 'T', 'T', 'T', 'T', 'N', 'N', 'K', 'K', 'S', 'S', 'R', 'R', //
+        'V', 'V', 'V', 'V', 'A', 'A', 'A', 'A', 'D', 'D', 'E', 'E', 'G', 'G', 'G', 'G',
+    ];
+    fn base(b: u8) -> Option<usize> {
+        match b.to_ascii_uppercase() {
+            b'T' => Some(0),
+            b'C' => Some(1),
+            b'A' => Some(2),
+            b'G' => Some(3),
+            _ => None,
+        }
+    }
+    seq.chunks(3)
+        .filter(|c| c.len() == 3)
+        .map(|c| match (base(c[0]), base(c[1]), base(c[2])) {
+            (Some(i), Some(j), Some(k)) => TABLE[i * 16 + j * 4 + k],
+            _ => 'X',
+        })
+        .collect()
 }
 
 /// Run one blast search of the region against the database and parse its
@@ -392,6 +482,7 @@ fn run_search(
             qry_end: f[6].parse().unwrap_or(0),
             evalue: f[7].parse().unwrap_or(f64::INFINITY),
             bitscore: f[8].parse().unwrap_or(0.0),
+            genes: Vec::new(),
         });
     }
     Ok(hits)
@@ -407,4 +498,223 @@ fn top(hits: &mut Vec<GainedBlastHit>) {
 fn top_owned(mut hits: Vec<GainedBlastHit>) -> Vec<GainedBlastHit> {
     top(&mut hits);
     hits
+}
+
+/// Name the genes inside one gained region: each predicted ORF searched,
+/// as translated DNA, against the reference's own proteins.
+///
+/// This is the only name an unannotated query genome can be given
+/// locally - a query is a bare draft assembly, so its genes arrive with
+/// coordinates and nothing else, and the reference annotation is the one
+/// naming resource on the server. It names the ORFs the reference does
+/// carry homologs of (interrupted copies, repeat-family members); the
+/// ORFs it leaves unnamed are exactly the novel ones, for which the
+/// response carries the sequences so the client can link out.
+///
+/// A gene is only offered for matching when its translation is a clean
+/// protein: an internal stop means the reference annotation and the
+/// coordinates disagree somewhere, and a corrupted db entry would return
+/// to haunt every future search.
+pub fn gained_identify(
+    tools: &ToolPaths,
+    inputs: &RegionInputs,
+    seqid: &str,
+    start: u64,
+    end: u64,
+    orfs: &[GainedOrf],
+    work_dir: &Path,
+) -> Result<GainedIdentify> {
+    let ref_records = crate::fasta::parse_fasta(inputs.ref_fasta)?;
+    let by_seqid: HashMap<&str, &crate::fasta::FastaRecord> =
+        ref_records.iter().map(|r| (r.id.as_str(), r)).collect();
+
+    // The reference proteome, one record per coding gene.
+    let genes = crate::gff::parse_gff(inputs.ref_gff)?;
+    let mut proteins: Vec<(String, String, String, String)> = Vec::new();
+    for g in &genes {
+        if g.protein_id.is_empty() {
+            // No CDS child joined in: not a coding gene.
+            continue;
+        }
+        let Some(rec) = by_seqid.get(g.seqid.as_str()) else {
+            continue;
+        };
+        let cds = crate::fasta::subseq(rec, g.start, g.end, g.strand < 0);
+        let prot = translate(&cds);
+        if prot.is_empty() || prot.contains('*') {
+            continue;
+        }
+        proteins.push((
+            g.locus_tag.clone(),
+            g.protein_id.clone(),
+            gene_label(g),
+            prot,
+        ));
+    }
+
+    let qry_records = crate::fasta::parse_fasta(inputs.qry_fasta)?;
+    let qry_rec = qry_records.iter().find(|r| r.id == seqid).ok_or_else(|| {
+        friendly(format!(
+            "The query contig {seqid} is not in this query's fasta file."
+        ))
+    })?;
+    let region_seq = crate::fasta::subseq(qry_rec, start, end, false);
+
+    let mut out = GainedIdentify {
+        qry_seqid: seqid.to_string(),
+        start,
+        end,
+        orfs: orfs
+            .iter()
+            .map(|o| IdentifiedOrf {
+                start: o.start,
+                end: o.end,
+                strand: o.strand,
+                best: None,
+                seq: String::from_utf8_lossy(&crate::fasta::subseq(
+                    qry_rec,
+                    o.start,
+                    o.end,
+                    o.strand < 0,
+                ))
+                .into_owned(),
+            })
+            .collect(),
+        region_seq: String::from_utf8_lossy(&region_seq).into_owned(),
+    };
+
+    if orfs.is_empty() || proteins.is_empty() {
+        // Nothing to name, or nothing to name it with. The answer is
+        // complete either way; the ORFs are unnamed, not missing.
+        return Ok(out);
+    }
+
+    std::fs::create_dir_all(work_dir)?;
+    let prot_fa = work_dir.join("ref_prot.fa");
+    {
+        use std::io::Write;
+        let mut w = std::io::BufWriter::new(std::fs::File::create(&prot_fa)?);
+        for (locus, protein_id, label, prot) in &proteins {
+            writeln!(w, ">{locus} {protein_id} {label}")?;
+            for chunk in prot.as_bytes().chunks(60) {
+                w.write_all(chunk)?;
+                w.write_all(b"\n")?;
+            }
+        }
+        w.flush()?;
+    }
+    let db = work_dir.join("prot_db");
+    let make_db = Command::new(&tools.makeblastdb)
+        .args(["-in"])
+        .arg(&prot_fa)
+        .args(["-dbtype", "prot", "-out"])
+        .arg(&db)
+        .output()
+        .map_err(|e| crate::EngineError::ToolMissing(format!("makeblastdb: {e}")))?;
+    if !make_db.status.success() {
+        return Err(friendly(format!(
+            "The gene identification could not be prepared. {}",
+            String::from_utf8_lossy(&make_db.stderr).trim()
+        )));
+    }
+
+    // One record per ORF, in plus orientation of the ORF itself: blastx
+    // searches all frames of its query, so the strand the gene finder
+    // called does not have to be trusted here - the matching frame is
+    // whichever one finds the protein.
+    let orf_fa = work_dir.join("orfs.fa");
+    {
+        use std::io::Write;
+        let mut w = std::io::BufWriter::new(std::fs::File::create(&orf_fa)?);
+        for (i, o) in out.orfs.iter().enumerate() {
+            writeln!(w, ">o{i}")?;
+            for chunk in o.seq.as_bytes().chunks(60) {
+                w.write_all(chunk)?;
+                w.write_all(b"\n")?;
+            }
+        }
+        w.flush()?;
+    }
+    let hits_tsv = work_dir.join("orf_hits.tsv");
+    let blast = Command::new(&tools.blastx)
+        .args(["-query"])
+        .arg(&orf_fa)
+        .args(["-db"])
+        .arg(&db)
+        .args([
+            "-evalue",
+            "1e-5",
+            "-outfmt",
+            "6 qseqid sseqid pident qcovs evalue bitscore",
+            "-out",
+        ])
+        .arg(&hits_tsv)
+        .output()
+        .map_err(|e| crate::EngineError::ToolMissing(format!("blastx: {e}")))?;
+    if !blast.status.success() {
+        return Err(friendly(format!(
+            "The gene identification did not finish correctly. {}",
+            String::from_utf8_lossy(&blast.stderr).trim()
+        )));
+    }
+
+    // Best hit per ORF (highest bitscore), then join the names.
+    let mut best: HashMap<usize, (String, f64, f64, f64, f64)> = HashMap::new();
+    let mut text = String::new();
+    std::fs::File::open(&hits_tsv)?.read_to_string(&mut text)?;
+    for line in text.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() < 6 {
+            continue;
+        }
+        let (Some(idx), Ok(bitscore)) = (
+            f[0].strip_prefix('o').and_then(|v| v.parse::<usize>().ok()),
+            f[5].parse::<f64>(),
+        ) else {
+            continue;
+        };
+        let better = best
+            .get(&idx)
+            .map(|(_, _, _, _, b)| bitscore > *b)
+            .unwrap_or(true);
+        if better {
+            best.insert(
+                idx,
+                (
+                    f[1].to_string(),
+                    f[2].parse().unwrap_or(0.0),
+                    f[3].parse().unwrap_or(0.0),
+                    f[4].parse().unwrap_or(f64::INFINITY),
+                    bitscore,
+                ),
+            );
+        }
+    }
+    let by_locus: HashMap<&str, &(String, String, String, String)> =
+        proteins.iter().map(|p| (p.0.as_str(), p)).collect();
+    for (i, orf) in out.orfs.iter_mut().enumerate() {
+        if let Some((locus, identity, coverage, evalue, _)) = best.get(&i) {
+            if let Some((locus_tag, protein_id, label, _)) = by_locus.get(locus.as_str()) {
+                orf.best = Some(OrfMatch {
+                    locus_tag: locus_tag.clone(),
+                    protein_id: protein_id.clone(),
+                    label: label.clone(),
+                    identity: *identity,
+                    coverage: *coverage,
+                    evalue: *evalue,
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The display label of a gene: its symbol when annotated, else its
+/// product, else nothing (the locus tag carries it alone).
+fn gene_label(g: &Gene) -> String {
+    if !g.symbol.is_empty() {
+        g.symbol.clone()
+    } else {
+        g.product.clone()
+    }
 }

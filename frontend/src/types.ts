@@ -126,6 +126,10 @@ export interface GainedBlastHit {
   qry_end: number;
   evalue: number;
   bitscore: number;
+  /** Reference genes the hit overlaps, display-formatted
+   * ("LM4B_RS13070 (rlmN)"). A hit means little until it says what it
+   * hits. */
+  genes: string[];
 }
 
 /**
@@ -159,6 +163,45 @@ export interface GainedVerify {
   longest_exact_end: number;
   longest_exact_qry_start: number;
   longest_exact_qry_end: number;
+}
+
+/** The best reference-protein match of one predicted gene inside a
+ * gained region: the only name an unannotated query genome can be
+ * given locally. */
+export interface OrfMatch {
+  locus_tag: string;
+  /** RefSeq protein accession, for the NCBI protein link. */
+  protein_id: string;
+  /** Gene symbol or product, whichever the annotation carries. */
+  label: string;
+  /** Amino-acid identity over the aligned part, percent. */
+  identity: number;
+  /** Share of the predicted gene covered, percent. */
+  coverage: number;
+  evalue: number;
+}
+
+/** One predicted gene of a gained region with its nucleotide sequence,
+ * so novel ones can be linked out to NCBI BLAST. */
+export interface IdentifiedOrf {
+  start: number;
+  end: number;
+  strand: number;
+  /** null means no similar protein in the reference - expected for
+   * the true gains. */
+  match: OrfMatch | null;
+  seq: string;
+}
+
+/** The gene-level answer to "what is gained here": each predicted gene
+ * of one region, named by its best match among the reference's own
+ * proteins (blastx). */
+export interface GainedIdentify {
+  qry_seqid: string;
+  start: number;
+  end: number;
+  orfs: IdentifiedOrf[];
+  region_seq: string;
 }
 
 export interface PanelRow {

@@ -487,7 +487,26 @@ them predicted by prodigal.
   so the check always runs against the reference as it stands now. The
   standing limit, stated in the UI copy: no sequence search proves
   absence - "not found, even translated" is the closest available
-  evidence of a true gain.
+  evidence of a true gain. Every hit of every tier is labeled with the
+  reference genes its interval overlaps, because a row of coordinates
+  answers nothing until it says what it hits.
+- **Gene identification** (added 2026-09-18): queries are unannotated
+  draft assemblies, so their genes arrive from prodigal with coordinates
+  and nothing else - the gained table's LM4B_RS... columns are the
+  *reference* genes flanking the insertion point, not the gained genes,
+  and nothing in the system could say what the gained genes are. The
+  region card can now name them (`crates/engine/src/blast.rs::
+  gained_identify`, `GET /runs/{id}/gained/identify`): each predicted
+  ORF is searched, as translated DNA (blastx, E <= 1e-5), against a
+  protein database built on the fly from the reference's own annotated
+  CDSs (translated from ref.fa by the GFF, standard genetic code; genes
+  whose translation is not a clean protein are skipped). This names the
+  ORFs the reference does carry homologs of - interrupted copies,
+  repeat-family members, the "probably not a true gain" cases. The ORFs
+  it leaves unnamed are exactly the novel ones: for those the response
+  carries their sequences, and the client links each to NCBI BLAST
+  (blastx vs nr) and the whole region likewise, since no local database
+  can name a gene the reference has never seen.
 
 ## NCBI cross references (added 2026-09-15)
 

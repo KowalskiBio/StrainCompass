@@ -4,6 +4,7 @@ import type {
   GeneDetail,
   GainedRow,
   GapRow,
+  GainedIdentify,
   GainedVerify,
   GeneCoverageRow,
   MatrixRow,
@@ -170,6 +171,30 @@ function geneDetailCached(runId: number, locus: string): Promise<GeneDetail> {
  * blast search on the server, so each region is fetched at most once
  * per session and repeated opens of its verdict panel coalesce. */
 const gainedVerifyCache = new Map<string, Promise<GainedVerify>>();
+const gainedIdentifyCache = new Map<string, Promise<GainedIdentify>>();
+
+/** Gene identification is the same trade as the back-check - immutable
+ * for a finished run, a blast search per call - so it coalesces the
+ * same way. */
+export function gainedIdentifyCached(
+  runId: number,
+  queryId: number,
+  seqid: string,
+  start: number,
+  end: number,
+): Promise<GainedIdentify> {
+  const key = `${runId}:${queryId}:${seqid}:${start}`;
+  let p = gainedIdentifyCache.get(key);
+  if (!p) {
+    p = request<GainedIdentify>(
+      `/runs/${runId}/gained/identify?query_id=${queryId}` +
+        `&seqid=${encodeURIComponent(seqid)}&start=${start}&end=${end}`,
+    );
+    p.catch(() => gainedIdentifyCache.delete(key));
+    gainedIdentifyCache.set(key, p);
+  }
+  return p;
+}
 
 function gainedVerifyCached(
   runId: number,
@@ -309,6 +334,7 @@ export const api = {
     ),
   geneDetail: geneDetailCached,
   gainedVerify: gainedVerifyCached,
+  gainedIdentify: gainedIdentifyCached,
   listRunFiles: (runId: number) =>
     request<{ run_id: number; status: string; files: RunFile[] }>(
       `/runs/${runId}/files`,

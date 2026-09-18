@@ -4,11 +4,13 @@ import { api } from "../api";
 import type {
   Call,
   GainedBlastHit,
+  GainedIdentify,
   GainedRow,
   GainedVerify,
   GapRow,
   GeneDetail,
   GeneCoverageRow,
+  IdentifiedOrf,
   MatrixRow,
   Page,
   PanelRow,
@@ -815,6 +817,9 @@ function GainedOrfsCard({
   const [verify, setVerify] = useState<GainedVerify | null>(null);
   const [checking, setChecking] = useState(false);
   const [verifyError, setVerifyError] = useState<string | null>(null);
+  const [identify, setIdentify] = useState<GainedIdentify | null>(null);
+  const [identifying, setIdentifying] = useState(false);
+  const [identifyError, setIdentifyError] = useState<string | null>(null);
 
   function check() {
     setChecking(true);
@@ -824,6 +829,16 @@ function GainedOrfsCard({
       .then(setVerify)
       .catch((e) => setVerifyError((e as Error).message))
       .finally(() => setChecking(false));
+  }
+
+  function identifyGenes() {
+    setIdentifying(true);
+    setIdentifyError(null);
+    api
+      .gainedIdentify(runId, queryId, row.qry_seqid, row.start, row.end)
+      .then(setIdentify)
+      .catch((e) => setIdentifyError((e as Error).message))
+      .finally(() => setIdentifying(false));
   }
 
   return (
@@ -861,25 +876,81 @@ function GainedOrfsCard({
         </p>
       ) : (
         <ul className="mt-3 space-y-1">
-          {row.orfs.map((o, i) => (
-            <li key={i} className="font-mono text-sm tabular-nums">
-              {o.start.toLocaleString("en-US")}-{o.end.toLocaleString("en-US")}{" "}
-              ({o.strand < 0 ? "-" : "+"}){" "}
-              <span
-                className={
-                  o.partial
-                    ? "text-amber-700 dark:text-amber-400"
-                    : "text-zinc-500 dark:text-zinc-400"
-                }
-              >
-                {o.partial ? "partial" : "complete"}
-              </span>{" "}
-              <span className="text-zinc-400 dark:text-zinc-500">
-                confidence {o.confidence.toFixed(1)}
-              </span>
-            </li>
-          ))}
+          {row.orfs.map((o, i) => {
+            const id = identify?.orfs[i];
+            return (
+              <li key={i} className="text-sm">
+                <div className="font-mono tabular-nums">
+                  {o.start.toLocaleString("en-US")}-
+                  {o.end.toLocaleString("en-US")} ({o.strand < 0 ? "-" : "+"}){" "}
+                  <span
+                    className={
+                      o.partial
+                        ? "text-amber-700 dark:text-amber-400"
+                        : "text-zinc-500 dark:text-zinc-400"
+                    }
+                  >
+                    {o.partial ? "partial" : "complete"}
+                  </span>{" "}
+                  <span className="text-zinc-400 dark:text-zinc-500">
+                    confidence {o.confidence.toFixed(1)}
+                  </span>
+                </div>
+                {id && <IdentifiedLine o={id} />}
+              </li>
+            );
+          })}
         </ul>
+      )}
+      {row.orfs.length > 0 && (
+        <div className="mt-2">
+          {identify ? (
+            <p className="text-xs text-zinc-400 dark:text-zinc-500">
+              {identify.orfs.filter((o) => o.match).length} of{" "}
+              {identify.orfs.length} gene
+              {identify.orfs.length === 1 ? "" : "s"} named by similarity to the
+              reference's proteins.{" "}
+              {identify.region_seq.length <= 20000 ? (
+                <>
+                  Unnamed ones are novel to this reference -{" "}
+                  <a
+                    href={ncbiBlastUrl("blastn", identify.region_seq) ?? undefined}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline hover:text-zinc-700 dark:hover:text-zinc-300"
+                  >
+                    search the whole region at NCBI BLAST
+                  </a>{" "}
+                  to identify them.
+                </>
+              ) : (
+                <>Unnamed ones are novel to this reference.</>
+              )}
+            </p>
+          ) : identifyError ? (
+            <div>
+              <p className="text-sm text-red-700 dark:text-red-400">
+                {identifyError}
+              </p>
+              <button
+                onClick={identifyGenes}
+                className="mt-1 text-sm text-zinc-500 underline hover:text-zinc-900 dark:hover:text-zinc-100"
+              >
+                Try again
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={identifyGenes}
+              disabled={identifying}
+              className="text-sm text-zinc-500 underline hover:text-zinc-900 disabled:opacity-50 dark:hover:text-zinc-100"
+            >
+              {identifying
+                ? "Searching the reference's proteins..."
+                : "Identify the genes against the reference's proteins"}
+            </button>
+          )}
+        </div>
       )}
       <div className="mt-4 pt-3 border-t border-zinc-100 dark:border-zinc-800">
         {verify ? (
@@ -915,6 +986,70 @@ function GainedOrfsCard({
         )}
       </div>
     </div>
+  );
+}
+
+/** An NCBI BLAST submission URL with the sequence embedded, or null when
+ * the sequence is too long for a URL (the site would truncate it
+ * silently). */
+function ncbiBlastUrl(
+  program: "blastn" | "blastx",
+  seq: string,
+): string | null {
+  if (seq.length > 20000) return null;
+  return (
+    `https://blast.ncbi.nlm.nih.gov/Blast.cgi?PROGRAM=${program}` +
+    `&PAGE_TYPE=BlastSearch&LINK_LOC=blasthome&BLAST_DATABASE=nr` +
+    `&QUERY=${encodeURIComponent(seq)}`
+  );
+}
+
+/** The name (or novelness) of one predicted gene of a gained region,
+ * from the identification search. */
+function IdentifiedLine({ o }: { o: IdentifiedOrf }) {
+  const m = o.match;
+  if (!m) {
+    const blast = ncbiBlastUrl("blastx", o.seq);
+    return (
+      <p className="ml-4 text-xs text-zinc-500 dark:text-zinc-400">
+        no similar gene in the reference
+        {blast && (
+          <>
+            {" - "}
+            <a
+              href={blast}
+              target="_blank"
+              rel="noreferrer"
+              className="underline hover:text-zinc-700 dark:hover:text-zinc-300"
+            >
+              search this gene at NCBI BLAST
+            </a>
+          </>
+        )}
+      </p>
+    );
+  }
+  return (
+    <p className="ml-4 text-xs">
+      <span className="text-zinc-700 dark:text-zinc-300">
+        {m.protein_id ? (
+          <a
+            href={`https://www.ncbi.nlm.nih.gov/protein/${encodeURIComponent(m.protein_id)}`}
+            target="_blank"
+            rel="noreferrer"
+            className="underline hover:text-zinc-900 dark:hover:text-zinc-100"
+          >
+            {m.label || m.locus_tag}
+          </a>
+        ) : (
+          m.label || m.locus_tag
+        )}
+      </span>{" "}
+      <span className="text-zinc-400 dark:text-zinc-500">
+        {m.identity.toFixed(0)}% aa identity over {m.coverage.toFixed(0)}% of
+        the gene (E {fmtE(m.evalue)})
+      </span>
+    </p>
   );
 }
 
@@ -967,6 +1102,11 @@ function HitGrid({ hits, unit }: { hits: GainedBlastHit[]; unit: "bp" | "aa" }) 
           >
             {fmtE(h.evalue)}
           </span>
+          {h.genes.length > 0 && (
+            <span className="col-span-4 -mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              {h.genes.join(", ")}
+            </span>
+          )}
         </div>
       ))}
       {hits.length > 8 && (

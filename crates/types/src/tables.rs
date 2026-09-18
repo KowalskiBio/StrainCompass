@@ -185,6 +185,61 @@ pub struct GainedBlastHit {
     pub qry_end: u64,
     pub evalue: f64,
     pub bitscore: f64,
+    /// The reference genes the hit's interval overlaps, formatted for
+    /// display ("LM4B_RS13070 (rlmN)"). A hit the user must judge means
+    /// little until it says what it hits.
+    pub genes: Vec<String>,
+}
+
+/// The best reference-protein match of one predicted gene inside a
+/// gained region: the closest thing to a name an unannotated query
+/// genome can be given locally.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OrfMatch {
+    pub locus_tag: String,
+    /// RefSeq protein accession when the reference annotation has one,
+    /// for the NCBI protein link.
+    pub protein_id: String,
+    /// The gene symbol or product, whichever the annotation carries.
+    pub label: String,
+    /// Amino-acid identity over the aligned part, percent.
+    pub identity: f64,
+    /// Share of the predicted gene covered by the alignment, percent.
+    pub coverage: f64,
+    pub evalue: f64,
+}
+
+/// One predicted gene of a gained region, identified or not, with the
+/// nucleotide sequence it was called from so the client can link out
+/// for the matches no local database can name.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IdentifiedOrf {
+    /// 1-based inclusive, in query contig coordinates, matching the
+    /// ORFs of the gained row (positional, same order).
+    pub start: u64,
+    pub end: u64,
+    pub strand: i8,
+    /// Best reference-protein match; `None` means no similar protein
+    /// in the reference, which is expected for the true gains.
+    #[serde(rename = "match")]
+    pub best: Option<OrfMatch>,
+    /// The predicted gene's nucleotide sequence, plus strand.
+    pub seq: String,
+}
+
+/// The gene-level answer to "what is gained here": each predicted gene
+/// of one region with its best match among the reference's own
+/// proteins, searched as translated DNA (blastx).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GainedIdentify {
+    pub qry_seqid: String,
+    /// 1-based inclusive coordinates on the query contig.
+    pub start: u64,
+    pub end: u64,
+    /// Positionally parallel to the gained row's `orfs`.
+    pub orfs: Vec<IdentifiedOrf>,
+    /// The region's own sequence, for linking out to NCBI BLAST.
+    pub region_seq: String,
 }
 
 /// The reference back-check of one gained region: the region's sequence

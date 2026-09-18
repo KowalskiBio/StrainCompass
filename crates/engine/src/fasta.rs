@@ -172,8 +172,11 @@ fn complement_iupac(b: u8) -> u8 {
 }
 
 /// Extract a 1-based inclusive range from a record; handles strand.
+/// Out-of-contig coordinates yield an empty sequence, not a panic: the
+/// caller may be translating an annotation whose coordinates disagree
+/// with the fasta, and that is a skip, not a crash.
 pub fn subseq(rec: &FastaRecord, start: u64, end: u64, rev: bool) -> Vec<u8> {
-    let s = (start.max(1) as usize).saturating_sub(1);
+    let s = (start.max(1) as usize).saturating_sub(1).min(rec.seq.len());
     let e = (end as usize).min(rec.seq.len());
     let mut slice = rec.seq[s..e.max(s)].to_vec();
     if rev {

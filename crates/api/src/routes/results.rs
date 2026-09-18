@@ -7,6 +7,7 @@ use crate::state::SharedState;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde_json::Value;
+use straincompass_engine::blast::RegionInputs;
 use straincompass_types::{
     Call, GainedAnchor, GainedRow, GapRow, GeneCoverageRow, GeneDetail, MatrixRow, Page, PanelRow,
     TableQuery, WgaData, WgaQuery,
@@ -257,57 +258,86 @@ pub struct GainedVerifyQuery {
 /// gained region and is weaker than "absent from the reference"; this is
 /// the closer test, run on demand because it costs a blast database and
 /// a search per region and most rows are never questioned.
-pub async fn gained_verify(
-    State(state): State<SharedState>,
-    Path(run_id): Path<i64>,
-    Query(q): Query<GainedVerifyQuery>,
-) -> ApiResult<Json<straincompass_types::GainedVerify>> {
-    let (project_id, run_id, qid) = resolve_query_id(&state, run_id, q.query_id)?;
-    let res = jobs::load_query_result(&state, project_id, run_id, qid)?;
+/// Resolve the region the gained endpoints operate on: the run, the
+/// query, the input file paths, and the gained row itself. Shared by
+/// the back-check and the gene identification, which answer different
+/// questions about the same region.
+fn gained_region_ctx(
+    state: &SharedState,
+    run_id: i64,
+    q: &GainedVerifyQuery,
+) -> ApiResult<(
+    i64,
+    i64,
+    i64,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    GainedRow,
+)> {
+    let (project_id, run_id, qid) = resolve_query_id(state, run_id, q.query_id)?;
+    let res = jobs::load_query_result(state, project_id, run_id, qid)?;
     let rows = res.gained.ok_or_else(|| {
         ApiError::BadRequest(
             "This run was computed before gained regions were available. Please run the comparison again to see them."
                 .into(),
         )
     })?;
-    // The endpoint reads the query fasta, so it answers only for regions
-    // this run actually reported - not for arbitrary coordinates.
-    if !rows
+    // The endpoints read the query fasta, so they answer only for
+    // regions this run actually reported - not for arbitrary coordinates.
+    let row = rows
         .iter()
-        .any(|r| r.qry_seqid == q.seqid && r.start == q.start && r.end == q.end)
-    {
-        return Err(ApiError::BadRequest(
-            "This region is not in this query's gained table.".into(),
-        ));
-    }
+        .find(|r| r.qry_seqid == q.seqid && r.start == q.start && r.end == q.end)
+        .cloned()
+        .ok_or_else(|| {
+            ApiError::BadRequest("This region is not in this query's gained table.".into())
+        })?;
 
     let run_dir = state.run_dir(project_id, run_id);
     let qry_fa = run_dir
         .join("queries")
         .join(qid.to_string())
         .join("query.fa");
-    let ref_fa = state
-        .project_dir(project_id)
-        .join("reference")
-        .join("ref.fa");
-    for f in [&qry_fa, &ref_fa] {
+    let ref_dir = state.project_dir(project_id).join("reference");
+    let ref_fa = ref_dir.join("ref.fa");
+    let ref_gff = ref_dir.join("ref.gff");
+    for f in [&qry_fa, &ref_fa, &ref_gff] {
         if !f.is_file() {
             return Err(ApiError::NotFound(
                 "This run's input files are no longer on the server, so the region cannot be re-examined.".into(),
             ));
         }
     }
+    Ok((project_id, run_id, qid, qry_fa, ref_fa, ref_gff, row))
+}
 
-    let work = run_dir
+/// Run one blocking gained examination (back-check or identification)
+/// under a cpu slot, in a per-call scratch dir that is cleaned up after.
+async fn gained_examine<T, F>(
+    state: &SharedState,
+    project_id: i64,
+    run_id: i64,
+    qid: i64,
+    f: F,
+) -> ApiResult<T>
+where
+    F: FnOnce(
+            &straincompass_engine::tools::ToolPaths,
+            std::path::PathBuf,
+        ) -> straincompass_engine::Result<T>
+        + Send
+        + 'static,
+    T: Send + 'static,
+{
+    let work = state
+        .run_dir(project_id, run_id)
         .join("queries")
         .join(qid.to_string())
         .join("work")
-        .join(format!("gained_verify_{}", uuid::Uuid::new_v4()));
+        .join(format!("gained_examine_{}", uuid::Uuid::new_v4()));
     let scratch = work.clone();
-    let seqid = q.seqid;
-    let (start, end) = (q.start, q.end);
     // One check at a time holds a cpu slot, like the alignment backfill:
-    // the blast search is seconds, but it is still a whole-genome search.
+    // each examination is seconds, but it is still a whole-genome search.
     let _permit = state
         .cpu_slots
         .clone()
@@ -316,18 +346,74 @@ pub async fn gained_verify(
         .map_err(|_| ApiError::Internal("The server is shutting down.".into()))?;
     let result = tokio::task::spawn_blocking(move || {
         let tools = straincompass_engine::tools::ToolPaths::discover()?;
-        straincompass_engine::blast::gained_verify(
-            &tools, &ref_fa, &qry_fa, &seqid, start, end, &work,
-        )
-        .map_err(ApiError::from)
+        f(&tools, work).map_err(ApiError::from)
     })
     .await
-    .map_err(|e| ApiError::Internal(format!("The reference check crashed. ({e})")))?;
+    .map_err(|e| ApiError::Internal(format!("The region examination crashed. ({e})")))?;
     drop(_permit);
     // The scratch dir is per call; leaving it behind would grow the run
     // by one blast database per click.
     let _ = std::fs::remove_dir_all(&scratch);
-    result.map(Json)
+    result
+}
+
+pub async fn gained_verify(
+    State(state): State<SharedState>,
+    Path(run_id): Path<i64>,
+    Query(q): Query<GainedVerifyQuery>,
+) -> ApiResult<Json<straincompass_types::GainedVerify>> {
+    let (project_id, run_id, qid, qry_fa, ref_fa, ref_gff, _) =
+        gained_region_ctx(&state, run_id, &q)?;
+    let seqid = q.seqid;
+    let (start, end) = (q.start, q.end);
+    let v = gained_examine(&state, project_id, run_id, qid, move |tools, work| {
+        straincompass_engine::blast::gained_verify(
+            tools,
+            &RegionInputs {
+                ref_fasta: &ref_fa,
+                ref_gff: &ref_gff,
+                qry_fasta: &qry_fa,
+            },
+            &seqid,
+            start,
+            end,
+            &work,
+        )
+    })
+    .await?;
+    Ok(Json(v))
+}
+
+/// GET /runs/{id}/gained/identify?query_id&seqid&start&end : name the
+/// predicted genes inside one gained region, by their best match among
+/// the reference's own proteins.
+pub async fn gained_identify(
+    State(state): State<SharedState>,
+    Path(run_id): Path<i64>,
+    Query(q): Query<GainedVerifyQuery>,
+) -> ApiResult<Json<straincompass_types::GainedIdentify>> {
+    let (project_id, run_id, qid, qry_fa, ref_fa, ref_gff, row) =
+        gained_region_ctx(&state, run_id, &q)?;
+    let seqid = q.seqid;
+    let (start, end) = (q.start, q.end);
+    let orfs = row.orfs;
+    let v = gained_examine(&state, project_id, run_id, qid, move |tools, work| {
+        straincompass_engine::blast::gained_identify(
+            tools,
+            &RegionInputs {
+                ref_fasta: &ref_fa,
+                ref_gff: &ref_gff,
+                qry_fasta: &qry_fa,
+            },
+            &seqid,
+            start,
+            end,
+            &orfs,
+            &work,
+        )
+    })
+    .await?;
+    Ok(Json(v))
 }
 
 /// GET /runs/{id}/panel_recheck
@@ -654,6 +740,15 @@ mod tests {
 
         std::fs::write(dir.join("projects/1/reference/ref.fa"), ">chr1\nACGTACGT\n").unwrap();
         std::fs::write(
+            dir.join("projects/1/reference/ref.gff"),
+            "##gff-version 3\n\
+             chr1\t.\tgene\t1\t8\t.\t+\t.\tlocus_tag=gene1;gene=gA;gene_biotype=protein_coding\n\
+             chr1\t.\tCDS\t1\t8\t.\t+\t0\tlocus_tag=gene1;product=first protein;protein_id=WP_ONE\n\
+             chr1\t.\tgene\t100\t200\t.\t+\t.\tlocus_tag=gene2;gene=gB;gene_biotype=protein_coding\n\
+             chr1\t.\tCDS\t100\t200\t.\t+\t0\tlocus_tag=gene2;product=second protein;protein_id=WP_TWO\n",
+        )
+        .unwrap();
+        std::fs::write(
             run_dir.join("reference.json"),
             serde_json::to_vec(&serde_json::json!({
                 "lengths": [["chr1", 8u64]],
@@ -818,10 +913,16 @@ mod tests {
             "gc_pct": 50.0f64, "at_contig_end": true, "anchor": "unanchored",
             "anchor_seqid": "", "anchor_start": 0u64, "anchor_end": 0u64,
             "flanks_disagree": false, "left_gene": "", "right_gene": "",
-            "n_orfs": 1u32, "n_orfs_complete": 1u32, "orfs": []
+            "n_orfs": 1u32, "n_orfs_complete": 1u32,
+            "orfs": [{"start": 1u64, "end": 6u64, "strand": 1i8, "partial": false, "confidence": 99.0f64}]
         }]);
         std::fs::write(&p, serde_json::to_vec(&v).unwrap()).unwrap();
     }
+
+    /// The blast-stub tests point the process-global tools env at a temp
+    /// dir and two of them take it down again, so they would race each
+    /// other's discovery if they ran in parallel. They take turns.
+    static TOOLS_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// Stand-in blast binaries, as the engine tests do for prodigal: the
     /// makeblastdb does nothing, the blastn writes a fixed hit table to
@@ -849,6 +950,13 @@ mod tests {
             )
             .unwrap();
         }
+        // The identification search asks for a different outfmt, so its
+        // E-value sits in field 5; the rest of the dance is the same.
+        std::fs::write(
+            bin.join("blastx"),
+            "#!/bin/sh\nout=\"\"\nev=\"\"\nprev=\"\"\nfor a in \"$@\"; do\n  if [ \"$prev\" = \"-out\" ]; then out=\"$a\"; fi\n  if [ \"$prev\" = \"-evalue\" ]; then ev=\"$a\"; fi\n  prev=\"$a\"\ndone\nawk -v ev=\"$ev\" 'NF == 0 || $5+0 <= ev+0' > \"$out\" <<'HITS'\no0\tgene1\t99.0\t100.0\t1e-30\t50\nHITS\n"
+        )
+        .unwrap();
         for f in [
             "nucmer",
             "show-coords",
@@ -857,6 +965,7 @@ mod tests {
             "makeblastdb",
             "blastn",
             "tblastx",
+            "blastx",
         ] {
             std::fs::set_permissions(bin.join(f), std::fs::Permissions::from_mode(0o755)).unwrap();
         }
@@ -865,6 +974,7 @@ mod tests {
 
     #[tokio::test]
     async fn gained_verify_blats_the_region_back() {
+        let _env = TOOLS_ENV.lock().await;
         let (state, dir) = seeded_state();
         seed_gained_on_real_contig(&dir);
         stub_blast_tools(&dir);
@@ -896,6 +1006,9 @@ mod tests {
         assert_eq!(v.longest_exact_seqid, "chr1");
         assert_eq!((v.longest_exact_start, v.longest_exact_end), (3, 4));
         assert_eq!((v.longest_exact_qry_start, v.longest_exact_qry_end), (5, 6));
+        // The hit says what it hits: the seeded annotation covers
+        // chr1:100-200 with gene2.
+        assert_eq!(v.hits[0].genes, vec!["gene2 (gB)".to_string()]);
 
         // A region that is not one of the run's rows is refused, not
         // searched: the endpoint reads the query fasta.
@@ -918,7 +1031,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gained_identify_names_the_orfs() {
+        let _env = TOOLS_ENV.lock().await;
+        let (state, dir) = seeded_state();
+        seed_gained_on_real_contig(&dir);
+        stub_blast_tools(&dir);
+
+        let v = gained_identify(
+            State(state.clone()),
+            Path(1),
+            Query(GainedVerifyQuery {
+                query_id: None,
+                seqid: "q1".into(),
+                start: 1,
+                end: 6,
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(v.orfs.len(), 1);
+        assert_eq!(v.region_seq, "GGAAGT");
+        let m = v.orfs[0]
+            .best
+            .as_ref()
+            .expect("the stub's hit names the ORF");
+        assert_eq!(m.locus_tag, "gene1");
+        assert_eq!(m.protein_id, "WP_ONE");
+        assert_eq!(m.label, "gA");
+        assert_eq!(m.identity, 99.0);
+        assert_eq!(v.orfs[0].seq, "GGAAGT");
+
+        // The same region discipline as the back-check: only rows the
+        // run reported are examined.
+        let err = gained_identify(
+            State(state.clone()),
+            Path(1),
+            Query(GainedVerifyQuery {
+                query_id: None,
+                seqid: "q1".into(),
+                start: 2,
+                end: 5,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
+
+        // And the scratch dir of the successful call is cleaned up: one
+        // protein database per click would grow the run without bound.
+        let work = dir.join("projects/1/runs/1/queries/10/work");
+        let leftovers: Vec<_> = std::fs::read_dir(&work)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("gained_examine_")
+            })
+            .collect();
+        assert!(leftovers.is_empty(), "leftover scratch: {leftovers:?}");
+
+        std::env::remove_var("STRAINCOMPASS_TOOLS_DIRS");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
     async fn gained_verify_asks_an_older_run_to_be_rerun() {
+        let _env = TOOLS_ENV.lock().await;
         let (state, dir) = seeded_state();
         stub_blast_tools(&dir);
         let err = gained_verify(
