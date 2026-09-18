@@ -163,8 +163,8 @@ pub enum GainedOrfStatus {
     Unknown,
 }
 
-/// One blastn hit of a gained region searched back against the
-/// reference genome.
+/// One search hit of a gained region against the reference genome:
+/// blastn for the nucleotide tiers, tblastx for the translated tier.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GainedBlastHit {
     /// Reference sequence the hit is on.
@@ -173,9 +173,11 @@ pub struct GainedBlastHit {
     /// low..high regardless of the hit's strand.
     pub ref_start: u64,
     pub ref_end: u64,
-    /// Percent identity over the aligned length.
+    /// Percent identity over the aligned length: nucleotide identity
+    /// for blastn, amino-acid identity for tblastx.
     pub identity: f64,
-    /// Alignment length in bases.
+    /// Alignment length in bases (nucleotide, even for tblastx,
+    /// which reports the aligned span in nucleotide coordinates).
     pub length: u64,
     /// 1-based inclusive interval on the region itself (relative to the
     /// sequence that was searched, not the whole query contig).
@@ -186,9 +188,18 @@ pub struct GainedBlastHit {
 }
 
 /// The reference back-check of one gained region: the region's sequence
-/// searched against the reference genome with a sensitive blastn, which
-/// is the evidence "no alignment to the reference" cannot supply on its
-/// own.
+/// searched against the reference genome, which is the evidence "no
+/// alignment to the reference" cannot supply on its own.
+///
+/// Three searches are reported. The nucleotide search comes in two tiers
+/// split at E = 1e-5, so borderline matches can be seen instead of
+/// silently dropped. The translated search (tblastx) only runs when the
+/// strong nucleotide tier is empty, because its whole purpose is the
+/// second opinion on "found nothing but I don't believe it" - a
+/// divergent coding homolog that 11-mer nucleotide seeding misses. The
+/// longest exact match is tool-free and cutoff-free: the longest stretch
+/// of bases the region and the reference share anywhere, which bounds
+/// every question about short exact remnants at once.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GainedVerify {
     /// The region that was searched, echoed so a cached answer can be
@@ -197,9 +208,38 @@ pub struct GainedVerify {
     /// 1-based inclusive coordinates on the query contig.
     pub start: u64,
     pub end: u64,
-    /// Hits ordered by bitscore, best first. Empty means the search found
-    /// nothing similar anywhere in the reference.
+    /// Nucleotide hits with E <= 1e-5, ordered by bitscore, best first.
+    /// Empty means the strong search found nothing similar.
     pub hits: Vec<GainedBlastHit>,
+    /// Nucleotide hits with 1e-5 < E <= 10: below the detection
+    /// threshold the verdicts are built on, kept because a scientist
+    /// asked to believe an absence deserves to see what was almost
+    /// there. Usually noise.
+    pub weak_hits: Vec<GainedBlastHit>,
+    /// Translated (tblastx) hits, E <= 1e-5. `None` means the search
+    /// did not run - the nucleotide search already answered, or the
+    /// region exceeds the length cap - which is not the same as having
+    /// looked and found none.
+    pub tx_hits: Option<Vec<GainedBlastHit>>,
+    /// Plain-language reason the translated search did not run.
+    pub tx_note: Option<String>,
+    /// Longest run of bases the region shares, exactly, with any
+    /// position of the reference genome. For unrelated DNA of these
+    /// sizes chance alone gives ~log4(region * reference) bases, so a
+    /// low number here is expected, not informative; a high one is.
+    pub longest_exact_bp: u64,
+    /// Where that longest exact match sits on the reference; empty
+    /// seqid when the region shares nothing at all with the reference
+    /// (not even one base).
+    pub longest_exact_seqid: String,
+    /// 1-based inclusive interval of the example match. Several may
+    /// exist; one is reported.
+    pub longest_exact_start: u64,
+    pub longest_exact_end: u64,
+    /// The same example match's interval on the region, so the match
+    /// can be located without a search.
+    pub longest_exact_qry_start: u64,
+    pub longest_exact_qry_end: u64,
 }
 
 /// One row of the strict panel recheck (per query).

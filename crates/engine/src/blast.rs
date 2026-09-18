@@ -157,22 +157,46 @@ fn format_evalue(e: f64) -> String {
     }
 }
 
+/// The strong tier's E-value ceiling; hits at or below it are what the
+/// verdicts are built on.
+const STRONG_EVALUE: f64 = 1e-5;
+/// The loose ceiling of the whole nucleotide search. Matches between the
+/// two ceilings are reported as the weak tier rather than silently
+/// dropped.
+const WEAK_EVALUE: f64 = 10.0;
+/// The translated search runs at most on regions this long: tblastx
+/// translates both sides and is easily an order of magnitude slower
+/// than blastn, and an unanchored whole contig (a plasmid) would hold a
+/// cpu slot for minutes on the shared server.
+const TX_MAX_BP: u64 = 50_000;
+/// Per-tier hit cap: a region that really is a repeat can produce
+/// thousands of HSPs, and the table only ever shows the top.
+const MAX_HITS: usize = 50;
+
 /// Back-check one gained region: search its sequence against the whole
-/// reference genome with blastn.
+/// reference genome.
 ///
 /// The gained table calls a region gained when the whole-genome aligner
 /// produced no alignment covering it, and nucmer's default matcher can
 /// only seed alignments from matches that are unique on the reference
 /// side, so a query copy of a multicopy reference family lands there
-/// with no alignment at all. This search is the closer test of
-/// "absent from the reference", and it must therefore be *more*
+/// with no alignment at all. These searches are the closer test of
+/// "absent from the reference", and they must therefore be *more*
 /// sensitive than the aligner, not equally sensitive: `-task blastn`
 /// seeds on 11-mers where the default megablast needs 28, and `-dust no`
 /// leaves low-complexity sequence unmasked. For proving absence, every
 /// hit counts.
 ///
+/// Three answers come back. The nucleotide search runs once at the
+/// loose ceiling and is split into a strong and a weak tier. When the
+/// strong tier is empty, a translated search (tblastx) adds the second
+/// opinion a divergent coding homolog needs - nucleotide seeding misses
+/// relatives below ~70% identity that amino-acid similarity still
+/// finds. And independent of both, the longest exact match to the
+/// reference is computed cutoff-free (see [`crate::longest_match`]).
+///
 /// `work_dir` receives the scratch files (the region fasta, the blast
-/// database, the hit table); it must be writable and private to this
+/// database, the hit tables); it must be writable and private to this
 /// call. The caller owns its lifetime.
 pub fn gained_verify(
     tools: &ToolPaths,
@@ -224,29 +248,121 @@ pub fn gained_verify(
         )));
     }
 
-    let out = work_dir.join("hits.tsv");
-    let blast = Command::new(&tools.blastn)
-        .args(["-query"])
-        .arg(&region_fasta)
-        .args(["-db"])
-        .arg(&db)
+    // One loose nucleotide search, split into the two tiers afterwards:
+    // the strong tier's ceiling is a reporting decision, not a search
+    // parameter, so no match inside the loose ceiling is hidden from the
+    // scientist who has to believe the verdict.
+    let nuc_hits = run_search(
+        &tools.blastn,
+        &region_fasta,
+        &db,
+        WEAK_EVALUE,
+        work_dir.join("hits.tsv"),
+        false,
+        "blastn",
+    )?;
+    let mut hits: Vec<GainedBlastHit> = nuc_hits
+        .iter()
+        .filter(|h| h.evalue <= STRONG_EVALUE)
+        .cloned()
+        .collect();
+    let mut weak_hits: Vec<GainedBlastHit> = nuc_hits
+        .iter()
+        .filter(|h| h.evalue > STRONG_EVALUE)
+        .cloned()
+        .collect();
+    top(&mut hits);
+    top(&mut weak_hits);
+
+    // The translated search is the second opinion on "found nothing",
+    // so it only runs when there is nothing strong to second-guess.
+    // tblastx reports its coordinates in nucleotide bases but its
+    // identity and length over aligned amino acids.
+    let (tx_hits, tx_note) = if hits.is_empty() {
+        if seq.len() as u64 <= TX_MAX_BP {
+            (
+                Some(top_owned(run_search(
+                    &tools.tblastx,
+                    &region_fasta,
+                    &db,
+                    STRONG_EVALUE,
+                    work_dir.join("tx_hits.tsv"),
+                    true,
+                    "tblastx",
+                )?)),
+                None,
+            )
+        } else {
+            (
+                None,
+                Some(format!(
+                    "The translated search was skipped: at {} bp this region is longer than the {} kb cap, and tblastx on it would hold the server for minutes.",
+                    seq.len(),
+                    TX_MAX_BP / 1000
+                )),
+            )
+        }
+    } else {
+        (None, None)
+    };
+
+    // Cutoff-free and tool-free: the longest exact match anywhere. The
+    // reference is parsed here because no caller has it loaded.
+    let ref_records = crate::fasta::parse_fasta(ref_fasta)?;
+    let lcs = crate::longest_match::longest_exact_match(&seq, &ref_records);
+
+    Ok(GainedVerify {
+        qry_seqid: seqid.to_string(),
+        start,
+        end,
+        hits,
+        weak_hits,
+        tx_hits,
+        tx_note,
+        longest_exact_bp: lcs.length,
+        longest_exact_seqid: lcs.ref_seqid,
+        longest_exact_start: lcs.ref_start,
+        longest_exact_end: lcs.ref_end,
+        longest_exact_qry_start: lcs.qry_start,
+        longest_exact_qry_end: lcs.qry_end,
+    })
+}
+
+/// Run one blast search of the region against the database and parse its
+/// tabular output. `translated` picks the tool-appropriate sensitivity
+/// flags: blastn seeds on 11-mers with low-complexity unmasked, tblastx
+/// (which has no `-task` and filters with SEG on the amino-acid side
+/// instead of DUST) gets `-seg no` for the same reason.
+fn run_search(
+    tool: &Path,
+    region_fasta: &Path,
+    db: &Path,
+    evalue: f64,
+    out: std::path::PathBuf,
+    translated: bool,
+    label: &str,
+) -> Result<Vec<GainedBlastHit>> {
+    let mut cmd = Command::new(tool);
+    cmd.args(["-query"]).arg(region_fasta).args(["-db"]).arg(db);
+    if translated {
+        cmd.args(["-seg", "no"]);
+    } else {
+        cmd.args(["-task", "blastn", "-dust", "no"]);
+    }
+    let blast = cmd
         .args([
-            "-task",
-            "blastn",
-            "-dust",
-            "no",
             "-evalue",
-            "1e-5",
+            &format!("{}", evalue.max(1e-300)),
             "-outfmt",
             "6 sseqid sstart send pident length qstart qend evalue bitscore",
         ])
         .arg("-out")
         .arg(&out)
         .output()
-        .map_err(|e| crate::EngineError::ToolMissing(format!("blastn: {e}")))?;
+        .map_err(|e| crate::EngineError::ToolMissing(format!("{label}: {e}")))?;
     if !blast.status.success() {
         return Err(friendly(format!(
-            "The reference back-check did not finish correctly. {}",
+            "The reference back-check ({label}) did not finish correctly. {}",
             String::from_utf8_lossy(&blast.stderr).trim()
         )));
     }
@@ -264,8 +380,8 @@ pub fn gained_verify(
         };
         hits.push(GainedBlastHit {
             ref_seqid: f[0].to_string(),
-            // blastn reports the subject span against the plus strand, so
-            // a hit on the reverse strand arrives as sstart > send; the
+            // The subject span is reported against the plus strand, so a
+            // hit on the reverse strand arrives as sstart > send; the
             // row reports the interval either way, like every other
             // reference coordinate in the app.
             ref_start: sstart.min(send),
@@ -278,15 +394,17 @@ pub fn gained_verify(
             bitscore: f[8].parse().unwrap_or(0.0),
         });
     }
-    // Best first, and bounded: a region that really is a repeat can
-    // produce thousands of HSPs, and the table only ever shows the top.
-    hits.sort_by(|a, b| b.bitscore.total_cmp(&a.bitscore));
-    hits.truncate(50);
+    Ok(hits)
+}
 
-    Ok(GainedVerify {
-        qry_seqid: seqid.to_string(),
-        start,
-        end,
-        hits,
-    })
+/// Best first, and bounded to `MAX_HITS`.
+fn top(hits: &mut Vec<GainedBlastHit>) {
+    hits.sort_by(|a, b| b.bitscore.total_cmp(&a.bitscore));
+    hits.truncate(MAX_HITS);
+}
+
+/// [`top`] for a freshly owned vector, so the call sites stay flat.
+fn top_owned(mut hits: Vec<GainedBlastHit>) -> Vec<GainedBlastHit> {
+    top(&mut hits);
+    hits
 }

@@ -941,11 +941,91 @@ function fmtE(e: number): string {
   return e.toExponential(1);
 }
 
+/** The hit rows shared by every tier: where on the reference, how
+ * similar, how long, how significant. */
+function HitGrid({ hits, unit }: { hits: GainedBlastHit[]; unit: "bp" | "aa" }) {
+  return (
+    <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-x-4 text-sm">
+      {hits.slice(0, 8).map((h, i) => (
+        <div key={i} className="contents">
+          <span className="font-mono tabular-nums truncate">
+            {h.ref_seqid}:{h.ref_start.toLocaleString("en-US")}-
+            {h.ref_end.toLocaleString("en-US")}
+          </span>
+          <span
+            className="text-right font-mono tabular-nums"
+            title={unit === "aa" ? "amino-acid identity" : "nucleotide identity"}
+          >
+            {h.identity.toFixed(1)}%
+          </span>
+          <span className="text-right font-mono tabular-nums">
+            {h.length.toLocaleString("en-US")} {unit}
+          </span>
+          <span
+            className="text-right font-mono tabular-nums text-zinc-400 dark:text-zinc-500"
+            title={`bitscore ${h.bitscore}`}
+          >
+            {fmtE(h.evalue)}
+          </span>
+        </div>
+      ))}
+      {hits.length > 8 && (
+        <span className="col-span-4 text-xs text-zinc-400 dark:text-zinc-500">
+          +{hits.length - 8} more hit{hits.length - 8 === 1 ? "" : "s"}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** The weak tier, collapsed: what the loose search saw below the
+ * threshold the verdicts are built on. */
+function WeakTier({ hits }: { hits: GainedBlastHit[] }) {
+  return (
+    <details className="mt-2">
+      <summary className="text-xs text-zinc-400 dark:text-zinc-500 cursor-pointer">
+        {hits.length} weak match{hits.length === 1 ? "" : "es"} (E &le; 10,
+        mostly noise)
+      </summary>
+      <HitGrid hits={hits} unit="bp" />
+    </details>
+  );
+}
+
+/** The cutoff-free companion fact: the longest run of bases the region
+ * shares verbatim with the reference, wherever it is. */
+function LongestExactLine({ v }: { v: GainedVerify }) {
+  if (v.longest_exact_bp === 0) {
+    return (
+      <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">
+        Longest exact match to the reference: the region shares no run of
+        bases with the reference at all.
+      </p>
+    );
+  }
+  return (
+    <p
+      className="mt-2 text-xs text-zinc-400 dark:text-zinc-500"
+      title="The longest run of bases, anywhere in the reference, that appears verbatim in this region. Unrelated DNA of these sizes shares about log4(region length x reference length) bases by chance alone - on a bacterial genome pair, roughly 15-20. A much longer run means shared sequence."
+    >
+      Longest exact match to the reference: {v.longest_exact_bp} bp at{" "}
+      {v.longest_exact_seqid}:
+      {v.longest_exact_start.toLocaleString("en-US")}-
+      {v.longest_exact_end.toLocaleString("en-US")} (region{" "}
+      {v.longest_exact_qry_start.toLocaleString("en-US")}-
+      {v.longest_exact_qry_end.toLocaleString("en-US")})
+    </p>
+  );
+}
+
 /**
- * The verdict of the reference back-check. No hits is the confirmation
- * the word "gained" wants; hits mean the aligner could not use a match
- * the reference does carry, which is exactly the caveat the gained
- * table exists with.
+ * The verdict of the reference back-check, in descending order of what
+ * it means: a strong nucleotide hit means the aligner could not use a
+ * match the reference does carry (the caveat the gained table lives
+ * with); a translated hit means a relative too diverged for nucleotide
+ * comparison; weak-only is inconclusive; and nothing anywhere - the
+ * confirmation the word "gained" wants, with the honest limit that no
+ * sequence search proves absence outright.
  */
 function GainedVerifyResult({
   v,
@@ -954,29 +1034,17 @@ function GainedVerifyResult({
   v: GainedVerify;
   regionLength: number;
 }) {
-  if (v.hits.length === 0) {
-    return (
-      <div>
-        <span
-          className="px-2 py-0.5 rounded text-xs bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-300"
-          title="A sensitive blastn search (word size 11, low-complexity unmasked, E <= 1e-5) of this region found nothing similar anywhere in the reference genome."
-        >
-          not found in the reference
-        </span>
-        <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-          A sensitive blastn search of this region found no similar sequence
-          anywhere in the reference genome. This is the back-check the
-          alignment alone cannot give, and it is consistent with the region
-          being truly gained.
-        </p>
-      </div>
-    );
-  }
   const covered = unionCoverage(v.hits, regionLength);
   const best = v.hits.reduce((m, h) => Math.max(m, h.identity), 0);
   const probablyPresent = covered >= 80 && best >= 95;
-  return (
-    <div>
+  const tx = v.tx_hits ?? [];
+  const txBest = tx.length > 0 ? tx.reduce((m, h) => Math.max(m, h.identity), 0) : 0;
+
+  let badge: React.ReactNode;
+  let body: React.ReactNode;
+
+  if (v.hits.length > 0) {
+    badge = (
       <span
         className="px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
         title={`${covered.toFixed(0)}% of the region matched the reference at up to ${best.toFixed(1)}% identity.`}
@@ -985,38 +1053,102 @@ function GainedVerifyResult({
           ? "similar sequence in the reference"
           : "partial similarity in the reference"}
       </span>
-      <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-        {probablyPresent
-          ? `About ${covered.toFixed(0)}% of this region matched the reference at up to ${best.toFixed(1)}% identity. The whole-genome aligner anchors on matches unique to the reference side, so a copy of something the reference carries several times over can fail to align - this region is probably not a true gain.`
-          : `About ${covered.toFixed(0)}% of the region matched at up to ${best.toFixed(1)}% identity. Short or divergent matches can be shared repeats, conserved domains or the remains of a longer gain - read the hits below before concluding.`}
-      </p>
-      <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-x-4 text-sm">
-        {v.hits.slice(0, 8).map((h, i) => (
-          <div key={i} className="contents">
-            <span className="font-mono tabular-nums truncate">
-              {h.ref_seqid}:{h.ref_start.toLocaleString("en-US")}-
-              {h.ref_end.toLocaleString("en-US")}
-            </span>
-            <span className="text-right font-mono tabular-nums">
-              {h.identity.toFixed(1)}%
-            </span>
-            <span className="text-right font-mono tabular-nums">
-              {h.length.toLocaleString("en-US")} bp
-            </span>
-            <span
-              className="text-right font-mono tabular-nums text-zinc-400 dark:text-zinc-500"
-              title={`bitscore ${h.bitscore}`}
-            >
-              {fmtE(h.evalue)}
-            </span>
-          </div>
-        ))}
-        {v.hits.length > 8 && (
-          <span className="col-span-4 text-xs text-zinc-400 dark:text-zinc-500">
-            +{v.hits.length - 8} more hit{v.hits.length - 8 === 1 ? "" : "s"}
-          </span>
+    );
+    body = (
+      <>
+        <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+          {probablyPresent
+            ? `About ${covered.toFixed(0)}% of this region matched the reference at up to ${best.toFixed(1)}% identity. The whole-genome aligner anchors on matches unique to the reference side, so a copy of something the reference carries several times over can fail to align - this region is probably not a true gain.`
+            : `About ${covered.toFixed(0)}% of the region matched at up to ${best.toFixed(1)}% identity. Short or divergent matches can be shared repeats, conserved domains or the remains of a longer gain - read the hits below before concluding.`}
+        </p>
+        <HitGrid hits={v.hits} unit="bp" />
+        {v.weak_hits.length > 0 && <WeakTier hits={v.weak_hits} />}
+      </>
+    );
+  } else if (tx.length > 0) {
+    badge = (
+      <span
+        className="px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+        title={`The translated search found amino-acid similarity up to ${txBest.toFixed(1)}% identity.`}
+      >
+        divergent coding homolog in the reference
+      </span>
+    );
+    body = (
+      <>
+        <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+          The nucleotide search found nothing, but the translated search
+          (tblastx) found amino-acid similarity up to {txBest.toFixed(1)}%
+          identity: this region probably codes for a relative of something
+          the reference carries, too diverged for nucleotide comparison to
+          see. Probably not a true gain.
+        </p>
+        <HitGrid hits={tx} unit="aa" />
+        {v.weak_hits.length > 0 && <WeakTier hits={v.weak_hits} />}
+      </>
+    );
+  } else if (v.weak_hits.length > 0) {
+    const wCovered = unionCoverage(v.weak_hits, regionLength);
+    const wBest = v.weak_hits.reduce((m, h) => Math.max(m, h.identity), 0);
+    badge = (
+      <span
+        className="px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+        title="Only matches below the detection threshold were found."
+      >
+        no clear similarity in the reference
+      </span>
+    );
+    body = (
+      <>
+        <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+          The only matches found are below the detection threshold (E
+          between 1e-5 and 10): about {wCovered.toFixed(0)}% of the region
+          matched at up to {wBest.toFixed(1)}% identity, which shared
+          repeats and chance can produce.
+          {v.tx_hits !== null
+            ? " The translated search also found nothing."
+            : ""}
+        </p>
+        <WeakTier hits={v.weak_hits} />
+      </>
+    );
+  } else {
+    const txRan = v.tx_hits !== null;
+    badge = (
+      <span
+        className="px-2 py-0.5 rounded text-xs bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-300"
+        title={
+          txRan
+            ? "A sensitive nucleotide search and a translated (amino-acid) search of this region both found nothing similar anywhere in the reference genome."
+            : "A sensitive nucleotide search of this region found nothing similar anywhere in the reference genome."
+        }
+      >
+        {txRan
+          ? "not found in the reference, even translated"
+          : "not found in the reference"}
+      </span>
+    );
+    body = (
+      <>
+        <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+          {txRan
+            ? "Sensitive nucleotide and translated searches of this region found no similar sequence anywhere in the reference genome, at either the nucleotide or the amino-acid level. This is the closest available evidence of a true gain - with the standing limit that no sequence search can prove absence outright."
+            : "A sensitive nucleotide search of this region found no similar sequence anywhere in the reference genome. This is the back-check the alignment alone cannot give, and it is consistent with the region being truly gained."}
+        </p>
+        {v.tx_note && (
+          <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+            {v.tx_note}
+          </p>
         )}
-      </div>
+      </>
+    );
+  }
+
+  return (
+    <div>
+      {badge}
+      {body}
+      <LongestExactLine v={v} />
     </div>
   );
 }

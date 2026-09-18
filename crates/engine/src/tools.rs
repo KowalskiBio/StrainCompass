@@ -12,6 +12,11 @@ pub struct ToolPaths {
     pub dnadiff: PathBuf,
     pub makeblastdb: PathBuf,
     pub blastn: PathBuf,
+    /// Translated nucleotide-vs-nucleotide search, used only by the
+    /// gained-region reference back-check as its second opinion on a
+    /// nucleotide search that found nothing. Ships in the same BLAST+
+    /// package as blastn, so every deployment with blastn has it.
+    pub tblastx: PathBuf,
     /// The gene finder, used only to predict the genes inside gained
     /// regions. Optional on purpose: `discover` is all-or-nothing, and
     /// every deployment made before gained regions existed lacks this
@@ -69,6 +74,7 @@ impl ToolPaths {
             dnadiff: find_tool("dnadiff", &extra)?,
             makeblastdb: find_tool("makeblastdb", &extra)?,
             blastn: find_tool("blastn", &extra)?,
+            tblastx: find_tool("tblastx", &extra)?,
             prodigal: find_tool("prodigal", &extra).ok(),
         })
     }

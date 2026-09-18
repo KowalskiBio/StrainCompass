@@ -837,11 +837,18 @@ mod tests {
             std::fs::write(bin.join(name), "#!/bin/sh\nexit 1\n").unwrap();
         }
         std::fs::write(bin.join("makeblastdb"), "#!/bin/sh\nexit 0\n").unwrap();
-        std::fs::write(
-            bin.join("blastn"),
-            "#!/bin/sh\nout=\"\"\nprev=\"\"\nfor a in \"$@\"; do\n  if [ \"$prev\" = \"-out\" ]; then out=\"$a\"; fi\n  prev=\"$a\"\ndone\ncat > \"$out\" <<'HITS'\nchr1\t100\t200\t99.5\t101\t1\t101\t1e-30\t185\nHITS\n",
-        )
-        .unwrap();
+        // One hit well inside the strong tier; the stub filters to the
+        // -evalue the engine asks for, field 8 being the E-value.
+        let hit = "chr1\t100\t200\t99.5\t101\t1\t101\t1e-30\t185\n";
+        for name in ["blastn", "tblastx"] {
+            std::fs::write(
+                bin.join(name),
+                format!(
+                    "#!/bin/sh\nout=\"\"\nev=\"\"\nprev=\"\"\nfor a in \"$@\"; do\n  if [ \"$prev\" = \"-out\" ]; then out=\"$a\"; fi\n  if [ \"$prev\" = \"-evalue\" ]; then ev=\"$a\"; fi\n  prev=\"$a\"\ndone\nawk -v ev=\"$ev\" 'NF == 0 || $8+0 <= ev+0' > \"$out\" <<'HITS'\n{hit}HITS\n"
+                ),
+            )
+            .unwrap();
+        }
         for f in [
             "nucmer",
             "show-coords",
@@ -849,6 +856,7 @@ mod tests {
             "dnadiff",
             "makeblastdb",
             "blastn",
+            "tblastx",
         ] {
             std::fs::set_permissions(bin.join(f), std::fs::Permissions::from_mode(0o755)).unwrap();
         }
@@ -877,6 +885,17 @@ mod tests {
         assert_eq!(v.hits.len(), 1);
         assert_eq!(v.hits[0].ref_seqid, "chr1");
         assert_eq!((v.hits[0].ref_start, v.hits[0].ref_end), (100, 200));
+        assert!(v.weak_hits.is_empty(), "the stub's hit is strong-tier");
+        // The strong tier answered, so the translated search never ran -
+        // and says so by being absent, not empty.
+        assert!(v.tx_hits.is_none());
+        assert!(v.tx_note.is_none());
+        // The region is GGAAGT and the reference ACGTACGT: the longest
+        // exact match anywhere is GT, 2 bases, at chr1:3-4.
+        assert_eq!(v.longest_exact_bp, 2);
+        assert_eq!(v.longest_exact_seqid, "chr1");
+        assert_eq!((v.longest_exact_start, v.longest_exact_end), (3, 4));
+        assert_eq!((v.longest_exact_qry_start, v.longest_exact_qry_end), (5, 6));
 
         // A region that is not one of the run's rows is refused, not
         // searched: the endpoint reads the query fasta.

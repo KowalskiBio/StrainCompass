@@ -110,13 +110,16 @@ export interface GainedRow {
   orfs: GainedOrf[];
 }
 
-/** One blastn hit of a gained region searched back against the reference. */
+/** One search hit of a gained region against the reference: blastn for
+ * the nucleotide tiers, tblastx for the translated tier. */
 export interface GainedBlastHit {
   ref_seqid: string;
   /** 1-based inclusive, ordered low..high regardless of the hit's strand. */
   ref_start: number;
   ref_end: number;
+  /** Nucleotide identity for blastn, amino-acid identity for tblastx. */
   identity: number;
+  /** Bases for blastn, aligned residues for tblastx. */
   length: number;
   /** Interval on the region itself, not the whole query contig. */
   qry_start: number;
@@ -127,14 +130,35 @@ export interface GainedBlastHit {
 
 /**
  * The reference back-check of one gained region: the region's sequence
- * searched against the reference genome with a sensitive blastn. Empty
- * hits is the evidence "no alignment" cannot give on its own.
+ * searched against the reference genome three ways - a nucleotide
+ * search split into a strong and a weak tier, a translated search
+ * (tblastx) that runs only when the strong tier is empty, and the
+ * longest exact match, cutoff-free. Empty everything is the closest
+ * available evidence of absence.
  */
 export interface GainedVerify {
   qry_seqid: string;
   start: number;
   end: number;
+  /** Nucleotide hits with E <= 1e-5, best first. */
   hits: GainedBlastHit[];
+  /** Nucleotide hits with 1e-5 < E <= 10: below the verdicts'
+   * threshold, shown rather than silently dropped. Usually noise. */
+  weak_hits: GainedBlastHit[];
+  /** Translated (tblastx) hits. null means the search did not run,
+   * which is not the same as having looked and found none. */
+  tx_hits: GainedBlastHit[] | null;
+  /** Plain-language reason the translated search did not run. */
+  tx_note: string | null;
+  /** Longest run of bases the region shares, exactly, with any position
+   * of the reference. Chance alone gives ~log4(region * reference). */
+  longest_exact_bp: number;
+  /** Where that match sits; empty seqid when nothing is shared at all. */
+  longest_exact_seqid: string;
+  longest_exact_start: number;
+  longest_exact_end: number;
+  longest_exact_qry_start: number;
+  longest_exact_qry_end: number;
 }
 
 export interface PanelRow {

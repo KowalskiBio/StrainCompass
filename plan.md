@@ -425,9 +425,10 @@ GET    /projects/{id}/usage          storage used by the project
   mirror of the first caveat above. The rows flag what they can -
   `at_contig_end`, `flanks_disagree`, and the complete-ORF count rather
   than the raw one - and the Gained tab's region card offers the
-  confirming search on demand: the region's sequence blasted back
-  against the reference (`GET /runs/{id}/gained/verify`), with no hits
-  reported as consistent with a true gain.
+  confirming search on demand: the region's sequence searched back
+  against the reference (`GET /runs/{id}/gained/verify`) three ways -
+  nucleotide, translated, and the longest exact match - with nothing
+  found reported as consistent with a true gain.
 - A draft query assembly contributes an unaligned tip at every contig end,
   so `min_gained` (500 bp by default) and the `at_contig_end` flag are load
   bearing on fragmented input.
@@ -462,15 +463,31 @@ them predicted by prodigal.
 - **Reference back-check** (added 2026-09-18): the region card in the
   Gained tab can search the region's sequence against the whole
   reference genome on demand (`crates/engine/src/blast.rs::
-  gained_verify`, `GET /runs/{id}/gained/verify`). The search is
-  deliberately *more* sensitive than the pipeline's aligner (`-task
-  blastn` seeds on 11-mers, `-dust no` leaves low-complexity unmasked),
-  because it exists to catch what the aligner's unique-reference anchors
-  miss. No hits is the closest available evidence of absence; hits are
-  shown with identity and coverage so the multicopy caveat can be seen
-  directly. Results are cached client-side per region; the server keeps
-  no cache, so the check always runs against the reference as it stands
-  now.
+  gained_verify`, `GET /runs/{id}/gained/verify`). Three searches are
+  reported, because each covers a blind spot of the others:
+  - A **nucleotide search** (blastn, `-task blastn` 11-mer seeding,
+    `-dust no`) run once at a loose ceiling (E <= 10) and split into a
+    strong tier (E <= 1e-5) the verdicts are built on, and a weak tier
+    shown collapsed rather than silently dropped. It is deliberately
+    *more* sensitive than the pipeline's aligner, because it exists to
+    catch what the aligner's unique-reference anchors miss.
+  - A **translated search** (tblastx, E <= 1e-5, `-seg no`) that runs
+    only when the strong nucleotide tier is empty and the region is at
+    most 50 kb: the second opinion on "found nothing", which finds
+    divergent coding homologs below ~70% nucleotide identity. Over the
+    cap it is skipped with a note instead of holding a cpu slot for
+    minutes.
+  - The **longest exact match** (`crates/engine/src/longest_match.rs`,
+    a suffix automaton over the region scanning the reference): the
+    longest run of bases the two share verbatim, cutoff-free, reported
+    with example coordinates on both sides. Unrelated DNA of these
+    sizes shares ~log4(n*m) bases by chance, so the number is read
+    against that expectation, not against a threshold.
+  Results are cached client-side per region; the server keeps no cache,
+  so the check always runs against the reference as it stands now. The
+  standing limit, stated in the UI copy: no sequence search proves
+  absence - "not found, even translated" is the closest available
+  evidence of a true gain.
 
 ## NCBI cross references (added 2026-09-15)
 
