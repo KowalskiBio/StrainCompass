@@ -158,6 +158,9 @@ export function NcbiNamingBadge({
   );
   const [st, setSt] = useState<NcbiStatus | null>(null);
   const settled = useRef(false);
+  // The finished pill is for runs the badge watched being named; a
+  // run that was already done when the page loaded says nothing.
+  const sawRunning = useRef(false);
   const fadeTimer = useRef<number | null>(null);
   const onDoneRef = useRef(onDone);
   useEffect(() => {
@@ -183,14 +186,16 @@ export function NcbiNamingBadge({
         if (stop) return;
         setSt(s);
         if (s.state === "running") {
+          sawRunning.current = true;
           setPhase("running");
         } else if (settled.current) {
           return;
         } else if (s.state === "done") {
           settled.current = true;
           // A run whose naming ended with nothing named says nothing:
-          // there was nothing to tell.
-          if (s.named > 0) {
+          // there was nothing to tell. Neither does one that was
+          // finished before this page ever looked.
+          if (s.named > 0 && sawRunning.current) {
             setPhase("done");
             onDoneRef.current();
             fadeTimer.current = window.setTimeout(

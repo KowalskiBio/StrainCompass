@@ -635,7 +635,16 @@ fn search_swissprot(
             .nth(1)
             .unwrap_or(raw_id)
             .to_string();
-        let label = title_parts.next().unwrap_or_default().trim().to_string();
+        // UniProt deflines carry their metadata with them ("MobV family
+        // relaxase OS=... OX=... GN=... PE=1 SV=1"); the gene's name is
+        // what precedes the first of it.
+        let full = title_parts.next().unwrap_or_default().trim().to_string();
+        let label = full
+            .split(" OS=")
+            .next()
+            .unwrap_or(&full)
+            .trim()
+            .to_string();
         best.insert(
             f[0].to_string(),
             OrfMatch {
