@@ -85,6 +85,9 @@ export interface GainedOrf {
   /** Best match among the reference's own proteins, from the run's
    * naming pass; null for genes novel to the reference. */
   best: OrfMatch | null;
+  /** Best match in NCBI's nr, from the on-demand naming of novel genes
+   * (persisted server-side, merged into every table read). */
+  ncbi: OrfMatch | null;
 }
 
 /**

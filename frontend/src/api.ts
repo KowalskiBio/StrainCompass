@@ -7,6 +7,7 @@ import type {
   GainedIdentify,
   GainedVerify,
   GeneCoverageRow,
+  IdentifiedOrf,
   MatrixRow,
   Page,
   PanelRow,
@@ -336,6 +337,20 @@ export const api = {
   geneDetail: geneDetailCached,
   gainedVerify: gainedVerifyCached,
   gainedIdentify: gainedIdentifyCached,
+  /** Name a region's novel genes through NCBI's public BLAST service.
+   * Not cached: it is an action, it persists its own answers
+   * server-side, and a retry after a failure is legitimate. */
+  gainedAnnotateNcbi: (
+    runId: number,
+    queryId: number,
+    seqid: string,
+    start: number,
+    end: number,
+  ) =>
+    request<IdentifiedOrf[]>(
+      `/runs/${runId}/gained/annotate_ncbi?query_id=${queryId}` +
+        `&seqid=${encodeURIComponent(seqid)}&start=${start}&end=${end}`,
+    ),
   /** The sequence of every gained region of one query, keyed by
    * "seqid:start-end": one immutable request per table view, backing
    * the copy-to-clipboard column. */

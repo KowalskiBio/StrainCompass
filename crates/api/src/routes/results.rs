@@ -173,6 +173,15 @@ pub async fn gained(
                 .into(),
         )
     })?;
+    // The NCBI-given names live in their own sidecar (written by the
+    // on-demand naming), so they surface here without a re-run.
+    super::nblast::merge_ncbi_names(
+        &state
+            .run_dir(project_id, run_id)
+            .join("queries")
+            .join(qid.to_string()),
+        &mut rows,
+    );
     rows.retain(|r| {
         matches_search(
             &format!(
@@ -248,7 +257,7 @@ fn none_last(a: Option<u32>, b: Option<u32>, asc: bool) -> std::cmp::Ordering {
 }
 
 #[derive(serde::Deserialize)]
-pub struct GainedVerifyQuery {
+pub(crate) struct GainedVerifyQuery {
     pub query_id: Option<i64>,
     pub seqid: String,
     pub start: u64,
@@ -266,7 +275,7 @@ pub struct GainedVerifyQuery {
 /// query, the input file paths, and the gained row itself. Shared by
 /// the back-check and the gene identification, which answer different
 /// questions about the same region.
-fn gained_region_ctx(
+pub(crate) fn gained_region_ctx(
     state: &SharedState,
     run_id: i64,
     q: &GainedVerifyQuery,
@@ -779,7 +788,7 @@ pub async fn refseq(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::state::AppState;
     use std::sync::{Arc, Mutex};
@@ -788,7 +797,7 @@ mod tests {
     /// A tiny finished run on disk: one reference (chr1, 8 bp) and one
     /// query whose delta encodes an insertion, two deletions and a SNP
     /// (the same fixture the engine variant tests use).
-    fn seeded_state() -> (SharedState, std::path::PathBuf) {
+    pub(crate) fn seeded_state() -> (SharedState, std::path::PathBuf) {
         let dir =
             std::env::temp_dir().join(format!("straincompass-api-test-{}", uuid::Uuid::new_v4()));
         let run_dir = dir.join("projects/1/runs/1");
@@ -963,7 +972,7 @@ mod tests {
     /// Rewrite the seeded result.json with one gained region on the query
     /// contig that query.fa actually carries ("q1", 6 bp), so the verify
     /// endpoint can find both the row and its sequence.
-    fn seed_gained_on_real_contig(dir: &std::path::Path) {
+    pub(crate) fn seed_gained_on_real_contig(dir: &std::path::Path) {
         let p = dir.join("projects/1/runs/1/queries/10/result.json");
         let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
         v["gained"] = serde_json::json!([{

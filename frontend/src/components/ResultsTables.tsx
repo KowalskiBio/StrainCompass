@@ -11,7 +11,9 @@ import type {
   GeneDetail,
   GeneCoverageRow,
   IdentifiedOrf,
+  GainedOrf,
   MatrixRow,
+  OrfMatch,
   Page,
   PanelRow,
   Run,
@@ -798,7 +800,14 @@ function Cell({
   }
   if (col === "gene_names") {
     const names = v as string[];
-    if (!names || names.length === 0) {
+    // The NCBI-given names ride the ORFs; the column is "genes we can
+    // name", whichever resource named them.
+    const orfs = (row["orfs"] as { ncbi: OrfMatch | null }[] | undefined) ?? [];
+    const all = [
+      ...names,
+      ...orfs.filter((o) => o.ncbi).map((o) => o.ncbi!.label),
+    ];
+    if (!all || all.length === 0) {
       if (row["n_orfs"] === null || row["n_orfs"] === undefined)
         return <span className="text-zinc-300 dark:text-zinc-700">-</span>;
       if (!row["named"]) {
@@ -823,22 +832,22 @@ function Cell({
       );
     }
     return (
-      <span className="truncate" title={names.join(", ")}>
-        {names.slice(0, 6).join(", ")}
-        {names.length > 6 && (
-          <span className="text-zinc-400 dark:text-zinc-500"> +{names.length - 6} more</span>
+      <span className="truncate" title={all.join(", ")}>
+        {all.slice(0, 6).join(", ")}
+        {all.length > 6 && (
+          <span className="text-zinc-400 dark:text-zinc-500"> +{all.length - 6} more</span>
         )}
         {(() => {
           // Named is a property of some genes, not of the region: the
           // ones left out are novel to the reference, and a column that
           // shows only the names invites reading them as the content.
           const nOrfs = (row["n_orfs"] as number | null) ?? 0;
-          const novel = nOrfs - names.length;
+          const novel = nOrfs - all.length;
           if (novel > 0)
             return (
               <span
                 className="text-zinc-400 dark:text-zinc-500"
-                title={`${novel} of the predicted genes match no protein of the reference - they are novel to it. Use the region card to search them at NCBI BLAST.`}
+                title={`${novel} of the predicted genes match no protein of the reference - they are novel to it. Use the region card to name them via NCBI BLAST.`}
               >
                 {" "}
                 +{novel} novel
@@ -940,6 +949,64 @@ function GainedOrfsCard({
   const [identify, setIdentify] = useState<GainedIdentify | null>(null);
   const [identifying, setIdentifying] = useState(false);
   const [identifyError, setIdentifyError] = useState<string | null>(null);
+  const [ncbiNames, setNcbiNames] = useState<Map<number, OrfMatch> | null>(null);
+  const [annotating, setAnnotating] = useState(false);
+  const [annotateError, setAnnotateError] = useState<string | null>(null);
+  const [regionSeq, setRegionSeq] = useState<string | null>(null);
+
+  // The region's sequence rides the same cached request the table's
+  // copy column uses: with it here, every gene carries its NCBI search
+  // link without another round trip.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .gainedSequences(runId, queryId)
+      .then((m) => {
+        if (!cancelled)
+          setRegionSeq(
+            m.get(`${row.qry_seqid}:${row.start}-${row.end}`) ?? null,
+          );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [runId, queryId, row.qry_seqid, row.start, row.end]);
+
+  /** A predicted gene's own sequence, sliced out of the region. */
+  function orfSeq(o: GainedOrf): string | null {
+    if (!regionSeq) return null;
+    const s = o.start - row.start;
+    const e = o.end - row.start + 1;
+    if (s < 0 || e > regionSeq.length) return null;
+    const plus = regionSeq.slice(s, e);
+    return o.strand < 0 ? revcomp(plus) : plus;
+  }
+
+  function annotateNcbi() {
+    setAnnotating(true);
+    setAnnotateError(null);
+    api
+      .gainedAnnotateNcbi(runId, queryId, row.qry_seqid, row.start, row.end)
+      .then((orfs) => {
+        const m = new Map<number, OrfMatch>();
+        orfs.forEach((o, i) => {
+          if (o.match) m.set(i, o.match);
+        });
+        setNcbiNames(m);
+      })
+      .catch((e) => setAnnotateError((e as Error).message))
+      .finally(() => setAnnotating(false));
+  }
+
+  // The genes still without any name: the NCBI pass is for them.
+  const unnamed = row.orfs
+    .map((o, i) => ({
+      o,
+      m: identify?.orfs[i]?.match ?? o.best ?? null,
+      n: ncbiNames?.get(i) ?? o.ncbi ?? null,
+    }))
+    .filter(({ m, n }) => !m && !n);
 
   function check() {
     setChecking(true);
@@ -1002,6 +1069,7 @@ function GainedOrfsCard({
             // immediately. The on-demand search adds the sequence (for
             // the NCBI links) and covers results from before the pass.
             const m = id?.match ?? o.best ?? null;
+            const n = ncbiNames?.get(i) ?? o.ncbi ?? null;
             return (
               <li key={i} className="text-sm">
                 <div className="font-mono tabular-nums">
@@ -1020,37 +1088,61 @@ function GainedOrfsCard({
                     confidence {o.confidence.toFixed(1)}
                   </span>
                 </div>
-                {id && <IdentifiedLine o={id} />}
-                {!id && m && <IdentifiedLine o={{ start: o.start, end: o.end, strand: o.strand, match: m, seq: "" }} />}
+                {(m || id?.seq) && (
+                  <IdentifiedLine
+                    o={{
+                      start: o.start,
+                      end: o.end,
+                      strand: o.strand,
+                      match: m,
+                      seq: id?.seq ?? orfSeq(o) ?? "",
+                    }}
+                  />
+                )}
+                {!m && n && <NcbiLine m={n} />}
               </li>
             );
           })}
         </ul>
       )}
       {row.orfs.length > 0 && (
-        <div className="mt-2">
+        <div className="mt-2 space-y-2">
+          {unnamed.length > 0 && (
+            <div>
+              <button
+                onClick={annotateNcbi}
+                disabled={annotating}
+                className="text-sm text-zinc-500 underline hover:text-zinc-900 disabled:opacity-50 dark:hover:text-zinc-100"
+              >
+                {annotating
+                  ? "Asking NCBI BLAST - this can take a minute or two..."
+                  : `Name the ${unnamed.length} novel gene${unnamed.length === 1 ? "" : "s"} at NCBI BLAST`}
+              </button>
+              {annotateError && (
+                <p className="text-sm text-red-700 dark:text-red-400">
+                  {annotateError}
+                </p>
+              )}
+            </div>
+          )}
+          {regionSeq && regionSeq.length <= 20000 && (
+            <p className="text-xs text-zinc-400 dark:text-zinc-500">
+              <a
+                href={ncbiBlastUrl("blastn", regionSeq) ?? undefined}
+                target="_blank"
+                rel="noreferrer"
+                className="underline hover:text-zinc-700 dark:hover:text-zinc-300"
+              >
+                search the whole region at NCBI BLAST
+              </a>
+            </p>
+          )}
           {identify ? (
             <p className="text-xs text-zinc-400 dark:text-zinc-500">
               {identify.orfs.filter((o) => o.match).length} of{" "}
               {identify.orfs.length} gene
-              {identify.orfs.length === 1 ? "" : "s"} named by similarity to the
-              reference's proteins.{" "}
-              {identify.region_seq.length <= 20000 ? (
-                <>
-                  Unnamed ones are novel to this reference -{" "}
-                  <a
-                    href={ncbiBlastUrl("blastn", identify.region_seq) ?? undefined}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="underline hover:text-zinc-700 dark:hover:text-zinc-300"
-                  >
-                    search the whole region at NCBI BLAST
-                  </a>{" "}
-                  to identify them.
-                </>
-              ) : (
-                <>Unnamed ones are novel to this reference.</>
-              )}
+              {identify.orfs.length === 1 ? "" : "s"} named by similarity to
+              the reference's proteins.
             </p>
           ) : identifyError ? (
             <div>
@@ -1068,7 +1160,7 @@ function GainedOrfsCard({
             <button
               onClick={identifyGenes}
               disabled={identifying}
-              className="text-sm text-zinc-500 underline hover:text-zinc-900 disabled:opacity-50 dark:hover:text-zinc-100"
+              className="text-sm text-zinc-400 underline hover:text-zinc-900 disabled:opacity-50 dark:text-zinc-500 dark:hover:text-zinc-100"
             >
               {identifying
                 ? "Searching the reference's proteins..."
@@ -1111,6 +1203,43 @@ function GainedOrfsCard({
         )}
       </div>
     </div>
+  );
+}
+
+/** The complementary strand, for reading a minus-strand gene out of the
+ * region's sequence. */
+const COMPLEMENT: Record<string, string> = { A: "T", C: "G", G: "C", T: "A" };
+function revcomp(s: string): string {
+  let out = "";
+  for (let i = s.length - 1; i >= 0; i--) out += COMPLEMENT[s[i]] ?? "N";
+  return out;
+}
+
+/** A name given by NCBI's own BLAST search of nr: the one naming
+ * resource for a gene the reference has never seen. */
+function NcbiLine({ m }: { m: OrfMatch }) {
+  return (
+    <p className="ml-4 text-xs">
+      <span className="text-zinc-700 dark:text-zinc-300">
+        {m.protein_id ? (
+          <a
+            href={`https://www.ncbi.nlm.nih.gov/protein/${encodeURIComponent(m.protein_id)}`}
+            target="_blank"
+            rel="noreferrer"
+            className="underline hover:text-zinc-900 dark:hover:text-zinc-100"
+          >
+            {m.label || m.locus_tag}
+          </a>
+        ) : (
+          m.label || m.locus_tag
+        )}
+      </span>{" "}
+      <span className="text-zinc-400 dark:text-zinc-500">
+        named by NCBI BLAST (nr)
+        {m.identity > 0 && `, ${m.identity.toFixed(0)}% aa identity`}
+        {m.evalue > 0 && m.evalue < 1e-5 ? `, E ${fmtE(m.evalue)}` : ""}
+      </span>
+    </p>
   );
 }
 

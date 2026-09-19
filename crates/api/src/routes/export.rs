@@ -172,6 +172,14 @@ pub async fn export_table(
                         .into(),
                 )
             })?;
+            // The NCBI-given names ride along the same way.
+            crate::routes::nblast::merge_ncbi_names(
+                &state
+                    .run_dir(project_id, run_id)
+                    .join("queries")
+                    .join(qid.to_string()),
+                &mut rows,
+            );
             rows.retain(|r| {
                 let text = format!(
                     "{} {} {} {} {}",

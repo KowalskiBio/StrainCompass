@@ -340,6 +340,7 @@ fn the_best_reference_protein_names_the_orf() {
         partial: false,
         confidence: 99.0,
         best: None,
+        ncbi: None,
     }];
     let v = identify(
         &d,
@@ -371,6 +372,7 @@ fn a_cds_ending_in_a_stop_codon_still_yields_its_protein() {
         partial: false,
         confidence: 99.0,
         best: None,
+        ncbi: None,
     }];
     let v = identify(&d, &orfs, "o0\tG1\t99.0\t100.0\t1e-30\t50\n", true);
     // If the terminal stop had disqualified the gene, the proteome
@@ -391,6 +393,7 @@ fn an_orf_without_a_reference_match_stays_unnamed() {
             partial: false,
             confidence: 90.0,
             best: None,
+            ncbi: None,
         },
         straincompass_types::GainedOrf {
             start: 2,
@@ -399,6 +402,7 @@ fn an_orf_without_a_reference_match_stays_unnamed() {
             partial: true,
             confidence: 50.0,
             best: None,
+            ncbi: None,
         },
     ];
     let v = identify(&d, &orfs, "", false);

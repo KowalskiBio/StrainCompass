@@ -104,6 +104,11 @@ pub struct GainedOrf {
     /// pass existed, or when the gene is novel to the reference.
     #[serde(default)]
     pub best: Option<OrfMatch>,
+    /// Best match in NCBI's nr, from the on-demand naming of novel
+    /// genes (persisted per query, merged wherever rows are read).
+    /// Absent when not yet searched or nothing significant was found.
+    #[serde(default)]
+    pub ncbi: Option<OrfMatch>,
 }
 
 /// One stretch of a query genome with no alignment to the reference, and

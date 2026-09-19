@@ -451,6 +451,7 @@ fn parse_prodigal_gff(text: &str) -> Vec<(usize, straincompass_types::GainedOrf)
                 partial,
                 confidence,
                 best: None,
+                ncbi: None,
             },
         ));
     }
