@@ -594,7 +594,7 @@ fn search_swissprot(
         .arg("-max_hsps")
         .arg("1")
         .arg("-num_threads")
-        .arg("4")
+        .arg("8")
         .arg("-outfmt")
         .arg("6 qseqid pident qcovhsp evalue bitscore stitle")
         .output()
