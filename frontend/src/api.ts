@@ -19,6 +19,7 @@ import type {
   RunParams,
   RunQuery,
   RunWithLogs,
+  NcbiStatus,
   TableQuery,
   WgaData,
 } from "./types";
@@ -335,6 +336,9 @@ export const api = {
       `/runs/${runId}/refseq?seqid=${encodeURIComponent(seqid)}&start=${start}&end=${end}`,
     ),
   geneDetail: geneDetailCached,
+  /** Progress of the automatic naming of a run's novel genes. */
+  ncbiStatus: (runId: number) => request<NcbiStatus>(`/runs/${runId}/ncbi_status`),
+
   gainedVerify: gainedVerifyCached,
   gainedIdentify: gainedIdentifyCached,
   /** Name a region's novel genes through NCBI's public BLAST service.

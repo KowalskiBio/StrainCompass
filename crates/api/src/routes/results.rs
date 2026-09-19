@@ -989,13 +989,13 @@ pub(crate) mod tests {
     /// The blast-stub tests point the process-global tools env at a temp
     /// dir and two of them take it down again, so they would race each
     /// other's discovery if they ran in parallel. They take turns.
-    static TOOLS_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    pub(crate) static TOOLS_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// Stand-in blast binaries, as the engine tests do for prodigal: the
     /// makeblastdb does nothing, the blastn writes a fixed hit table to
     /// whatever path follows -out. STRAINCOMPASS_TOOLS_DIRS points
     /// discovery at them, so no test needs BLAST+ installed.
-    fn stub_blast_tools(dir: &std::path::Path) {
+    pub(crate) fn stub_blast_tools(dir: &std::path::Path) {
         use std::os::unix::fs::PermissionsExt;
         let bin = dir.join("stubbin");
         std::fs::create_dir_all(&bin).unwrap();

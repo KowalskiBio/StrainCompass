@@ -15,6 +15,7 @@ tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["fs", "set-header", "compression-gzip"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { workspace = true }
+sha2 = "0.10"
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 garde = { workspace = true }

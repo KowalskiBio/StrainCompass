@@ -9,7 +9,7 @@ import {
   Spinner,
   Tabs,
 } from "../components/ui";
-import { FilesPanel, RunDrawer } from "../components/RunDrawer";
+import { FilesPanel, NcbiNamingBadge, RunDrawer } from "../components/RunDrawer";
 import { InputWizard } from "../components/InputWizard";
 import { ResultsTables, type TableKind } from "../components/ResultsTables";
 import { GenomeView } from "../components/GenomeView";
@@ -35,6 +35,9 @@ export default function ProjectPage() {
   const [renameOpen, setRenameOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [drawerRunId, setDrawerRunId] = useState<number | null>(null);
+  // Bumped when the background naming finishes, so the tables re-read
+  // the results that just gained their names.
+  const [tableRefresh, setTableRefresh] = useState(0);
 
   const tab = (params.get("tab") as Tab) ?? "inputs";
   const genomeMode = (params.get("gv") as GenomeMode) ?? "strain";
@@ -267,6 +270,7 @@ export default function ProjectPage() {
         )}
         {tab === "table" && selectedRun && (
           <ResultsTables
+            key={tableRefresh}
             run={selectedRun}
             initialTable={
               (params.get("table") as TableKind) ?? "genes_coverage"
@@ -384,6 +388,11 @@ export default function ProjectPage() {
         runId={drawerRunId}
         onClose={() => setDrawerRunId(null)}
         onFinished={() => reload()}
+      />
+
+      <NcbiNamingBadge
+        runId={runId}
+        onDone={() => setTableRefresh((n) => n + 1)}
       />
 
       <GeneMsaDialog

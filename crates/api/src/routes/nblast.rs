@@ -218,12 +218,462 @@ pub fn merge_ncbi_names(qdir: &std::path::Path, rows: &mut [GainedRow]) {
     }
 }
 
-/// The query-agnostic shape of one sidecar entry.
-fn entry(orf: usize, m: &Option<OrfMatch>) -> serde_json::Value {
+/// The query-agnostic shape of one sidecar entry. `source` tells the
+/// on-demand nr pass which answers are its own: a null from SwissProt
+/// still leaves the gene worth an nr search, a null from nr is final.
+fn entry(orf: usize, m: &Option<OrfMatch>, source: &str) -> serde_json::Value {
     serde_json::json!({
         "orf": orf,
         "match": m,
+        "source": source,
     })
+}
+
+// ---------------------------------------------------------------------
+// The automatic naming pass
+//
+// A finished comparison names its novel genes right away, against a
+// local copy of NCBI's curated SwissProt database: searching the public
+// BLAST service for a whole run's worth of genes (thousands) would
+// abuse it and take days, while the local search takes minutes and
+// names the classes that matter (mobilization, phage, resistance).
+// Genes SwissProt misses keep the on-demand nr search from the region
+// card.
+// ---------------------------------------------------------------------
+
+/// Where the curated database lives: `STRAINCOMPASS_SWISSPROT_DB`, or
+/// the conventional `blastdb/swissprot` beside the data directory. A
+/// missing database disables the pass quietly - deployments made
+/// before it existed lose nothing.
+fn swissprot_db(state: &SharedState) -> Option<std::path::PathBuf> {
+    let p = std::env::var("STRAINCOMPASS_SWISSPROT_DB")
+        .map(std::path::PathBuf::from)
+        .ok()
+        .or_else(|| {
+            state
+                .data_dir
+                .parent()
+                .map(|p| p.join("blastdb").join("swissprot"))
+        })?;
+    if p.with_extension("pin").is_file() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+/// The pass's progress, persisted in the run directory so the UI can
+/// pick it up across reloads and restarts.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct NcbiStatus {
+    pub state: String,
+    pub named: usize,
+    pub total: usize,
+    /// Unix seconds of the last update; a "running" status older than
+    /// a quarter hour means the pass died (server restart, say) and
+    /// must not spin the badge forever.
+    pub updated: i64,
+}
+
+fn write_status(state: &SharedState, project_id: i64, run_id: i64, s: &NcbiStatus) {
+    if let Ok(b) = serde_json::to_vec(s) {
+        let _ = std::fs::write(
+            state.run_dir(project_id, run_id).join("ncbi_status.json"),
+            b,
+        );
+    }
+}
+
+/// GET /runs/{id}/ncbi_status : how the run's automatic naming is
+/// getting on.
+pub async fn gained_ncbi_status(
+    State(state): State<SharedState>,
+    Path(run_id): Path<i64>,
+) -> ApiResult<Json<NcbiStatus>> {
+    let (project_id, _, _) = crate::jobs::run_meta(&state, run_id)?;
+    let file = state.run_dir(project_id, run_id).join("ncbi_status.json");
+    let mut s: NcbiStatus = std::fs::read(&file)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or(NcbiStatus {
+            state: "idle".into(),
+            named: 0,
+            total: 0,
+            updated: 0,
+        });
+    if s.state == "running" && s.updated > 0 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        if now - s.updated > 900 {
+            s.state = "interrupted".into();
+        }
+    }
+    Ok(Json(s))
+}
+
+/// One sidecar entry, parsed: the ORF index it belongs to, the name it
+/// carries (if any), and which pass gave it.
+#[derive(Clone)]
+struct SidecarEntry {
+    orf: usize,
+    m: Option<OrfMatch>,
+    source: String,
+}
+
+fn parse_entries(v: Option<&serde_json::Value>) -> Vec<SidecarEntry> {
+    v.and_then(|v| v.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|e| {
+                    Some(SidecarEntry {
+                        orf: e.get("orf")?.as_u64()? as usize,
+                        m: e.get("match")
+                            .and_then(|m| serde_json::from_value::<OrfMatch>(m.clone()).ok()),
+                        source: e
+                            .get("source")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("nr")
+                            .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The automatic pass itself, spawned when a comparison succeeds.
+/// One query at a time: load its gained rows, find the genes with no
+/// name of any kind, answer from the project-wide cache where
+/// possible, search the rest against SwissProt, persist everything,
+/// and heartbeat the status for the badge.
+async fn auto_pass(
+    state: &SharedState,
+    project_id: i64,
+    run_id: i64,
+    query_ids: &[i64],
+) -> ApiResult<()> {
+    let Some(db) = swissprot_db(state) else {
+        return Ok(());
+    };
+    let run_dir = state.run_dir(project_id, run_id);
+
+    // Count the work first, so the badge can say what it is waiting
+    // for.
+    let mut total = 0usize;
+    let mut per_query: Vec<Vec<(usize, usize)>> = Vec::new(); // (row, orf) indices
+    let mut rows_all: Vec<Vec<straincompass_types::GainedRow>> = Vec::new();
+    for qid in query_ids {
+        let res = crate::jobs::load_query_result(state, project_id, run_id, *qid)?;
+        let rows = res.gained.unwrap_or_default();
+        // A gene with any stored answer - a name from any source, an
+        // nr "nothing found", or a search still queued - is not this
+        // pass's to search.
+        let sidecar = load_sidecar(&run_dir.join("queries").join(qid.to_string()));
+        let mut novel = Vec::new();
+        for (ri, r) in rows.iter().enumerate() {
+            let entries =
+                parse_entries(sidecar.get(&format!("{}:{}-{}", r.qry_seqid, r.start, r.end)));
+            for (oi, o) in r.orfs.iter().enumerate() {
+                if o.best.is_none() && !entries.iter().any(|e| e.orf == oi) {
+                    novel.push((ri, oi));
+                }
+            }
+        }
+        total += novel.len();
+        per_query.push(novel);
+        rows_all.push(rows);
+    }
+    write_status(
+        state,
+        project_id,
+        run_id,
+        &NcbiStatus {
+            state: "running".into(),
+            named: 0,
+            total,
+            updated: now_secs(),
+        },
+    );
+    if total == 0 {
+        write_status(
+            state,
+            project_id,
+            run_id,
+            &NcbiStatus {
+                state: "done".into(),
+                named: 0,
+                total: 0,
+                updated: now_secs(),
+            },
+        );
+        return Ok(());
+    }
+
+    // The project-wide cache: a gene's sequence answers the same
+    // wherever it appears, so re-runs and neighbouring strains cost
+    // nothing. Keyed by the DNA's digest.
+    let cache_path = state.project_dir(project_id).join("ncbi_cache.json");
+    let mut cache: std::collections::HashMap<String, Option<OrfMatch>> = std::fs::read(&cache_path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+
+    let mut named_total = 0usize;
+    for (qi, qid) in query_ids.iter().enumerate() {
+        let qdir = run_dir.join("queries").join(qid.to_string());
+        let novel = &per_query[qi];
+        if novel.is_empty() {
+            continue;
+        }
+
+        // The genes' sequences, from the query fasta.
+        let jobs: Vec<((usize, usize), String)> = {
+            let qry_fa = qdir.join("query.fa");
+            let ids: Vec<(usize, usize)> = novel.clone();
+            let rows_c = rows_all[qi].clone();
+            let seqs = tokio::task::spawn_blocking(move || {
+                let records = straincompass_engine::fasta::parse_fasta(&qry_fa)?;
+                let mut out = Vec::new();
+                for (ri, oi) in ids {
+                    out.push(rows_all_snapshot(&rows_c, ri, oi, &records)?);
+                }
+                Ok::<_, ApiError>(out)
+            })
+            .await
+            .map_err(|e| ApiError::Internal(format!("Reading the genes crashed. ({e})")))??;
+            novel.iter().cloned().zip(seqs).collect()
+        };
+
+        // Cached answers skip the search entirely.
+        let mut to_search: Vec<((usize, usize), String)> = Vec::new();
+        let mut results: Vec<((usize, usize), Option<OrfMatch>)> = Vec::new();
+        for (p, seq) in jobs {
+            let key = digest(&seq);
+            if let Some(m) = cache.get(&key) {
+                results.push((p, m.clone()));
+            } else {
+                to_search.push((p, seq));
+            }
+        }
+
+        if !to_search.is_empty() {
+            let db = db.clone();
+            let searches = to_search.clone();
+            let found = tokio::task::spawn_blocking(move || search_swissprot(&db, &searches))
+                .await
+                .map_err(|e| ApiError::Internal(format!("The naming search crashed. ({e})")))??;
+            for ((p, seq), m) in to_search.into_iter().zip(found.iter()) {
+                cache.insert(digest(&seq), m.clone());
+                results.push((p, m.clone()));
+            }
+            let _ = std::fs::write(&cache_path, serde_json::to_vec(&cache).unwrap_or_default());
+        }
+
+        // Persist into the same sidecar the on-demand pass uses.
+        let mut sidecar = load_sidecar(&qdir);
+        for ((ri, oi), m) in results {
+            if m.is_some() {
+                named_total += 1;
+            }
+            let row = &rows_all[qi][ri];
+            let key = format!("{}:{}-{}", row.qry_seqid, row.start, row.end);
+            let mut entries = parse_entries(sidecar.get(&key));
+            entries.retain(|e| e.orf != oi);
+            entries.push(SidecarEntry {
+                orf: oi,
+                m,
+                source: "swissprot".into(),
+            });
+            let list: Vec<serde_json::Value> = entries
+                .iter()
+                .map(|e| entry(e.orf, &e.m, &e.source))
+                .collect();
+            sidecar.insert(key, serde_json::Value::Array(list));
+        }
+        save_sidecar(&qdir, &sidecar);
+
+        write_status(
+            state,
+            project_id,
+            run_id,
+            &NcbiStatus {
+                state: "running".into(),
+                named: named_total,
+                total,
+                updated: now_secs(),
+            },
+        );
+    }
+
+    write_status(
+        state,
+        project_id,
+        run_id,
+        &NcbiStatus {
+            state: "done".into(),
+            named: named_total,
+            total,
+            updated: now_secs(),
+        },
+    );
+    Ok(())
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn rows_all_snapshot(
+    rows: &[straincompass_types::GainedRow],
+    ri: usize,
+    oi: usize,
+    records: &[straincompass_engine::fasta::FastaRecord],
+) -> ApiResult<String> {
+    let row = &rows[ri];
+    let o = &row.orfs[oi];
+    let rec = records
+        .iter()
+        .find(|r| r.id == row.qry_seqid)
+        .ok_or_else(|| {
+            ApiError::BadRequest("The query contig is not in this query's fasta file.".into())
+        })?;
+    Ok(
+        String::from_utf8_lossy(&straincompass_engine::fasta::subseq(
+            rec,
+            o.start,
+            o.end,
+            o.strand < 0,
+        ))
+        .to_ascii_uppercase(),
+    )
+}
+
+fn digest(s: &str) -> String {
+    use sha2::Digest as _;
+    let d = sha2::Sha256::digest(s.as_bytes());
+    d.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// One blastx of every uncached gene against the curated database,
+/// tabular, best hit per gene by bitscore.
+fn search_swissprot(
+    db: &std::path::Path,
+    searches: &[((usize, usize), String)],
+) -> ApiResult<Vec<Option<OrfMatch>>> {
+    use std::io::Write as _;
+    let tools = straincompass_engine::tools::ToolPaths::discover()
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let tmp = std::env::temp_dir().join(format!(
+        "straincompass-ncbi-{}-{:x}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&tmp)?;
+    let fa = tmp.join("orfs.fa");
+    {
+        let mut f = std::fs::File::create(&fa)?;
+        for (i, ((_, _), seq)) in searches.iter().enumerate() {
+            writeln!(f, ">g{i}\n{seq}")?;
+        }
+    }
+    let out = std::process::Command::new(&tools.blastx)
+        .arg("-query")
+        .arg(&fa)
+        .arg("-db")
+        .arg(db)
+        .arg("-evalue")
+        .arg("1e-5")
+        .arg("-max_hsps")
+        .arg("1")
+        .arg("-num_threads")
+        .arg("4")
+        .arg("-outfmt")
+        .arg("6 qseqid pident qcovhsp evalue bitscore stitle")
+        .output()
+        .map_err(|e| ApiError::Internal(format!("blastx could not be run. ({e})")))?;
+    let _ = std::fs::remove_dir_all(&tmp);
+    if !out.status.success() {
+        return Err(ApiError::Internal(format!(
+            "blastx failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+
+    // Best hit per gene, by bitscore.
+    let mut best: std::collections::HashMap<String, OrfMatch> = std::collections::HashMap::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() < 6 {
+            continue;
+        }
+        let bitscore: f64 = match f[4].parse() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let better = best
+            .get(f[0])
+            .map(|m: &OrfMatch| bitscore > m.bitscore)
+            .unwrap_or(true);
+        if !better {
+            continue;
+        }
+        // "sp|P0A3H9|RELX_LISMO Relaxase/mobilization protein n..." -
+        // the accession sits in the id, the name after it.
+        let mut title_parts = f[5].splitn(2, char::is_whitespace);
+        let raw_id = title_parts.next().unwrap_or_default();
+        let accession = raw_id
+            .trim_end_matches('|')
+            .split('|')
+            .nth(1)
+            .unwrap_or(raw_id)
+            .to_string();
+        let label = title_parts.next().unwrap_or_default().trim().to_string();
+        best.insert(
+            f[0].to_string(),
+            OrfMatch {
+                locus_tag: accession.clone(),
+                protein_id: accession,
+                label,
+                identity: f[1].parse().unwrap_or(0.0),
+                coverage: f[2].parse().unwrap_or(0.0),
+                evalue: f[3].parse().unwrap_or(f64::INFINITY),
+                bitscore,
+            },
+        );
+    }
+    Ok((0..searches.len())
+        .map(|i| best.get(&format!("g{i}")).cloned())
+        .collect())
+}
+
+/// Called when a comparison succeeds: name its novel genes in the
+/// background. The comparison's own speed is untouched - the pass
+/// works from the finished result files.
+pub fn spawn_auto_pass(state: SharedState, project_id: i64, run_id: i64, query_ids: Vec<i64>) {
+    tokio::spawn(async move {
+        if let Err(e) = auto_pass(&state, project_id, run_id, &query_ids).await {
+            tracing::error!("run {run_id}: the automatic naming failed: {e}");
+            write_status(
+                &state,
+                project_id,
+                run_id,
+                &NcbiStatus {
+                    state: "failed".into(),
+                    named: 0,
+                    total: 0,
+                    updated: now_secs(),
+                },
+            );
+        }
+    });
 }
 /// The state of one region's NCBI naming, returned to the client: the
 /// ORFs with whatever names are known so far, and how many searches are
@@ -259,41 +709,50 @@ pub async fn gained_annotate_ncbi(
 
     let mut sidecar = load_sidecar(&qdir);
     let region_key = format!("{}:{}-{}", row.qry_seqid, row.start, row.end);
-    // The stored entries: "match" is an answer (a name, or "searched,
-    // nothing found"), "rid" is a search still queued at NCBI.
-    let mut done: std::collections::HashMap<usize, Option<OrfMatch>> =
-        std::collections::HashMap::new();
+    // The stored entries, by what they mean for the nr search: a gene
+    // with a name of any source (reference, SwissProt, nr) needs
+    // nothing; an nr answer - a name or "nothing found" - is final for
+    // this pass; a SwissProt miss still deserves the nr search; a "rid"
+    // is an nr search still queued at NCBI.
+    let mut entries = parse_entries(sidecar.get(&region_key));
+    entries.retain(|e| e.orf < row.orfs.len());
+    let mut named: std::collections::HashMap<usize, OrfMatch> = entries
+        .iter()
+        .filter_map(|e| e.m.clone().map(|m| (e.orf, m)))
+        .collect();
+    let mut nr_done: std::collections::HashSet<usize> = entries
+        .iter()
+        .filter(|e| e.source == "nr" && e.m.is_none())
+        .map(|e| e.orf)
+        .collect();
     let mut pending: Vec<(usize, String)> = Vec::new();
-    if let Some(list) = sidecar.get(&region_key).and_then(|v| v.as_array()) {
-        for e in list {
-            let Some(idx) = e.get("orf").and_then(|v| v.as_u64()) else {
-                continue;
-            };
-            let idx = idx as usize;
-            if let Some(rid) = e.get("rid").and_then(|v| v.as_str()) {
-                pending.push((idx, rid.to_string()));
-            } else {
-                done.insert(
-                    idx,
-                    e.get("match")
-                        .and_then(|m| serde_json::from_value::<OrfMatch>(m.clone()).ok()),
-                );
+    for e in sidecar
+        .get(&region_key)
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+    {
+        if let Some(rid) = e.get("rid").and_then(|v| v.as_str()) {
+            if let Some(idx) = e.get("orf").and_then(|v| v.as_u64()) {
+                pending.push((idx as usize, rid.to_string()));
             }
         }
     }
 
-    // The genes worth a submission: novel, never searched, not queued.
+    // The genes worth an nr submission: novel, unnamed by any source,
+    // never searched by nr, not queued.
     let fresh: Vec<usize> = (0..row.orfs.len())
         .filter(|i| {
             row.orfs[*i].best.is_none()
-                && !done.contains_key(i)
+                && !named.contains_key(i)
+                && !nr_done.contains(i)
                 && !pending.iter().any(|(j, _)| j == i)
         })
         .collect();
-    if done.len() + pending.len() + fresh.len() > MAX_ORFS {
+    if entries.len() + fresh.len() > MAX_ORFS {
         return Err(ApiError::BadRequest(format!(
             "This region has {} genes to name, more than the {} the NCBI service should be asked about at once. Search the region at NCBI BLAST from the region card instead.",
-            done.len() + pending.len() + fresh.len(),
+            entries.len() + fresh.len(),
             MAX_ORFS
         )));
     }
@@ -359,7 +818,11 @@ pub async fn gained_annotate_ncbi(
                             bitscore: 0.0,
                         }
                     });
-                    done.insert(i, m);
+                    if let Some(m) = m {
+                        named.insert(i, m);
+                    } else {
+                        nr_done.insert(i);
+                    }
                 }
                 None => still.push((i, rid)),
             }
@@ -368,10 +831,14 @@ pub async fn gained_annotate_ncbi(
     }
 
     // Persist before answering: submissions must not be lost, and the
-    // names must survive the session.
-    let list: Vec<serde_json::Value> = done
+    // names must survive the session. Prior entries of other sources
+    // stay - the automatic pass's names are as good as these.
+    let list: Vec<serde_json::Value> = entries
         .iter()
-        .map(|(i, m)| entry(*i, m))
+        .filter(|e| !named.contains_key(&e.orf) && !nr_done.contains(&e.orf))
+        .map(|e| entry(e.orf, &e.m, &e.source))
+        .chain(named.iter().map(|(i, m)| entry(*i, &Some(m.clone()), "nr")))
+        .chain(nr_done.iter().map(|i| entry(*i, &None, "nr")))
         .chain(
             pending
                 .iter()
@@ -389,7 +856,7 @@ pub async fn gained_annotate_ncbi(
             start: o.start,
             end: o.end,
             strand: o.strand,
-            best: done.get(&i).cloned().flatten(),
+            best: named.get(&i).cloned(),
             seq: String::new(),
         })
         .collect();
@@ -564,6 +1031,82 @@ mod endpoint_tests {
         assert_eq!(orfs2.orfs[0].best.as_ref().unwrap().label, m.label);
 
         std::env::remove_var("STRAINCOMPASS_BLAST_URL");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod auto_pass_tests {
+    use super::*;
+
+    /// The automatic pass, end to end against a stand-in curated
+    /// database: the novel gene is searched once, named, persisted in
+    /// the sidecar, and the status the badge polls says so.
+    #[tokio::test]
+    async fn the_auto_pass_names_novel_genes_and_persists() {
+        let _env = crate::routes::results::tests::TOOLS_ENV.lock().await;
+        let (state, dir) = crate::routes::results::tests::seeded_state();
+        crate::routes::results::tests::seed_gained_on_real_contig(&dir);
+        crate::routes::results::tests::stub_blast_tools(&dir);
+        // Its blastx writes to -out; this pass reads stdout, so give
+        // the stub a stdout-speaking replacement.
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let blastx = dir.join("stubbin/blastx");
+            std::fs::write(
+                &blastx,
+                "#!/bin/sh\nprintf 'g0\\t99.0\\t100.0\\t1e-180\\t520\\tsp|P0A3H9|RELX_LISMO Relaxase/mobilization protein n\\n'\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&blastx, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        // A stand-in database: the pass only checks the index exists.
+        let db = dir.join("blastdb/swissprot");
+        std::fs::create_dir_all(&db).unwrap();
+        std::fs::write(db.with_extension("pin"), b"stub").unwrap();
+        std::env::set_var("STRAINCOMPASS_SWISSPROT_DB", &db);
+
+        auto_pass(&state, 1, 1, &[10]).await.unwrap();
+
+        // The status the badge polls: done, the one novel gene named.
+        let st = gained_ncbi_status(State(state.clone()), Path(1))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!((st.state.as_str(), st.named, st.total), ("done", 1, 1));
+
+        // The answer rides the sidecar, and the table read merges it
+        // like any other NCBI-given name.
+        let qdir = dir.join("projects/1/runs/1/queries/10");
+        let sidecar = std::fs::read_to_string(qdir.join("gained_ncbi_names.json")).unwrap();
+        assert!(sidecar.contains("swissprot"));
+        assert!(sidecar.contains("Relaxase/mobilization protein n"));
+        let mut rows = crate::jobs::load_query_result(&state, 1, 1, 10)
+            .unwrap()
+            .gained
+            .unwrap();
+        merge_ncbi_names(&qdir, &mut rows);
+        assert_eq!(rows[0].orfs[0].ncbi.as_ref().unwrap().protein_id, "P0A3H9");
+
+        // The project-wide cache holds the answer for every future run.
+        assert!(dir.join("projects/1/ncbi_cache.json").is_file());
+
+        std::env::remove_var("STRAINCOMPASS_SWISSPROT_DB");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Without the curated database the pass is a quiet no-op: nothing
+    /// written, nothing thrown.
+    #[tokio::test]
+    async fn without_the_database_the_pass_is_a_noop() {
+        let _env = crate::routes::results::tests::TOOLS_ENV.lock().await;
+        let (state, dir) = crate::routes::results::tests::seeded_state();
+        crate::routes::results::tests::seed_gained_on_real_contig(&dir);
+        std::env::remove_var("STRAINCOMPASS_SWISSPROT_DB");
+
+        auto_pass(&state, 1, 1, &[10]).await.unwrap();
+        assert!(!dir.join("projects/1/runs/1/ncbi_status.json").is_file());
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

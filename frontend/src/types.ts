@@ -154,6 +154,16 @@ export interface GainedBlastHit {
  * longest exact match, cutoff-free. Empty everything is the closest
  * available evidence of absence.
  */
+/** Progress of the automatic naming of a run's novel genes: what the
+ * badge in the corner polls while the naming searches run behind a
+ * finished comparison. */
+export interface NcbiStatus {
+  state: "idle" | "running" | "done" | "failed" | "interrupted";
+  named: number;
+  total: number;
+  updated: number;
+}
+
 export interface GainedVerify {
   qry_seqid: string;
   start: number;

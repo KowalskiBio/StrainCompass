@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { Run, RunFile } from "../types";
+import type { NcbiStatus, Run, RunFile } from "../types";
 import { formatDuration } from "../types";
 import { Spinner } from "./ui";
 
 /**
  * The run drawer: live progress, elapsed time and tool logs for a running
- * (or finished) run. Polls while the run is queued or running.
+ * (or finished) run. Polls while the run is queued or running, and closes
+ * itself a moment after success - the comparison is done, and the corner
+ * belongs to whatever comes next (the naming badge, usually).
  */
 export function RunDrawer({
   runId,
@@ -21,11 +23,14 @@ export function RunDrawer({
   const [logs, setLogs] = useState<string[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
   const finishedRef = useRef(false);
-  // keep the callback in a ref: the effect below must not restart when the
-  // parent re-renders, or a finished run would re-fire onFinished forever
+  const closeTimer = useRef<number | null>(null);
+  // keep the callbacks in refs: the effect below must not restart when
+  // the parent re-renders, or a finished run would re-fire them forever
   const onFinishedRef = useRef(onFinished);
+  const onCloseRef = useRef(onClose);
   useEffect(() => {
     onFinishedRef.current = onFinished;
+    onCloseRef.current = onClose;
   });
 
   useEffect(() => {
@@ -48,6 +53,11 @@ export function RunDrawer({
             onFinishedRef.current?.(data.run);
           }
           if (data.run.status === "succeeded" || data.run.status === "failed") {
+            if (data.run.status === "succeeded") {
+              closeTimer.current = window.setTimeout(() => {
+                onCloseRef.current?.();
+              }, 2500);
+            }
             return;
           }
         } catch {
@@ -59,6 +69,7 @@ export function RunDrawer({
     poll();
     return () => {
       stop = true;
+      if (closeTimer.current) window.clearTimeout(closeTimer.current);
     };
   }, [runId]);
 
@@ -128,8 +139,131 @@ export function RunDrawer({
   );
 }
 
-/** The Files panel: every artifact of a run, viewable and downloadable. */
-export function FilesPanel({ runId }: { runId: number }) {
+/**
+ * The naming badge: after a comparison finishes, its novel genes keep
+ * being named against the curated database in the background. While
+ * that goes on, a quiet pill in the corner says so; when it finishes,
+ * the pill reports how many genes were named, refreshes the tables,
+ * and closes itself.
+ */
+export function NcbiNamingBadge({
+  runId,
+  onDone,
+}: {
+  runId: number | null;
+  onDone: () => void;
+}) {
+  const [phase, setPhase] = useState<"hidden" | "running" | "done" | "failed">(
+    "hidden",
+  );
+  const [st, setSt] = useState<NcbiStatus | null>(null);
+  const settled = useRef(false);
+  const fadeTimer = useRef<number | null>(null);
+  const onDoneRef = useRef(onDone);
+  useEffect(() => {
+    onDoneRef.current = onDone;
+  });
+
+  useEffect(() => {
+    setPhase("hidden");
+    setSt(null);
+    settled.current = false;
+    if (fadeTimer.current) window.clearTimeout(fadeTimer.current);
+    if (runId === null) return;
+    let stop = false;
+    async function poll() {
+      while (!stop) {
+        let s: NcbiStatus;
+        try {
+          s = await api.ncbiStatus(runId!);
+        } catch {
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+        if (stop) return;
+        setSt(s);
+        if (s.state === "running") {
+          setPhase("running");
+        } else if (settled.current) {
+          return;
+        } else if (s.state === "done") {
+          settled.current = true;
+          // A run whose naming ended with nothing named says nothing:
+          // there was nothing to tell.
+          if (s.named > 0) {
+            setPhase("done");
+            onDoneRef.current();
+            fadeTimer.current = window.setTimeout(
+              () => setPhase("hidden"),
+              8000,
+            );
+          } else {
+            setPhase("hidden");
+          }
+          return;
+        } else if (s.state === "failed" || s.state === "interrupted") {
+          settled.current = true;
+          setPhase("failed");
+          fadeTimer.current = window.setTimeout(
+            () => setPhase("hidden"),
+            8000,
+          );
+          return;
+        } else {
+          // idle: nothing was ever named for this run.
+          setPhase("hidden");
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+    }
+    poll();
+    return () => {
+      stop = true;
+      if (fadeTimer.current) window.clearTimeout(fadeTimer.current);
+    };
+  }, [runId]);
+
+  if (phase === "hidden" || runId === null) return null;
+  return (
+    <div className="fixed bottom-6 right-6 z-40 bg-white border border-zinc-200 rounded-xl shadow-2xl px-4 h-12 flex items-center gap-3 dark:bg-zinc-900 dark:border-zinc-800">
+      {phase === "running" && (
+        <>
+          <Spinner className="text-zinc-500 dark:text-zinc-400" />
+          <span className="text-sm font-medium">
+            Naming novel genes
+            {st && st.total > 0 && (
+              <span className="text-zinc-400 dark:text-zinc-500">
+                {" "}
+                - {st.named}/{st.total}
+              </span>
+            )}
+          </span>
+        </>
+      )}
+      {phase === "done" && (
+        <>
+          <span className="text-emerald-600 dark:text-emerald-400">{"\u2713"}</span>
+          <span className="text-sm font-medium">
+            NCBI naming finished - {st?.named ?? 0} gene
+            {(st?.named ?? 0) === 1 ? "" : "s"} named
+          </span>
+        </>
+      )}
+      {phase === "failed" && (
+        <>
+          <span className="text-amber-600 dark:text-amber-400">!</span>
+          <span className="text-sm font-medium">
+            The automatic naming was interrupted - the region cards can
+            still name genes on demand
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** The Files panel: every artifact of a run, viewable and downloadable. */export function FilesPanel({ runId }: { runId: number }) {
   const [files, setFiles] = useState<RunFile[]>([]);
   const [error, setError] = useState<string | null>(null);
 

@@ -90,6 +90,10 @@ fn routes() -> Router<SharedState> {
             get(routes::nblast::gained_annotate_ncbi),
         )
         .route(
+            "/runs/{id}/ncbi_status",
+            get(routes::nblast::gained_ncbi_status),
+        )
+        .route(
             "/runs/{id}/panel_recheck",
             get(routes::results::panel_recheck),
         )

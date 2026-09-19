@@ -417,6 +417,11 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
         )?;
     }
     ctx.log("Run finished successfully.");
+
+    // The automatic naming of novel genes runs behind the comparison:
+    // it works from the finished result files and takes minutes, so it
+    // must not hold the run (or its popup) hostage.
+    crate::routes::nblast::spawn_auto_pass(state.clone(), project_id, run_id, query_file_ids);
     Ok(())
 }
 
