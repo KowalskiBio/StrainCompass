@@ -27,18 +27,6 @@ fn blast_url() -> String {
 /// A region with more novel genes than this is refused rather than
 /// flooding the public service; regions this gene-rich are rare.
 const MAX_ORFS: usize = 20;
-/// Poll interval and budget: NCBI's queue for a short blastx is tens of
-/// seconds, four minutes covers the slow days. The interval bends to
-/// the environment so the stub-server test does not wait for it.
-const MAX_POLLS: u32 = 20;
-
-fn poll_secs() -> u64 {
-    std::env::var("STRAINCOMPASS_TEST_POLL_SECS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(12)
-}
-
 fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(concat!(
@@ -518,7 +506,6 @@ mod endpoint_tests {
             "STRAINCOMPASS_BLAST_URL",
             format!("http://{addr}/Blast.cgi"),
         );
-        std::env::set_var("STRAINCOMPASS_TEST_POLL_SECS", "0");
 
         let (state, dir) = crate::routes::results::tests::seeded_state();
         crate::routes::results::tests::seed_gained_on_real_contig(&dir);
@@ -577,7 +564,6 @@ mod endpoint_tests {
         assert_eq!(orfs2.orfs[0].best.as_ref().unwrap().label, m.label);
 
         std::env::remove_var("STRAINCOMPASS_BLAST_URL");
-        std::env::remove_var("STRAINCOMPASS_TEST_POLL_SECS");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
