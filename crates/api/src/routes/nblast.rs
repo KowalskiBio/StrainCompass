@@ -359,8 +359,22 @@ async fn auto_pass(
     };
     let run_dir = state.run_dir(project_id, run_id);
 
-    // Count the work first, so the badge can say what it is waiting
-    // for.
+    // Announce before anything slow: the badge is already watching,
+    // and the counting below takes long enough to lose a race with
+    // its first poll.
+    write_status(
+        state,
+        project_id,
+        run_id,
+        &NcbiStatus {
+            state: "running".into(),
+            named: 0,
+            total: 0,
+            updated: now_secs(),
+        },
+    );
+
+    // Count the work, so the badge can say what it is waiting for.
     let mut total = 0usize;
     let mut per_query: Vec<Vec<(usize, usize)>> = Vec::new(); // (row, orf) indices
     let mut rows_all: Vec<Vec<straincompass_types::GainedRow>> = Vec::new();

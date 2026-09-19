@@ -147,10 +147,10 @@ export function RunDrawer({
  * and closes itself.
  */
 export function NcbiNamingBadge({
-  runId,
+  run,
   onDone,
 }: {
-  runId: number | null;
+  run: Run | null;
   onDone: () => void;
 }) {
   const [phase, setPhase] = useState<"hidden" | "running" | "done" | "failed">(
@@ -163,16 +163,21 @@ export function NcbiNamingBadge({
   const sawRunning = useRef(false);
   const fadeTimer = useRef<number | null>(null);
   const onDoneRef = useRef(onDone);
+  const runStatusRef = useRef(run?.status);
   useEffect(() => {
     onDoneRef.current = onDone;
+    runStatusRef.current = run?.status;
   });
 
   useEffect(() => {
     setPhase("hidden");
     setSt(null);
     settled.current = false;
+    sawRunning.current = false;
     if (fadeTimer.current) window.clearTimeout(fadeTimer.current);
+    const runId = run?.id ?? null;
     if (runId === null) return;
+    const started = Date.now();
     let stop = false;
     async function poll() {
       while (!stop) {
@@ -215,9 +220,17 @@ export function NcbiNamingBadge({
           );
           return;
         } else {
-          // idle: nothing was ever named for this run.
-          setPhase("hidden");
-          return;
+          // idle: no status file. That is either a run from before the
+          // pass existed (settling at once is right), or the gap
+          // between the comparison finishing and the pass announcing
+          // itself - so while the run itself is still going, or for a
+          // minute after it finished, keep looking.
+          const active =
+            runStatusRef.current === "queued" || runStatusRef.current === "running";
+          if (!active && Date.now() - started > 60000) {
+            setPhase("hidden");
+            return;
+          }
         }
         await new Promise((r) => setTimeout(r, 5000));
       }
@@ -227,9 +240,9 @@ export function NcbiNamingBadge({
       stop = true;
       if (fadeTimer.current) window.clearTimeout(fadeTimer.current);
     };
-  }, [runId]);
+  }, [run?.id]);
 
-  if (phase === "hidden" || runId === null) return null;
+  if (phase === "hidden" || run === null) return null;
   return (
     <div className="fixed bottom-6 right-6 z-40 bg-white border border-zinc-200 rounded-xl shadow-2xl px-4 h-12 flex items-center gap-3 dark:bg-zinc-900 dark:border-zinc-800">
       {phase === "running" && (

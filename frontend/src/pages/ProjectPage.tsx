@@ -391,7 +391,7 @@ export default function ProjectPage() {
       />
 
       <NcbiNamingBadge
-        runId={runId}
+        run={selectedRun}
         onDone={() => setTableRefresh((n) => n + 1)}
       />
 
