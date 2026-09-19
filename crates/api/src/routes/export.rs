@@ -12,12 +12,52 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use straincompass_types::{Call, GeneCoverageRow, TableQuery};
 
+/// The export endpoints' query string: the table query plus the format.
+/// Not a `#[serde(flatten)]` of [`TableQuery`] - flattened structs
+/// deserialize through a map where numbers arrive as strings, and
+/// `query_id` would fail with "invalid type: string" on every export.
 #[derive(Debug, Deserialize)]
 pub struct ExportQuery {
-    #[serde(flatten)]
-    pub table: TableQuery,
+    #[serde(default)]
+    pub query_id: Option<i64>,
+    #[serde(default = "default_page")]
+    pub page: u64,
+    #[serde(default = "default_page_size")]
+    pub page_size: u64,
+    #[serde(default)]
+    pub sort_by: Option<String>,
+    #[serde(default)]
+    pub sort_dir: Option<String>,
+    #[serde(default)]
+    pub search: Option<String>,
+    #[serde(default)]
+    pub call: Option<String>,
+    #[serde(default)]
+    pub cols: Option<String>,
     #[serde(default)]
     pub format: Option<String>,
+}
+
+fn default_page() -> u64 {
+    0
+}
+fn default_page_size() -> u64 {
+    200
+}
+
+impl ExportQuery {
+    fn table_query(&self) -> TableQuery {
+        TableQuery {
+            query_id: self.query_id,
+            page: self.page,
+            page_size: self.page_size,
+            sort_by: self.sort_by.clone(),
+            sort_dir: self.sort_dir.clone(),
+            search: self.search.clone(),
+            call: self.call.clone(),
+            cols: self.cols.clone(),
+        }
+    }
 }
 
 fn attachment_headers(file_name: &str, csv: bool) -> HeaderMap {
@@ -57,7 +97,7 @@ pub async fn export_table(
     Path((run_id, table)): Path<(i64, String)>,
     Query(eq): Query<ExportQuery>,
 ) -> ApiResult<Response> {
-    let q = eq.table;
+    let q = eq.table_query();
     let csv = eq.format.as_deref() == Some("csv");
 
     let (project_id, query_ids, status) = jobs::run_meta(&state, run_id)?;
