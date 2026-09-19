@@ -480,6 +480,7 @@ fn the_pipeline_names_the_predicted_genes() {
     assert_eq!(status, GainedOrfStatus::Predicted);
     let r = &rows[0];
     assert_eq!(r.gene_names, vec!["glx".to_string()]);
+    assert!(r.named, "the pass ran, so empty names would mean novel");
     let m = r.orfs[0]
         .best
         .as_ref()

@@ -733,10 +733,20 @@ function Cell({
   if (col === "gene_names") {
     const names = v as string[];
     if (!names || names.length === 0) {
-      // Empty is only "novel" when genes were predicted and left
-      // unnamed; without a prediction it is just unknown.
       if (row["n_orfs"] === null || row["n_orfs"] === undefined)
         return <span className="text-zinc-300 dark:text-zinc-700">-</span>;
+      if (!row["named"]) {
+        // The naming pass never ran for this result: empty here means
+        // unknown, not unmatched, and must not be read as "novel".
+        return (
+          <span
+            className="text-zinc-400 dark:text-zinc-500"
+            title="This run was computed before gene naming existed (or the naming search failed). Re-run the comparison to name the genes."
+          >
+            not available
+          </span>
+        );
+      }
       return (
         <span
           className="text-zinc-400 dark:text-zinc-500"

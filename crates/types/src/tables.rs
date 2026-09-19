@@ -161,6 +161,13 @@ pub struct GainedRow {
     /// pass existed, and in runs whose gene prediction was switched off.
     #[serde(default)]
     pub gene_names: Vec<String>,
+    /// Whether the naming pass ran for this row. An empty `gene_names`
+    /// means "novel" only when this is true; false marks results from
+    /// before the pass existed (or a naming failure), where empty means
+    /// unknown, not unmatched. The same distinction `n_orfs: null`
+    /// already makes for prediction.
+    #[serde(default)]
+    pub named: bool,
 }
 
 /// Whether the genes inside the gained regions could be predicted.

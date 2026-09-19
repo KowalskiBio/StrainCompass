@@ -238,7 +238,16 @@ pub async fn export_table(
                         // The names the reference's own proteins could give
                         // the predicted genes; genes the run could not name
                         // are absent, not zero - they are the novel ones.
-                        r.gene_names.join(";"),
+                        // "all novel" only for results the pass actually
+                        // covered; older ones stay empty (= unknown).
+                        if r.named
+                            && r.gene_names.is_empty()
+                            && r.n_orfs.unwrap_or(0) > 0
+                        {
+                            "all novel".to_string()
+                        } else {
+                            r.gene_names.join(";")
+                        },
                         // Empty, never 0: "we did not look" has to survive
                         // into the file the user downloads.
                         r.n_orfs.map(|v| v.to_string()).unwrap_or_default(),

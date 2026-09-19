@@ -116,6 +116,9 @@ export interface GainedRow {
    * are novel to the reference; empty in results from before the pass
    * existed or when prediction was off. */
   gene_names: string[];
+  /** Whether the naming pass ran; empty gene_names means "novel" only
+   * when true, otherwise it means unknown. */
+  named: boolean;
 }
 
 /** One search hit of a gained region against the reference: blastn for

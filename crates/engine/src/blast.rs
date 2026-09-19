@@ -809,6 +809,9 @@ pub fn name_gained_orfs(
             }
         }
         row.gene_names = names;
+        // Marks "the pass ran", so an empty gene_names further down the
+        // line reads as genuinely unmatched rather than unknown.
+        row.named = true;
     }
     Ok(())
 }
