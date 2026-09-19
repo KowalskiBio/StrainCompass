@@ -828,6 +828,24 @@ function Cell({
         {names.length > 6 && (
           <span className="text-zinc-400 dark:text-zinc-500"> +{names.length - 6} more</span>
         )}
+        {(() => {
+          // Named is a property of some genes, not of the region: the
+          // ones left out are novel to the reference, and a column that
+          // shows only the names invites reading them as the content.
+          const nOrfs = (row["n_orfs"] as number | null) ?? 0;
+          const novel = nOrfs - names.length;
+          if (novel > 0)
+            return (
+              <span
+                className="text-zinc-400 dark:text-zinc-500"
+                title={`${novel} of the predicted genes match no protein of the reference - they are novel to it. Use the region card to search them at NCBI BLAST.`}
+              >
+                {" "}
+                +{novel} novel
+              </span>
+            );
+          return null;
+        })()}
       </span>
     );
   }
