@@ -82,6 +82,10 @@ fn routes() -> Router<SharedState> {
             get(routes::results::gained_identify),
         )
         .route(
+            "/runs/{id}/gained/sequences",
+            get(routes::results::gained_sequences),
+        )
+        .route(
             "/runs/{id}/panel_recheck",
             get(routes::results::panel_recheck),
         )

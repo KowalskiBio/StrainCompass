@@ -172,6 +172,7 @@ function geneDetailCached(runId: number, locus: string): Promise<GeneDetail> {
  * per session and repeated opens of its verdict panel coalesce. */
 const gainedVerifyCache = new Map<string, Promise<GainedVerify>>();
 const gainedIdentifyCache = new Map<string, Promise<GainedIdentify>>();
+const gainedSeqCache = new Map<string, Promise<Map<string, string>>>();
 
 /** Gene identification is the same trade as the back-check - immutable
  * for a finished run, a blast search per call - so it coalesces the
@@ -335,6 +336,25 @@ export const api = {
   geneDetail: geneDetailCached,
   gainedVerify: gainedVerifyCached,
   gainedIdentify: gainedIdentifyCached,
+  /** The sequence of every gained region of one query, keyed by
+   * "seqid:start-end": one immutable request per table view, backing
+   * the copy-to-clipboard column. */
+  gainedSequences: (runId: number, queryId: number) => {
+    const key = `${runId}:${queryId}`;
+    let p = gainedSeqCache.get(key);
+    if (!p) {
+      p = request<{ seqid: string; start: number; end: number; seq: string }[]>(
+        `/runs/${runId}/gained/sequences?query_id=${queryId}`,
+      ).then((rows) => {
+        const m = new Map<string, string>();
+        for (const r of rows) m.set(`${r.seqid}:${r.start}-${r.end}`, r.seq);
+        return m;
+      });
+      p.catch(() => gainedSeqCache.delete(key));
+      gainedSeqCache.set(key, p);
+    }
+    return p;
+  },
   listRunFiles: (runId: number) =>
     request<{ run_id: number; status: string; files: RunFile[] }>(
       `/runs/${runId}/files`,

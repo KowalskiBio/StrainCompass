@@ -388,6 +388,60 @@ pub async fn gained_verify(
     Ok(Json(v))
 }
 
+/// GET /runs/{id}/gained/sequences?query_id : the sequence of every
+/// gained region of the query, for the table's copy-to-clipboard
+/// column. One request per table view, cached client-side, instead of
+/// embedding megabytes of sequence in every table page.
+pub async fn gained_sequences(
+    State(state): State<SharedState>,
+    Path(run_id): Path<i64>,
+    Query(q): Query<TableQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let (project_id, run_id, qid) = resolve_query_id(&state, run_id, q.query_id)?;
+    let res = jobs::load_query_result(&state, project_id, run_id, qid)?;
+    let rows = res.gained.ok_or_else(|| {
+        ApiError::BadRequest(
+            "This run was computed before gained regions were available. Please run the comparison again to see them."
+                .into(),
+        )
+    })?;
+    let run_dir = state.run_dir(project_id, run_id);
+    let qry_fa = run_dir
+        .join("queries")
+        .join(qid.to_string())
+        .join("query.fa");
+    if !qry_fa.is_file() {
+        return Err(ApiError::NotFound(
+            "This run's input files are no longer on the server, so the regions cannot be shown."
+                .into(),
+        ));
+    }
+    let v = tokio::task::spawn_blocking(move || {
+        let records = straincompass_engine::fasta::parse_fasta(&qry_fa)?;
+        let by_id: std::collections::HashMap<&str, _> =
+            records.iter().map(|r| (r.id.as_str(), r)).collect();
+        let mut out = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let seq = by_id
+                .get(r.qry_seqid.as_str())
+                .map(|rec| {
+                    String::from_utf8_lossy(&straincompass_engine::fasta::subseq(
+                        rec, r.start, r.end, false,
+                    ))
+                    .to_ascii_uppercase()
+                })
+                .unwrap_or_default();
+            out.push(serde_json::json!({
+                "seqid": r.qry_seqid, "start": r.start, "end": r.end, "seq": seq,
+            }));
+        }
+        Ok::<_, ApiError>(out)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("Reading the region sequences crashed. ({e})")))?;
+    Ok(Json(serde_json::Value::Array(v?)))
+}
+
 /// GET /runs/{id}/gained/identify?query_id&seqid&start&end : name the
 /// predicted genes inside one gained region, by their best match among
 /// the reference's own proteins.
@@ -1031,6 +1085,24 @@ mod tests {
         assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
 
         std::env::remove_var("STRAINCOMPASS_TOOLS_DIRS");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn gained_sequences_slice_the_query_fasta() {
+        let (state, dir) = seeded_state();
+        seed_gained_on_real_contig(&dir);
+
+        let v = gained_sequences(State(state), Path(1), Query(gained_query(None)))
+            .await
+            .unwrap()
+            .0;
+        // The seeded region is q1:1-6 and the query fasta carries
+        // "GGAAGT".
+        assert_eq!(v.as_array().unwrap().len(), 1);
+        let r = v[0].as_object().unwrap();
+        assert_eq!(r["seqid"], "q1");
+        assert_eq!(r["seq"], "GGAAGT");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

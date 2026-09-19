@@ -78,8 +78,7 @@ const GAINED_COLUMNS: Column[] = [
   { key: "anchor_seqid", label: "Reference sequence", width: 160 },
   { key: "anchor_start", label: "Reference position", numeric: true, width: 140 },
   { key: "anchor_end", label: "Reference end", numeric: true, width: 130 },
-  { key: "left_gene", label: "After gene", width: 140 },
-  { key: "right_gene", label: "Before gene", width: 140 },
+  { key: "region_seq", label: "Sequence", width: 230 },
   { key: "gene_names", label: "Genes inside (named)", width: 280 },
   { key: "n_orfs_complete", label: "Genes predicted", numeric: true, width: 130 },
   { key: "n_orfs", label: "Genes incl. partial", numeric: true, width: 150 },
@@ -283,6 +282,29 @@ export function ResultsTables({
 
   const total = data && data.table === table ? data.total : 0;
 
+  // The gained table's copy-to-clipboard column: the sequences of all
+  // of this query's regions, fetched once per view and kept client-side,
+  // so a click copies synchronously from memory instead of racing the
+  // clipboard's user-gesture window against the network.
+  const [gainedSeqs, setGainedSeqs] = useState<Map<string, string> | null>(null);
+  useEffect(() => {
+    if (table !== "gained" || queryId === undefined) {
+      setGainedSeqs(null);
+      return;
+    }
+    let cancelled = false;
+    setGainedSeqs(null);
+    api
+      .gainedSequences(run.id, queryId)
+      .then((m) => {
+        if (!cancelled) setGainedSeqs(m);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [run.id, table, queryId]);
+
   // The pin slot holds a locus tag for the gene tables and a synthetic
   // "contig:start" for gained regions, which have no locus tag of their own.
   const pinnedGainedRow = useMemo(() => {
@@ -458,6 +480,7 @@ export function ResultsTables({
           run={run}
           colWidths={colWidths}
           onResizeColumn={resizeColumn}
+          gainedSeqs={table === "gained" ? gainedSeqs : null}
         />
         {/* row count */}
         <div className="flex items-center px-4 h-12 border-t border-zinc-200 text-sm text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
@@ -502,6 +525,7 @@ function VirtualTable({
   run,
   colWidths,
   onResizeColumn,
+  gainedSeqs,
 }: {
   columns: Column[];
   rows: AnyRow[];
@@ -514,6 +538,7 @@ function VirtualTable({
   run: Run;
   colWidths: Record<string, number>;
   onResizeColumn: (key: string, width: number) => void;
+  gainedSeqs: Map<string, string> | null;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -655,7 +680,13 @@ function VirtualTable({
                   }`}
                   style={flexStyleFor(c)}
                 >
-                  <Cell col={c.key} row={row} table={table} run={run} />
+                  <Cell
+                    col={c.key}
+                    row={row}
+                    table={table}
+                    run={run}
+                    gainedSeqs={gainedSeqs}
+                  />
                 </div>
               ))}
             </div>
@@ -671,13 +702,16 @@ function Cell({
   row,
   table,
   run,
+  gainedSeqs,
 }: {
   col: string;
   row: Record<string, unknown>;
   table: TableKind;
   run: Run;
+  gainedSeqs: Map<string, string> | null;
 }) {
   const v = row[col];
+  const [copied, setCopied] = useState(false);
   if (col === "call") return <CallBadge call={v as Call} />;
   if (table === "gained") {
     if (col === "anchor") return <AnchorBadge row={row as unknown as GainedRow} />;
@@ -728,6 +762,38 @@ function Cell({
       >
         {v as string}
       </a>
+    );
+  }
+  if (col === "region_seq" && table === "gained") {
+    const key = `${row["qry_seqid"]}:${row["start"]}-${row["end"]}`;
+    const seq = gainedSeqs?.get(key);
+    if (!seq) {
+      // Not loaded (yet): the fetch is one request per table view.
+      return (
+        <span className="font-mono text-xs text-zinc-300 dark:text-zinc-600">loading...</span>
+      );
+    }
+    return (
+      <button
+        title="Click to copy the whole sequence"
+        onClick={(e) => {
+          e.stopPropagation();
+          navigator.clipboard?.writeText(seq).then(
+            () => {
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1200);
+            },
+            () => {},
+          );
+        }}
+        className={`font-mono text-xs tracking-tight truncate cursor-pointer rounded px-1 -mx-1 ${
+          copied
+            ? "text-teal-700 dark:text-teal-400 bg-teal-50 dark:bg-teal-900/30"
+            : "text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800"
+        }`}
+      >
+        {copied ? "copied ✓" : `${seq.slice(0, 28)}…`}
+      </button>
     );
   }
   if (col === "gene_names") {
