@@ -1109,7 +1109,7 @@ function GainedOrfsCard({
                     confidence {o.confidence.toFixed(1)}
                   </span>
                 </div>
-                {(m || id?.seq) && (
+                {(m || id?.seq || orfSeq(o)) && (
                   <IdentifiedLine
                     o={{
                       start: o.start,
