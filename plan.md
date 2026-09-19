@@ -546,3 +546,39 @@ TSV and the web UI point at the same record:
 Note the table column is written into each query's stored results at run
 time, so runs made before this change show "-" until re-run. The alignment
 dialog re-parses the GFF live and therefore works on old runs immediately.
+
+## Naming the novel genes (added 2026-09-19)
+
+Naming a gained region's genes against the reference proteome cannot name
+what the reference has never seen - and those are exactly the interesting
+genes. Two resources now name them:
+
+1. **The automatic pass (local SwissProt).** When a comparison succeeds,
+   a background task searches every novel predicted gene of the run
+   against a local copy of NCBI's curated SwissProt database
+   (`~/straincompass/blastdb/swissprot`, built once from UniProt's
+   `uniprot_sprot.fasta`; `STRAINCOMPASS_SWISSPROT_DB` overrides, and a
+   missing database quietly disables the pass). Local, because a run has
+   thousands of novel genes and the public BLAST service must not be asked
+   about them in bulk; SwissProt, because it is curated and carries the
+   mobilization/phage/resistance classes that matter. Answers are
+   persisted in the same per-query sidecar the on-demand flow uses
+   (`gained_ncbi_names.json`, one entry per ORF with a `source` marker),
+   and in a project-wide cache keyed by the gene's digest, so re-runs
+   cost nothing. Progress rides `ncbi_status.json` in the run directory:
+   the badge in the corner polls `/runs/{id}/ncbi_status`, counts up
+   while the pass runs, announces the finish, refreshes the tables, and
+   closes itself; a stale "running" older than a quarter hour reads as
+   interrupted. The run drawer now closes itself shortly after success,
+   handing the corner to the badge.
+
+2. **The on-demand pass (public NCBI BLAST, nr).** The region card's
+   "Name the N novel genes at NCBI BLAST" submits each still-unnamed gene
+   as a blastx against nr through the BLAST URL API - submit-and-poll,
+   client-driven, because that queue runs minutes. RIDs persist in the
+   sidecar, so closing the card loses nothing. A SwissProt miss stays
+   searchable this way; an nr miss is final.
+
+Both kinds of names merge into the table, the region cards and the
+exports through `GainedOrf.ncbi`; the column counts what neither source
+knows as `+N novel`.
