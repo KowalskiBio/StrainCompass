@@ -82,6 +82,9 @@ export interface GainedOrf {
   /** The ORF runs off an edge of the region, so it is probably truncated. */
   partial: boolean;
   confidence: number;
+  /** Best match among the reference's own proteins, from the run's
+   * naming pass; null for genes novel to the reference. */
+  best: OrfMatch | null;
 }
 
 /**
@@ -108,6 +111,11 @@ export interface GainedRow {
   n_orfs: number | null;
   n_orfs_complete: number | null;
   orfs: GainedOrf[];
+  /** Names of the predicted genes the reference's own proteins could
+   * identify (the naming pass runs with the run itself). Genes left out
+   * are novel to the reference; empty in results from before the pass
+   * existed or when prediction was off. */
+  gene_names: string[];
 }
 
 /** One search hit of a gained region against the reference: blastn for

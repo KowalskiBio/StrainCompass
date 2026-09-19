@@ -43,6 +43,8 @@ const ANCHOR_MAX_SPAN: u64 = 20_000;
 #[allow(clippy::too_many_arguments)]
 pub fn gained_regions(
     tools: &ToolPaths,
+    ref_fasta: &Path,
+    ref_gff: &Path,
     delta: &DeltaFile,
     qry_records: &[FastaRecord],
     genes: &[Gene],
@@ -132,6 +134,15 @@ pub fn gained_regions(
         work_dir,
         predict_orfs,
     )?;
+
+    // Name what was predicted, in one translated search for the whole
+    // query. Decoration on an already-complete result, like prediction
+    // itself: a naming failure leaves the genes unnamed, it does not
+    // take the regions down with it.
+    if matches!(status, GainedOrfStatus::Predicted) {
+        let _ =
+            crate::blast::name_gained_orfs(tools, ref_fasta, ref_gff, &mut rows, &by_id, work_dir);
+    }
     Ok((rows, status))
 }
 
@@ -439,6 +450,7 @@ fn parse_prodigal_gff(text: &str) -> Vec<(usize, straincompass_types::GainedOrf)
                 strand: if f[6] == "-" { -1 } else { 1 },
                 partial,
                 confidence,
+                best: None,
             },
         ));
     }

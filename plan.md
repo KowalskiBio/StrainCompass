@@ -507,6 +507,20 @@ them predicted by prodigal.
   carries their sequences, and the client links each to NCBI BLAST
   (blastx vs nr) and the whole region likewise, since no local database
   can name a gene the reference has never seen.
+- **Names in the table itself** (added 2026-09-18, hours later): the
+  naming pass now runs with the run, not on demand - after prodigal
+  predicts the genes of all of a query's gained regions, one blastx run
+  over all of them at once (`gained::gained_regions` calls
+  `blast::name_gained_orfs`) fills each ORF's `best` and each row's
+  `gene_names`. The gained table carries a "Genes inside (named)"
+  column ("all novel" when predicted genes matched no reference
+  protein), the search box matches names, and the TSV/CSV export has a
+  `gene_names` column plus each ORF's name in the `orfs` column
+  (`1101..1700(+) =LM4B_RS13330 creatininase...`). Like gene prediction,
+  naming is decoration on an already-complete result: a failure leaves
+  genes unnamed rather than failing the comparison. Runs computed before
+  the pass have empty `gene_names` (serde default) and name nothing
+  until re-run; the on-demand identification endpoint covers them.
 
 ## NCBI cross references (added 2026-09-15)
 

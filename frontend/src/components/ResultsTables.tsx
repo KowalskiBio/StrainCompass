@@ -80,6 +80,7 @@ const GAINED_COLUMNS: Column[] = [
   { key: "anchor_end", label: "Reference end", numeric: true, width: 130 },
   { key: "left_gene", label: "After gene", width: 140 },
   { key: "right_gene", label: "Before gene", width: 140 },
+  { key: "gene_names", label: "Genes inside (named)", width: 280 },
   { key: "n_orfs_complete", label: "Genes predicted", numeric: true, width: 130 },
   { key: "n_orfs", label: "Genes incl. partial", numeric: true, width: 150 },
 ];
@@ -729,6 +730,31 @@ function Cell({
       </a>
     );
   }
+  if (col === "gene_names") {
+    const names = v as string[];
+    if (!names || names.length === 0) {
+      // Empty is only "novel" when genes were predicted and left
+      // unnamed; without a prediction it is just unknown.
+      if (row["n_orfs"] === null || row["n_orfs"] === undefined)
+        return <span className="text-zinc-300 dark:text-zinc-700">-</span>;
+      return (
+        <span
+          className="text-zinc-400 dark:text-zinc-500"
+          title="None of the predicted genes matched any protein of the reference."
+        >
+          all novel
+        </span>
+      );
+    }
+    return (
+      <span className="truncate" title={names.join(", ")}>
+        {names.slice(0, 6).join(", ")}
+        {names.length > 6 && (
+          <span className="text-zinc-400 dark:text-zinc-500"> +{names.length - 6} more</span>
+        )}
+      </span>
+    );
+  }
   if (col === "genes") {
     const genes = v as string[];
     if (!genes || genes.length === 0) return <span className="text-zinc-300 dark:text-zinc-700">-</span>;
@@ -878,6 +904,10 @@ function GainedOrfsCard({
         <ul className="mt-3 space-y-1">
           {row.orfs.map((o, i) => {
             const id = identify?.orfs[i];
+            // The run's naming pass already named the ORF: show the name
+            // immediately. The on-demand search adds the sequence (for
+            // the NCBI links) and covers results from before the pass.
+            const m = id?.match ?? o.best ?? null;
             return (
               <li key={i} className="text-sm">
                 <div className="font-mono tabular-nums">
@@ -897,6 +927,7 @@ function GainedOrfsCard({
                   </span>
                 </div>
                 {id && <IdentifiedLine o={id} />}
+                {!id && m && <IdentifiedLine o={{ start: o.start, end: o.end, strand: o.strand, match: m, seq: "" }} />}
               </li>
             );
           })}
@@ -1009,6 +1040,7 @@ function ncbiBlastUrl(
 function IdentifiedLine({ o }: { o: IdentifiedOrf }) {
   const m = o.match;
   if (!m) {
+    if (!o.seq) return null;
     const blast = ncbiBlastUrl("blastx", o.seq);
     return (
       <p className="ml-4 text-xs text-zinc-500 dark:text-zinc-400">

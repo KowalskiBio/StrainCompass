@@ -134,8 +134,12 @@ pub async fn export_table(
             })?;
             rows.retain(|r| {
                 let text = format!(
-                    "{} {} {} {}",
-                    r.qry_seqid, r.anchor_seqid, r.left_gene, r.right_gene
+                    "{} {} {} {} {}",
+                    r.qry_seqid,
+                    r.anchor_seqid,
+                    r.left_gene,
+                    r.right_gene,
+                    r.gene_names.join(" ")
                 );
                 match &q.search {
                     Some(s) if !s.trim().is_empty() => {
@@ -168,6 +172,7 @@ pub async fn export_table(
                     "flanks_disagree".into(),
                     "left_gene".into(),
                     "right_gene".into(),
+                    "gene_names".into(),
                     "n_orfs".into(),
                     "n_orfs_complete".into(),
                     "orfs".into(),
@@ -190,6 +195,10 @@ pub async fn export_table(
                         r.flanks_disagree.to_string(),
                         r.left_gene.clone(),
                         r.right_gene.clone(),
+                        // The names the reference's own proteins could give
+                        // the predicted genes; genes the run could not name
+                        // are absent, not zero - they are the novel ones.
+                        r.gene_names.join(";"),
                         // Empty, never 0: "we did not look" has to survive
                         // into the file the user downloads.
                         r.n_orfs.map(|v| v.to_string()).unwrap_or_default(),
@@ -197,12 +206,24 @@ pub async fn export_table(
                         r.orfs
                             .iter()
                             .map(|o| {
+                                let name = o
+                                    .best
+                                    .as_ref()
+                                    .map(|m| {
+                                        if m.label.is_empty() {
+                                            format!(" ={}", m.locus_tag)
+                                        } else {
+                                            format!(" ={} {}", m.locus_tag, m.label)
+                                        }
+                                    })
+                                    .unwrap_or_default();
                                 format!(
-                                    "{}..{}({}){}",
+                                    "{}..{}({}){}{}",
                                     o.start,
                                     o.end,
                                     if o.strand < 0 { "-" } else { "+" },
-                                    if o.partial { "[partial]" } else { "" }
+                                    if o.partial { "[partial]" } else { "" },
+                                    name
                                 )
                             })
                             .collect::<Vec<_>>()

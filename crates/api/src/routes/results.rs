@@ -176,8 +176,12 @@ pub async fn gained(
     rows.retain(|r| {
         matches_search(
             &format!(
-                "{} {} {} {}",
-                r.qry_seqid, r.anchor_seqid, r.left_gene, r.right_gene
+                "{} {} {} {} {}",
+                r.qry_seqid,
+                r.anchor_seqid,
+                r.left_gene,
+                r.right_gene,
+                r.gene_names.join(" ")
             ),
             &q.search,
         )

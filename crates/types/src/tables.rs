@@ -99,6 +99,11 @@ pub struct GainedOrf {
     pub partial: bool,
     /// The gene finder's confidence in the call (0-100).
     pub confidence: f64,
+    /// Best match among the reference's own proteins, when the run's
+    /// naming pass found one. Absent in results computed before the
+    /// pass existed, or when the gene is novel to the reference.
+    #[serde(default)]
+    pub best: Option<OrfMatch>,
 }
 
 /// One stretch of a query genome with no alignment to the reference, and
@@ -148,6 +153,14 @@ pub struct GainedRow {
     pub n_orfs_complete: Option<u32>,
     /// The predicted genes themselves.
     pub orfs: Vec<GainedOrf>,
+    /// The names of the predicted genes the reference's own proteins
+    /// could identify (symbol or product, as annotated), best-match
+    /// first within each gene. Genes absent from this list are novel to
+    /// the reference - not found by a translated search against every
+    /// protein it encodes. Empty in results computed before the naming
+    /// pass existed, and in runs whose gene prediction was switched off.
+    #[serde(default)]
+    pub gene_names: Vec<String>,
 }
 
 /// Whether the genes inside the gained regions could be predicted.
@@ -207,6 +220,9 @@ pub struct OrfMatch {
     /// Share of the predicted gene covered by the alignment, percent.
     pub coverage: f64,
     pub evalue: f64,
+    /// Raw bitscore, for ranking matches of equal E-value.
+    #[serde(default)]
+    pub bitscore: f64,
 }
 
 /// One predicted gene of a gained region, identified or not, with the

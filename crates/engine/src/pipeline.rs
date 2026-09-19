@@ -160,6 +160,8 @@ pub fn run_comparison(
     progress("Looking for sequence gained by the query", 2, 3);
     let (gained_rows, gained_orfs) = gained::gained_regions(
         tools,
+        inputs.ref_fasta,
+        inputs.ref_gff,
         &delta,
         &qry_records,
         &genes,

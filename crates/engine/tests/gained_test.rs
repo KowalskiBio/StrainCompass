@@ -78,6 +78,8 @@ fn run(
     std::fs::create_dir_all(&dir).unwrap();
     let (rows, _) = gained_regions(
         &no_tools(),
+        &dir.join("ref.fa"),
+        &dir.join("ref.gff"),
         &d,
         recs,
         genes,
@@ -255,6 +257,8 @@ fn gained_without_prodigal_degrades() {
     std::fs::create_dir_all(&dir).unwrap();
     let (rows, status) = gained_regions(
         &no_tools(),
+        &dir.join("ref.fa"),
+        &dir.join("ref.gff"),
         &parsed,
         &[flat("ctg1", 5000)],
         &[],
@@ -321,6 +325,8 @@ fn orfs_are_shifted_into_query_contig_coordinates() {
     tools.prodigal = Some(prodigal);
     let (rows, status) = gained_regions(
         &tools,
+        &dir.join("ref.fa"),
+        &dir.join("ref.gff"),
         &parsed,
         &[flat("ctg1", 5000)],
         &[],
@@ -375,6 +381,8 @@ fn a_failing_gene_finder_does_not_fail_the_comparison() {
     tools.prodigal = Some(script);
     let (rows, status) = gained_regions(
         &tools,
+        &dir.join("ref.fa"),
+        &dir.join("ref.gff"),
         &parsed,
         &[flat("ctg1", 5000)],
         &[],
@@ -393,4 +401,93 @@ fn a_failing_gene_finder_does_not_fail_the_comparison() {
         GainedOrfStatus::Unavailable(m) => assert!(m.contains("boom"), "got {m}"),
         other => panic!("expected Unavailable, got {other:?}"),
     }
+}
+
+/// Stand-in blast tools for the naming pass: a makeblastdb that succeeds
+/// without reading its input, and a blastx that writes a fixed hit table
+/// (filtered to the -evalue it is asked for, field 5 of its outfmt) to
+/// whatever path follows -out. Same trade as the prodigal stub.
+fn stub_blast_pair(dir: &std::path::Path, blastx_hits: &str) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let mkdb = dir.join("stub_makeblastdb.sh");
+    std::fs::write(&mkdb, "#!/bin/sh\nexit 0\n").unwrap();
+    let blastx = dir.join("stub_blastx.sh");
+    std::fs::write(
+        &blastx,
+        format!(
+            "#!/bin/sh\nout=\"\"\nev=\"\"\nprev=\"\"\nfor a in \"$@\"; do\n  if [ \"$prev\" = \"-out\" ]; then out=\"$a\"; fi\n  if [ \"$prev\" = \"-evalue\" ]; then ev=\"$a\"; fi\n  prev=\"$a\"\ndone\nawk -v ev=\"$ev\" 'NF == 0 || $5+0 <= ev+0' > \"$out\" <<'HITS'\n{blastx_hits}HITS\n"
+        ),
+    )
+    .unwrap();
+    for f in [&mkdb, &blastx] {
+        std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    (mkdb, blastx)
+}
+
+#[test]
+fn the_pipeline_names_the_predicted_genes() {
+    let dir = std::env::temp_dir().join("gained_test_names");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // The reference the naming pass searches: one coding gene whose CDS
+    // span ends in a stop codon, as NCBI GFF3 annotates them.
+    std::fs::write(dir.join("ref.fa"), ">chr1\nATGAAATAA\n").unwrap();
+    std::fs::write(
+        dir.join("ref.gff"),
+        "##gff-version 3\n\
+         chr1\t.\tgene\t1\t9\t.\t+\t.\tlocus_tag=G1;gene=glx;gene_biotype=protein_coding\n\
+         chr1\t.\tCDS\t1\t9\t.\t+\t0\tlocus_tag=G1;product=glucose oxidase;protein_id=WP_G1\n",
+    )
+    .unwrap();
+
+    // One region (query 1001..4000) with two predicted genes; the stub
+    // blastx names only the first one (r0o0), the second stays novel.
+    let body = "##gff-version  3\n\
+        # Sequence Data: seqnum=1;seqlen=3000\n\
+        gr0\tProdigal_v2.6.3\tCDS\t101\t700\t45.6\t+\t0\tID=1_1;partial=00;conf=99.99\n\
+        gr0\tProdigal_v2.6.3\tCDS\t2800\t3000\t12.1\t-\t0\tID=1_2;partial=01;conf=71.20\n";
+    let prodigal = stub_prodigal(&dir, body);
+    let (mkdb, blastx) = stub_blast_pair(&dir, "r0o0\tG1\t88.0\t91.0\t1e-20\t120\n");
+
+    let d = block(
+        "chr1",
+        "ctg1",
+        10000,
+        5000,
+        &[(1, 1000, 1, 1000), (5001, 6000, 4001, 5000)],
+    );
+    let parsed = parse_delta_str(&d).unwrap();
+    let mut tools = no_tools();
+    tools.prodigal = Some(prodigal);
+    tools.makeblastdb = mkdb;
+    tools.blastx = blastx;
+    let (rows, status) = gained_regions(
+        &tools,
+        &dir.join("ref.fa"),
+        &dir.join("ref.gff"),
+        &parsed,
+        &[flat("ctg1", 5000)],
+        &[],
+        &dir.join("gained_regions.fa"),
+        &dir,
+        500,
+        true,
+    )
+    .unwrap();
+
+    assert_eq!(status, GainedOrfStatus::Predicted);
+    let r = &rows[0];
+    assert_eq!(r.gene_names, vec!["glx".to_string()]);
+    let m = r.orfs[0]
+        .best
+        .as_ref()
+        .expect("the stub's hit names the ORF");
+    assert_eq!(m.locus_tag, "G1");
+    assert_eq!(m.label, "glx");
+    assert_eq!(m.protein_id, "WP_G1");
+    assert_eq!(m.identity, 88.0);
+    assert!(r.orfs[1].best.is_none(), "the unnamed ORF stays unnamed");
+    let _ = std::fs::remove_dir_all(&dir);
 }

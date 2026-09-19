@@ -9,8 +9,8 @@ use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 use straincompass_types::{
-    Call, GainedBlastHit, GainedIdentify, GainedOrf, GainedVerify, IdentifiedOrf, OrfMatch,
-    PanelRow,
+    Call, GainedBlastHit, GainedIdentify, GainedOrf, GainedRow, GainedVerify, IdentifiedOrf,
+    OrfMatch, PanelRow,
 };
 
 /// Run the panel recheck for one query. `workdir` receives the blast
@@ -515,21 +515,33 @@ fn top_owned(mut hits: Vec<GainedBlastHit>) -> Vec<GainedBlastHit> {
 /// protein: an internal stop means the reference annotation and the
 /// coordinates disagree somewhere, and a corrupted db entry would return
 /// to haunt every future search.
-pub fn gained_identify(
+/// The reference proteome ready for blastx naming: the CDSs translated
+/// from the fasta by the GFF, and the blast database built from them.
+/// One entry per coding gene; genes whose translation is not a clean
+/// protein are skipped - a corrupted db entry would return to haunt
+/// every future search.
+pub struct ProteinDb {
+    /// locus tag -> (protein accession, display label)
+    names: HashMap<String, (String, String)>,
+    /// The makeblastdb output prefix to search against.
+    db: std::path::PathBuf,
+}
+
+/// Build [`ProteinDb`] from the reference's annotation. A GFF without
+/// any usable CDSs yields an empty database rather than an error: a
+/// reference without coding genes cannot name anything, which is an
+/// answer, not a failure.
+fn build_protein_db(
     tools: &ToolPaths,
-    inputs: &RegionInputs,
-    seqid: &str,
-    start: u64,
-    end: u64,
-    orfs: &[GainedOrf],
+    ref_fasta: &Path,
+    ref_gff: &Path,
     work_dir: &Path,
-) -> Result<GainedIdentify> {
-    let ref_records = crate::fasta::parse_fasta(inputs.ref_fasta)?;
+) -> Result<ProteinDb> {
+    let ref_records = crate::fasta::parse_fasta(ref_fasta)?;
     let by_seqid: HashMap<&str, &crate::fasta::FastaRecord> =
         ref_records.iter().map(|r| (r.id.as_str(), r)).collect();
 
-    // The reference proteome, one record per coding gene.
-    let genes = crate::gff::parse_gff(inputs.ref_gff)?;
+    let genes = crate::gff::parse_gff(ref_gff)?;
     let mut proteins: Vec<(String, String, String, String)> = Vec::new();
     for g in &genes {
         if g.protein_id.is_empty() {
@@ -542,9 +554,7 @@ pub fn gained_identify(
         let cds = crate::fasta::subseq(rec, g.start, g.end, g.strand < 0);
         let mut prot = translate(&cds);
         // NCBI GFF3 CDS spans include the terminal stop codon: part of
-        // the span, not of the protein. An internal stop means the
-        // annotation and the coordinates disagree somewhere, and a
-        // corrupted db entry would return to haunt every future search.
+        // the span, not of the protein.
         if prot.ends_with('*') {
             prot.pop();
         }
@@ -559,6 +569,149 @@ pub fn gained_identify(
         ));
     }
 
+    let out = ProteinDb {
+        names: proteins
+            .iter()
+            .map(|(locus, pid, label, _)| (locus.clone(), (pid.clone(), label.clone())))
+            .collect(),
+        db: work_dir.join("prot_db"),
+    };
+    if proteins.is_empty() {
+        return Ok(out);
+    }
+
+    std::fs::create_dir_all(work_dir)?;
+    let prot_fa = work_dir.join("ref_prot.fa");
+    {
+        use std::io::Write;
+        let mut w = std::io::BufWriter::new(std::fs::File::create(&prot_fa)?);
+        for (locus, protein_id, label, prot) in &proteins {
+            writeln!(w, ">{locus} {protein_id} {label}")?;
+            for chunk in prot.as_bytes().chunks(60) {
+                w.write_all(chunk)?;
+                w.write_all(b"\n")?;
+            }
+        }
+        w.flush()?;
+    }
+    let make_db = Command::new(&tools.makeblastdb)
+        .args(["-in"])
+        .arg(&prot_fa)
+        .args(["-dbtype", "prot", "-out"])
+        .arg(&out.db)
+        .output()
+        .map_err(|e| crate::EngineError::ToolMissing(format!("makeblastdb: {e}")))?;
+    if !make_db.status.success() {
+        return Err(friendly(format!(
+            "The protein database could not be built. {}",
+            String::from_utf8_lossy(&make_db.stderr).trim()
+        )));
+    }
+    Ok(out)
+}
+
+/// Search one batch of nucleotide sequences (id, plus-strand sequence)
+/// against a [`ProteinDb`] with blastx and return each sequence's best
+/// match (highest bitscore), as translated DNA: the frame is found by
+/// the search, not assumed by the caller.
+fn blastx_best(
+    tools: &ToolPaths,
+    db: &ProteinDb,
+    seqs: &[(String, String)],
+    work_dir: &Path,
+    out_name: &str,
+) -> Result<HashMap<String, OrfMatch>> {
+    let mut out: HashMap<String, OrfMatch> = HashMap::new();
+    if seqs.is_empty() || db.names.is_empty() {
+        return Ok(out);
+    }
+    let query_fa = work_dir.join(format!("{out_name}.fa"));
+    {
+        use std::io::Write;
+        let mut w = std::io::BufWriter::new(std::fs::File::create(&query_fa)?);
+        for (id, seq) in seqs {
+            writeln!(w, ">{id}")?;
+            for chunk in seq.as_bytes().chunks(60) {
+                w.write_all(chunk)?;
+                w.write_all(b"\n")?;
+            }
+        }
+        w.flush()?;
+    }
+    let hits_tsv = work_dir.join(format!("{out_name}.tsv"));
+    let blast = Command::new(&tools.blastx)
+        .args(["-query"])
+        .arg(&query_fa)
+        .args(["-db"])
+        .arg(&db.db)
+        .args([
+            "-evalue",
+            "1e-5",
+            "-outfmt",
+            "6 qseqid sseqid pident qcovs evalue bitscore",
+            "-out",
+        ])
+        .arg(&hits_tsv)
+        .output()
+        .map_err(|e| crate::EngineError::ToolMissing(format!("blastx: {e}")))?;
+    if !blast.status.success() {
+        return Err(friendly(format!(
+            "The translated search did not finish correctly. {}",
+            String::from_utf8_lossy(&blast.stderr).trim()
+        )));
+    }
+    let mut text = String::new();
+    std::fs::File::open(&hits_tsv)?.read_to_string(&mut text)?;
+    for line in text.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() < 6 {
+            continue;
+        }
+        let better = out
+            .get(f[0])
+            .map(|m: &OrfMatch| f[5].parse::<f64>().unwrap_or(0.0) > m.bitscore)
+            .unwrap_or(true);
+        if !better {
+            continue;
+        }
+        let Some((protein_id, label)) = db.names.get(f[1]) else {
+            continue;
+        };
+        out.insert(
+            f[0].to_string(),
+            OrfMatch {
+                locus_tag: f[1].to_string(),
+                protein_id: protein_id.clone(),
+                label: label.clone(),
+                identity: f[2].parse().unwrap_or(0.0),
+                coverage: f[3].parse().unwrap_or(0.0),
+                evalue: f[4].parse().unwrap_or(f64::INFINITY),
+                bitscore: f[5].parse().unwrap_or(0.0),
+            },
+        );
+    }
+    Ok(out)
+}
+
+/// Name the genes inside one gained region: each predicted ORF searched,
+/// as translated DNA, against the reference's own proteins.
+///
+/// This is the only name an unannotated query genome can be given
+/// locally - a query is a bare draft assembly, so its genes arrive with
+/// coordinates and nothing else, and the reference annotation is the one
+/// naming resource on the server. It names the ORFs the reference does
+/// carry homologs of (interrupted copies, repeat-family members); the
+/// ORFs it leaves unnamed are exactly the novel ones, for which the
+/// response carries the sequences so the client can link out.
+pub fn gained_identify(
+    tools: &ToolPaths,
+    inputs: &RegionInputs,
+    seqid: &str,
+    start: u64,
+    end: u64,
+    orfs: &[GainedOrf],
+    work_dir: &Path,
+) -> Result<GainedIdentify> {
     let qry_records = crate::fasta::parse_fasta(inputs.qry_fasta)?;
     let qry_rec = qry_records.iter().find(|r| r.id == seqid).ok_or_else(|| {
         friendly(format!(
@@ -590,130 +743,74 @@ pub fn gained_identify(
         region_seq: String::from_utf8_lossy(&region_seq).into_owned(),
     };
 
-    if orfs.is_empty() || proteins.is_empty() {
-        // Nothing to name, or nothing to name it with. The answer is
-        // complete either way; the ORFs are unnamed, not missing.
-        return Ok(out);
-    }
-
-    std::fs::create_dir_all(work_dir)?;
-    let prot_fa = work_dir.join("ref_prot.fa");
-    {
-        use std::io::Write;
-        let mut w = std::io::BufWriter::new(std::fs::File::create(&prot_fa)?);
-        for (locus, protein_id, label, prot) in &proteins {
-            writeln!(w, ">{locus} {protein_id} {label}")?;
-            for chunk in prot.as_bytes().chunks(60) {
-                w.write_all(chunk)?;
-                w.write_all(b"\n")?;
-            }
-        }
-        w.flush()?;
-    }
-    let db = work_dir.join("prot_db");
-    let make_db = Command::new(&tools.makeblastdb)
-        .args(["-in"])
-        .arg(&prot_fa)
-        .args(["-dbtype", "prot", "-out"])
-        .arg(&db)
-        .output()
-        .map_err(|e| crate::EngineError::ToolMissing(format!("makeblastdb: {e}")))?;
-    if !make_db.status.success() {
-        return Err(friendly(format!(
-            "The gene identification could not be prepared. {}",
-            String::from_utf8_lossy(&make_db.stderr).trim()
-        )));
-    }
-
-    // One record per ORF, in plus orientation of the ORF itself: blastx
-    // searches all frames of its query, so the strand the gene finder
-    // called does not have to be trusted here - the matching frame is
-    // whichever one finds the protein.
-    let orf_fa = work_dir.join("orfs.fa");
-    {
-        use std::io::Write;
-        let mut w = std::io::BufWriter::new(std::fs::File::create(&orf_fa)?);
-        for (i, o) in out.orfs.iter().enumerate() {
-            writeln!(w, ">o{i}")?;
-            for chunk in o.seq.as_bytes().chunks(60) {
-                w.write_all(chunk)?;
-                w.write_all(b"\n")?;
-            }
-        }
-        w.flush()?;
-    }
-    let hits_tsv = work_dir.join("orf_hits.tsv");
-    let blast = Command::new(&tools.blastx)
-        .args(["-query"])
-        .arg(&orf_fa)
-        .args(["-db"])
-        .arg(&db)
-        .args([
-            "-evalue",
-            "1e-5",
-            "-outfmt",
-            "6 qseqid sseqid pident qcovs evalue bitscore",
-            "-out",
-        ])
-        .arg(&hits_tsv)
-        .output()
-        .map_err(|e| crate::EngineError::ToolMissing(format!("blastx: {e}")))?;
-    if !blast.status.success() {
-        return Err(friendly(format!(
-            "The gene identification did not finish correctly. {}",
-            String::from_utf8_lossy(&blast.stderr).trim()
-        )));
-    }
-
-    // Best hit per ORF (highest bitscore), then join the names.
-    let mut best: HashMap<usize, (String, f64, f64, f64, f64)> = HashMap::new();
-    let mut text = String::new();
-    std::fs::File::open(&hits_tsv)?.read_to_string(&mut text)?;
-    for line in text.lines() {
-        let f: Vec<&str> = line.split('\t').collect();
-        if f.len() < 6 {
-            continue;
-        }
-        let (Some(idx), Ok(bitscore)) = (
-            f[0].strip_prefix('o').and_then(|v| v.parse::<usize>().ok()),
-            f[5].parse::<f64>(),
-        ) else {
-            continue;
-        };
-        let better = best
-            .get(&idx)
-            .map(|(_, _, _, _, b)| bitscore > *b)
-            .unwrap_or(true);
-        if better {
-            best.insert(
-                idx,
-                (
-                    f[1].to_string(),
-                    f[2].parse().unwrap_or(0.0),
-                    f[3].parse().unwrap_or(0.0),
-                    f[4].parse().unwrap_or(f64::INFINITY),
-                    bitscore,
-                ),
-            );
-        }
-    }
-    let by_locus: HashMap<&str, &(String, String, String, String)> =
-        proteins.iter().map(|p| (p.0.as_str(), p)).collect();
+    let db = build_protein_db(tools, inputs.ref_fasta, inputs.ref_gff, work_dir)?;
+    let seqs: Vec<(String, String)> = out
+        .orfs
+        .iter()
+        .enumerate()
+        .map(|(i, o)| (format!("o{i}"), o.seq.clone()))
+        .collect();
+    let best = blastx_best(tools, &db, &seqs, work_dir, "orf_hits")?;
     for (i, orf) in out.orfs.iter_mut().enumerate() {
-        if let Some((locus, identity, coverage, evalue, _)) = best.get(&i) {
-            if let Some((locus_tag, protein_id, label, _)) = by_locus.get(locus.as_str()) {
-                orf.best = Some(OrfMatch {
-                    locus_tag: locus_tag.clone(),
-                    protein_id: protein_id.clone(),
-                    label: label.clone(),
-                    identity: *identity,
-                    coverage: *coverage,
-                    evalue: *evalue,
-                });
-            }
+        if let Some(m) = best.get(&format!("o{i}")) {
+            orf.best = Some(m.clone());
         }
     }
     Ok(out)
+}
+
+/// Name the predicted genes of every gained region of one query in one
+/// translated search, filling each ORF's `best` and each row's
+/// `gene_names` in place. Called by the run's pipeline right after
+/// prodigal, so the names are in the table from the start instead of
+/// behind a per-region button.
+///
+/// Like gene prediction this is decoration on a result that is already
+/// complete without it, so the caller degrades to unnamed genes rather
+/// than failing the comparison; errors are reported by the on-demand
+/// identification endpoint, which exists precisely because a name can
+/// also be requested later.
+pub fn name_gained_orfs(
+    tools: &ToolPaths,
+    ref_fasta: &Path,
+    ref_gff: &Path,
+    rows: &mut [GainedRow],
+    by_id: &HashMap<&str, &crate::fasta::FastaRecord>,
+    work_dir: &Path,
+) -> Result<()> {
+    let db = build_protein_db(tools, ref_fasta, ref_gff, work_dir)?;
+    // One id per ORF across all regions: r{region}o{orf}, so a single
+    // blastx run names the whole query and the results map straight
+    // back onto the rows they came from.
+    let mut seqs: Vec<(String, String)> = Vec::new();
+    for (ri, row) in rows.iter().enumerate() {
+        let Some(rec) = by_id.get(row.qry_seqid.as_str()) else {
+            continue;
+        };
+        for (oi, o) in row.orfs.iter().enumerate() {
+            seqs.push((
+                format!("r{ri}o{oi}"),
+                String::from_utf8_lossy(&crate::fasta::subseq(rec, o.start, o.end, o.strand < 0))
+                    .into_owned(),
+            ));
+        }
+    }
+    let best = blastx_best(tools, &db, &seqs, work_dir, "gained_names")?;
+    for (ri, row) in rows.iter_mut().enumerate() {
+        let mut names: Vec<String> = Vec::new();
+        for (oi, o) in row.orfs.iter_mut().enumerate() {
+            if let Some(m) = best.get(&format!("r{ri}o{oi}")) {
+                names.push(if m.label.is_empty() {
+                    m.locus_tag.clone()
+                } else {
+                    m.label.clone()
+                });
+                o.best = Some(m.clone());
+            }
+        }
+        row.gene_names = names;
+    }
+    Ok(())
 }
 
 /// The display label of a gene: its symbol when annotated, else its
