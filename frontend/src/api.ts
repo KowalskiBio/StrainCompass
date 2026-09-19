@@ -338,8 +338,10 @@ export const api = {
   gainedVerify: gainedVerifyCached,
   gainedIdentify: gainedIdentifyCached,
   /** Name a region's novel genes through NCBI's public BLAST service.
-   * Not cached: it is an action, it persists its own answers
-   * server-side, and a retry after a failure is legitimate. */
+   * Each call submits the not-yet-searched genes and polls the
+   * outstanding searches once; the client repeats until `pending`
+   * reaches zero. Not cached: it is an action, and it persists its own
+   * answers server-side. */
   gainedAnnotateNcbi: (
     runId: number,
     queryId: number,
@@ -347,7 +349,7 @@ export const api = {
     start: number,
     end: number,
   ) =>
-    request<IdentifiedOrf[]>(
+    request<{ orfs: IdentifiedOrf[]; pending: number }>(
       `/runs/${runId}/gained/annotate_ncbi?query_id=${queryId}` +
         `&seqid=${encodeURIComponent(seqid)}&start=${start}&end=${end}`,
     ),

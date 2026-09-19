@@ -237,16 +237,31 @@ fn entry(orf: usize, m: &Option<OrfMatch>) -> serde_json::Value {
         "match": m,
     })
 }
+/// The state of one region's NCBI naming, returned to the client: the
+/// ORFs with whatever names are known so far, and how many searches are
+/// still queued at NCBI (the client polls again until it reaches
+/// zero).
+#[derive(serde::Serialize)]
+pub struct GainedNcbiStatus {
+    pub orfs: Vec<IdentifiedOrf>,
+    pub pending: u32,
+}
 
 /// GET /runs/{id}/gained/annotate_ncbi?query_id&seqid&start&end : name
-/// one region's novel genes through NCBI BLAST, persist the answer, and
-/// return the region's ORFs with whatever names are now known.
-#[allow(clippy::too_many_arguments)]
+/// one region's novel genes through NCBI BLAST.
+///
+/// The service's queue is minutes, not seconds, so this is a
+/// submit-and-poll dance the client drives: the first call submits the
+/// region's unnamed genes and returns immediately; each later call
+/// polls the outstanding searches once and returns what has finished.
+/// The answers are persisted as they arrive, so closing the card
+/// mid-search loses nothing - the next call picks the searches up, and
+/// the table shows the names from then on.
 pub async fn gained_annotate_ncbi(
     State(state): State<SharedState>,
     Path(run_id): Path<i64>,
     Query(q): Query<super::results::GainedVerifyQuery>,
-) -> ApiResult<Json<Vec<IdentifiedOrf>>> {
+) -> ApiResult<Json<GainedNcbiStatus>> {
     let (project_id, run_id, qid, _, _, _, row) =
         super::results::gained_region_ctx(&state, run_id, &q)?;
     let qdir = state
@@ -254,45 +269,50 @@ pub async fn gained_annotate_ncbi(
         .join("queries")
         .join(qid.to_string());
 
-    // The novel ORFs: no reference protein and no stored NCBI answer.
     let mut sidecar = load_sidecar(&qdir);
     let region_key = format!("{}:{}-{}", row.qry_seqid, row.start, row.end);
-    let mut stored: std::collections::HashMap<usize, Option<OrfMatch>> = sidecar
-        .get(&region_key)
-        .and_then(|v| v.as_array())
-        .map(|list| {
-            list.iter()
-                .filter_map(|e| {
-                    let idx = e.get("orf")?.as_u64()? as usize;
-                    let m = e
-                        .get("match")
-                        .and_then(|m| serde_json::from_value::<OrfMatch>(m.clone()).ok());
-                    Some((idx, m))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // The stored entries: "match" is an answer (a name, or "searched,
+    // nothing found"), "rid" is a search still queued at NCBI.
+    let mut done: std::collections::HashMap<usize, Option<OrfMatch>> =
+        std::collections::HashMap::new();
+    let mut pending: Vec<(usize, String)> = Vec::new();
+    if let Some(list) = sidecar.get(&region_key).and_then(|v| v.as_array()) {
+        for e in list {
+            let Some(idx) = e.get("orf").and_then(|v| v.as_u64()) else {
+                continue;
+            };
+            let idx = idx as usize;
+            if let Some(rid) = e.get("rid").and_then(|v| v.as_str()) {
+                pending.push((idx, rid.to_string()));
+            } else {
+                done.insert(
+                    idx,
+                    e.get("match")
+                        .and_then(|m| serde_json::from_value::<OrfMatch>(m.clone()).ok()),
+                );
+            }
+        }
+    }
 
-    let novel: Vec<usize> = (0..row.orfs.len())
-        .filter(|i| row.orfs[*i].best.is_none() && !stored.contains_key(i))
+    // The genes worth a submission: novel, never searched, not queued.
+    let fresh: Vec<usize> = (0..row.orfs.len())
+        .filter(|i| {
+            row.orfs[*i].best.is_none()
+                && !done.contains_key(i)
+                && !pending.iter().any(|(j, _)| j == i)
+        })
         .collect();
-    if novel.len() > MAX_ORFS {
+    if done.len() + pending.len() + fresh.len() > MAX_ORFS {
         return Err(ApiError::BadRequest(format!(
-            "This region has {} genes without names, more than the {} the NCBI service should be asked about at once. Search the region at NCBI BLAST from the region card instead.",
-            novel.len(),
+            "This region has {} genes to name, more than the {} the NCBI service should be asked about at once. Search the region at NCBI BLAST from the region card instead.",
+            done.len() + pending.len() + fresh.len(),
             MAX_ORFS
         )));
     }
 
-    if !novel.is_empty() {
-        // The sequences come from the query fasta; the region's row has
-        // the coordinates.
-        let qry_fa = state
-            .run_dir(project_id, run_id)
-            .join("queries")
-            .join(qid.to_string())
-            .join("query.fa");
-        let novel_idx = novel.clone();
+    if !fresh.is_empty() {
+        let qry_fa = qdir.join("query.fa");
+        let novel_idx = fresh.clone();
         let row_c = row.clone();
         let seqs = tokio::task::spawn_blocking(move || {
             let records = straincompass_engine::fasta::parse_fasta(&qry_fa)?;
@@ -300,7 +320,7 @@ pub async fn gained_annotate_ncbi(
                 .iter()
                 .find(|r| r.id == row_c.qry_seqid)
                 .ok_or_else(|| {
-                    crate::error::ApiError::BadRequest(
+                    ApiError::BadRequest(
                         "The query contig is not in this query's fasta file.".into(),
                     )
                 })?;
@@ -317,61 +337,61 @@ pub async fn gained_annotate_ncbi(
                     .to_ascii_uppercase()
                 })
                 .collect();
-            Ok::<_, crate::error::ApiError>(out)
+            Ok::<_, ApiError>(out)
         })
         .await
         .map_err(|e| ApiError::Internal(format!("Reading the genes crashed. ({e})")))??;
 
         let url = blast_url();
         let c = client();
-        let mut rids: Vec<(usize, String)> = Vec::new();
-        for (i, seq) in novel.iter().zip(seqs.iter()) {
-            rids.push((*i, submit(&c, &url, seq).await?));
+        for (i, seq) in fresh.iter().zip(seqs.iter()) {
+            let rid = submit(&c, &url, seq).await?;
+            pending.push((*i, rid));
         }
-
-        let mut results: Vec<(usize, Option<OrfMatch>)> = Vec::new();
-        let mut pending = rids;
-        for attempt in 0..MAX_POLLS {
-            if pending.is_empty() {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(poll_secs())).await;
-            let mut still = Vec::new();
-            for (i, rid) in pending {
-                match poll(&c, &url, &rid).await? {
-                    Some(text) => {
-                        let m =
-                            parse_best_hit(&text).map(|(label, protein_id, identity, evalue)| {
-                                OrfMatch {
-                                    locus_tag: protein_id.clone(),
-                                    protein_id,
-                                    label,
-                                    identity,
-                                    coverage: 0.0,
-                                    evalue,
-                                    bitscore: 0.0,
-                                }
-                            });
-                        results.push((i, m));
-                    }
-                    None => still.push((i, rid)),
-                }
-            }
-            pending = still;
-            if attempt == MAX_POLLS - 1 && !pending.is_empty() {
-                return Err(ApiError::Internal(
-                    "NCBI BLAST did not finish the search in time. Try again in a moment.".into(),
-                ));
-            }
-        }
-        for (i, m) in results {
-            stored.insert(i, m);
-        }
-        // Persist before answering: the names must survive the session.
-        let list: Vec<serde_json::Value> = stored.iter().map(|(i, m)| entry(*i, m)).collect();
-        sidecar.insert(region_key.clone(), serde_json::Value::Array(list));
-        save_sidecar(&qdir, &sidecar);
     }
+
+    // One poll round of every outstanding search; finished ones become
+    // answers. A search NCBI has lost is dropped, so a later call can
+    // submit it again rather than waiting forever.
+    if !pending.is_empty() {
+        let url = blast_url();
+        let c = client();
+        let mut still: Vec<(usize, String)> = Vec::new();
+        for (i, rid) in pending {
+            match poll(&c, &url, &rid).await? {
+                Some(text) => {
+                    let m = parse_best_hit(&text).map(|(label, protein_id, identity, evalue)| {
+                        OrfMatch {
+                            locus_tag: protein_id.clone(),
+                            protein_id,
+                            label,
+                            identity,
+                            coverage: 0.0,
+                            evalue,
+                            bitscore: 0.0,
+                        }
+                    });
+                    done.insert(i, m);
+                }
+                None => still.push((i, rid)),
+            }
+        }
+        pending = still;
+    }
+
+    // Persist before answering: submissions must not be lost, and the
+    // names must survive the session.
+    let list: Vec<serde_json::Value> = done
+        .iter()
+        .map(|(i, m)| entry(*i, m))
+        .chain(
+            pending
+                .iter()
+                .map(|(i, rid)| serde_json::json!({ "orf": i, "rid": rid })),
+        )
+        .collect();
+    sidecar.insert(region_key, serde_json::Value::Array(list));
+    save_sidecar(&qdir, &sidecar);
 
     let orfs: Vec<IdentifiedOrf> = row
         .orfs
@@ -381,15 +401,16 @@ pub async fn gained_annotate_ncbi(
             start: o.start,
             end: o.end,
             strand: o.strand,
-            best: stored.get(&i).cloned().flatten(),
+            best: done.get(&i).cloned().flatten(),
             seq: String::new(),
         })
         .collect();
-    Ok(Json(orfs))
+    Ok(Json(GainedNcbiStatus {
+        orfs,
+        pending: pending.len() as u32,
+    }))
 }
 
-/// Tests for the parser against a trimmed but faithful slice of NCBI's
-/// text output.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,7 +537,10 @@ mod endpoint_tests {
         .unwrap()
         .0;
         // The seeded ORF has no reference name, so the stub service gets
-        // to name it.
+        // to name it. The stub answers polls immediately, so one call
+        // submits and collects.
+        assert_eq!(orfs.pending, 0, "nothing left queued at the stub");
+        let orfs = &orfs.orfs;
         assert_eq!(orfs.len(), 1);
         let m = orfs[0].best.as_ref().expect("named by the stub service");
         assert_eq!(
@@ -547,7 +571,10 @@ mod endpoint_tests {
         .await
         .unwrap()
         .0;
-        assert_eq!(orfs2[0].best.as_ref().unwrap().label, m.label);
+        // No new submissions were made (the stub RID appears once), the
+        // stored answer is returned as-is.
+        assert_eq!(orfs2.pending, 0);
+        assert_eq!(orfs2.orfs[0].best.as_ref().unwrap().label, m.label);
 
         std::env::remove_var("STRAINCOMPASS_BLAST_URL");
         std::env::remove_var("STRAINCOMPASS_TEST_POLL_SECS");

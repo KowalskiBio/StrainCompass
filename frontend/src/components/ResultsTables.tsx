@@ -943,6 +943,13 @@ function GainedOrfsCard({
   onClose: () => void;
 }) {
   const ref = usePopoverDismiss(true, onClose);
+  const annotateTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (annotateTimer.current) window.clearTimeout(annotateTimer.current);
+    },
+    [],
+  );
   const [verify, setVerify] = useState<GainedVerify | null>(null);
   const [checking, setChecking] = useState(false);
   const [verifyError, setVerifyError] = useState<string | null>(null);
@@ -986,17 +993,31 @@ function GainedOrfsCard({
   function annotateNcbi() {
     setAnnotating(true);
     setAnnotateError(null);
-    api
-      .gainedAnnotateNcbi(runId, queryId, row.qry_seqid, row.start, row.end)
-      .then((orfs) => {
-        const m = new Map<number, OrfMatch>();
-        orfs.forEach((o, i) => {
-          if (o.match) m.set(i, o.match);
+    // The NCBI queue is minutes, not seconds: each round submits what
+    // is new and collects what has finished, and the card polls until
+    // nothing is outstanding. Closing the card stops the polling; the
+    // searches themselves are persisted server-side and finish anyway.
+    const round = () => {
+      api
+        .gainedAnnotateNcbi(runId, queryId, row.qry_seqid, row.start, row.end)
+        .then((r) => {
+          const m = new Map<number, OrfMatch>();
+          r.orfs.forEach((o, i) => {
+            if (o.match) m.set(i, o.match);
+          });
+          setNcbiNames(m);
+          if (r.pending > 0) {
+            annotateTimer.current = window.setTimeout(round, 15000);
+          } else {
+            setAnnotating(false);
+          }
+        })
+        .catch((e) => {
+          setAnnotateError((e as Error).message);
+          setAnnotating(false);
         });
-        setNcbiNames(m);
-      })
-      .catch((e) => setAnnotateError((e as Error).message))
-      .finally(() => setAnnotating(false));
+    };
+    round();
   }
 
   // The genes still without any name: the NCBI pass is for them.
@@ -1115,7 +1136,7 @@ function GainedOrfsCard({
                 className="text-sm text-zinc-500 underline hover:text-zinc-900 disabled:opacity-50 dark:hover:text-zinc-100"
               >
                 {annotating
-                  ? "Asking NCBI BLAST - this can take a minute or two..."
+                  ? `Waiting for NCBI BLAST - the queue can take a few minutes, the card can be closed...`
                   : `Name the ${unnamed.length} novel gene${unnamed.length === 1 ? "" : "s"} at NCBI BLAST`}
               </button>
               {annotateError && (
