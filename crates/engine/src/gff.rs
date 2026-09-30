@@ -107,9 +107,9 @@ pub fn parse_gff_str(text: &str) -> Result<Vec<Gene>> {
         let attrs = parse_attrs(cols[8]);
 
         match ftype {
-            // feature type "gene" only, same as the R pipeline: GFFs mark
-            // pseudogenes with their own feature type and R excluded them
-            "gene" => {
+            // "gene" and "pseudogene", same as the R pipeline: RefSeq GFFs
+            // give pseudogenes their own feature type (6 in EGD-e)
+            "gene" | "pseudogene" => {
                 let locus_tag = attrs
                     .get("locus_tag")
                     .cloned()

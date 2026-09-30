@@ -3,13 +3,85 @@
 use crate::error::{ApiError, ApiResult};
 use crate::models::FileDto;
 use crate::state::SharedState;
-use axum::extract::{Multipart, Path, State};
+use axum::extract::{Multipart, Path, Query, State};
 use axum::Json;
 use std::io::Write;
 use straincompass_engine::fasta;
 use uuid::Uuid;
 
 const MAX_UPLOAD_BYTES: usize = 512 * 1024 * 1024;
+
+/// `?append=true` on the panel endpoints: add the new genes to the
+/// project's current panel instead of replacing it.
+#[derive(serde::Deserialize, Default)]
+pub struct PanelMode {
+    #[serde(default)]
+    pub append: bool,
+}
+
+/// Replace the project's panel with `fasta`, or with `fasta` merged into
+/// the current panel when appending. A gene already in the panel is
+/// replaced by its new sequence, so re-adding a gene fixes it rather
+/// than duplicating it. Appending keeps the current panel's file name.
+async fn store_panel(
+    state: &SharedState,
+    project_id: i64,
+    append: bool,
+    display_name: &str,
+    fasta_text: String,
+) -> ApiResult<FileDto> {
+    let current: Option<(String, String)> = if append {
+        let conn = state.db.lock().unwrap();
+        conn.query_row(
+            "SELECT display_name, stored_name FROM files
+             WHERE project_id = ?1 AND role = 'panel' ORDER BY created_at DESC LIMIT 1",
+            [project_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok()
+    } else {
+        None
+    };
+    let (name, bytes) = match current {
+        Some((cur_name, stored)) => {
+            let old = std::fs::read_to_string(state.uploads_dir(project_id).join(stored))
+                .unwrap_or_default();
+            let new_recs = fasta::parse_fasta_str(&fasta_text).map_err(|e| {
+                ApiError::BadRequest(format!("\u{201c}{display_name}\u{201d}: {e}"))
+            })?;
+            let mut merged = String::new();
+            if let Ok(old_recs) = fasta::parse_fasta_str(&old) {
+                for r in old_recs
+                    .iter()
+                    .filter(|r| new_recs.iter().all(|n| n.id != r.id))
+                {
+                    push_record(&mut merged, r);
+                }
+            }
+            for r in &new_recs {
+                push_record(&mut merged, r);
+            }
+            (cur_name, merged.into_bytes())
+        }
+        None => (display_name.to_string(), fasta_text.into_bytes()),
+    };
+    delete_role(state, project_id, "panel").await?;
+    store_upload(state, project_id, "panel", &name, bytes).await
+}
+
+fn push_record(out: &mut String, r: &fasta::FastaRecord) {
+    out.push('>');
+    out.push_str(&r.id);
+    if !r.desc.is_empty() {
+        out.push(' ');
+        out.push_str(&r.desc);
+    }
+    out.push('\n');
+    for chunk in r.seq.chunks(60) {
+        out.push_str(&String::from_utf8_lossy(chunk));
+        out.push('\n');
+    }
+}
 
 fn safe_filename(name: &str) -> String {
     let cleaned: String = name
@@ -185,6 +257,7 @@ pub async fn upload_queries(
 pub async fn upload_panel(
     State(state): State<SharedState>,
     Path(project_id): Path<i64>,
+    Query(mode): Query<PanelMode>,
     mut multipart: Multipart,
 ) -> ApiResult<Json<FileDto>> {
     ensure_project(&state, project_id).await?;
@@ -204,8 +277,8 @@ pub async fn upload_panel(
     let (name, data) = got.ok_or_else(|| {
         ApiError::BadRequest("No gene panel file was received. Please choose a FASTA file.".into())
     })?;
-    delete_role(&state, project_id, "panel").await?;
-    let dto = store_upload(&state, project_id, "panel", &name, data).await?;
+    let text = String::from_utf8_lossy(&data).into_owned();
+    let dto = store_panel(&state, project_id, mode.append, &name, text).await?;
     Ok(Json(dto))
 }
 
@@ -224,6 +297,7 @@ pub struct PanelFromIdsDto {
 pub async fn upload_panel_ids(
     State(state): State<SharedState>,
     Path(project_id): Path<i64>,
+    Query(mode): Query<PanelMode>,
     mut multipart: Multipart,
 ) -> ApiResult<Json<PanelFromIdsDto>> {
     ensure_project(&state, project_id).await?;
@@ -251,7 +325,7 @@ pub async fn upload_panel_ids(
             "This file appears to be empty. Please check the file and try again.".into(),
         ));
     }
-    build_panel(state, project_id, &ids_text, &name).await
+    build_panel(state, project_id, &ids_text, &name, mode.append).await
 }
 
 #[derive(serde::Deserialize)]
@@ -264,6 +338,7 @@ pub struct PanelTextBody {
 pub async fn upload_panel_text(
     State(state): State<SharedState>,
     Path(project_id): Path<i64>,
+    Query(mode): Query<PanelMode>,
     Json(body): Json<PanelTextBody>,
 ) -> ApiResult<Json<PanelFromIdsDto>> {
     ensure_project(&state, project_id).await?;
@@ -272,7 +347,7 @@ pub async fn upload_panel_text(
             "The gene list is empty. Enter gene names separated by commas or new lines.".into(),
         ));
     }
-    build_panel(state, project_id, &body.text, "gene list").await
+    build_panel(state, project_id, &body.text, "gene list", mode.append).await
 }
 
 async fn build_panel(
@@ -280,6 +355,7 @@ async fn build_panel(
     project_id: i64,
     ids_text: &str,
     source_name: &str,
+    append: bool,
 ) -> ApiResult<Json<PanelFromIdsDto>> {
     let Some((ref_fasta, ref_gff)) = reference_paths(&state, project_id)? else {
         return Err(ApiError::BadRequest(
@@ -384,20 +460,18 @@ async fn build_panel(
     }
 
     if panel.found.is_empty() && from_ncbi.is_empty() {
-        return Err(ApiError::BadRequest(format!(
+        let hints: Vec<String> = missing.iter().filter_map(|l| accession_hint(l)).collect();
+        let mut msg = format!(
             "None of the entries in \u{201c}{source_name}\u{201d} match a gene in the reference annotation, and none could be fetched from NCBI. Check the spelling of the gene names."
-        )));
+        );
+        for h in hints {
+            msg.push(' ');
+            msg.push_str(&h);
+        }
+        return Err(ApiError::BadRequest(msg));
     }
 
-    delete_role(&state, project_id, "panel").await?;
-    let dto = store_upload(
-        &state,
-        project_id,
-        "panel",
-        "genes_of_interest.fasta",
-        fasta.into_bytes(),
-    )
-    .await?;
+    let dto = store_panel(&state, project_id, append, "genes_of_interest.fasta", fasta).await?;
     Ok(Json(PanelFromIdsDto {
         file: dto,
         found: panel.found,
@@ -429,6 +503,46 @@ pub async fn list_files(
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(Json(rows))
+}
+
+/// GET /projects/{id}/files/{file_id} : the file exactly as it was
+/// uploaded (or built, for a panel), under its original name.
+pub async fn download_file(
+    State(state): State<SharedState>,
+    Path((project_id, file_id)): Path<(i64, i64)>,
+) -> ApiResult<axum::response::Response> {
+    use axum::response::IntoResponse;
+    ensure_project(&state, project_id).await?;
+    let row: Option<(String, String)> = {
+        let conn = state.db.lock().unwrap();
+        conn.query_row(
+            "SELECT display_name, stored_name FROM files WHERE id = ?1 AND project_id = ?2",
+            [file_id, project_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok()
+    };
+    let Some((display_name, stored_name)) = row else {
+        return Err(ApiError::NotFound(
+            "This file does not exist (anymore).".into(),
+        ));
+    };
+    let bytes = tokio::fs::read(state.uploads_dir(project_id).join(stored_name))
+        .await
+        .map_err(|_| ApiError::NotFound("This file is missing on the server.".into()))?;
+    let body = axum::body::Body::from(bytes);
+    let disposition = format!("attachment; filename=\"{}\"", safe_filename(&display_name));
+    Ok((
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/octet-stream".to_string(),
+            ),
+            (axum::http::header::CONTENT_DISPOSITION, disposition),
+        ],
+        body,
+    )
+        .into_response())
 }
 
 /// DELETE /projects/{id}/files/{file_id}
@@ -528,4 +642,20 @@ pub fn reference_paths(
         (Some(f), Some(g)) => Some((f, g)),
         _ => None,
     })
+}
+
+/// Why a "name (ACC:start-end)" entry could not be used, when the part in
+/// brackets is not a GenBank accession (a copied placeholder, a typo).
+fn accession_hint(line: &str) -> Option<String> {
+    let open = line.find('(')?;
+    let close = line.rfind(')')?;
+    let inner = line.get(open + 1..close)?;
+    let acc = inner.split(':').next()?.trim();
+    if acc.is_empty() || crate::routes::ncbi::parse_accession_spec(line).is_some() {
+        return None;
+    }
+    Some(format!(
+        "In \u{201c}{}\u{201d}, \u{201c}{acc}\u{201d} is not a GenBank accession: write the record's real accession, e.g. emrC (CP038643.1:1496-1882 rev).",
+        line.trim()
+    ))
 }

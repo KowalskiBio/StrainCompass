@@ -55,7 +55,7 @@ pub fn panel_recheck(
         .arg(&db)
         .args([
             "-outfmt",
-            "6 qseqid sseqid pident length qlen qcovs evalue bitscore",
+            "6 qseqid sseqid pident length qlen qcovs evalue bitscore sstart send",
         ])
         .arg("-evalue")
         .arg(format!("{}", blast_evalue.max(1e-300)))
@@ -77,6 +77,7 @@ pub fn panel_recheck(
         pident: f64,
         evalue: f64,
         bitscore: f64,
+        locus: String,
     }
     let mut hits: HashMap<String, Best> = HashMap::new();
     let mut text = String::new();
@@ -92,6 +93,7 @@ pub fn panel_recheck(
         let qcovs: f64 = f[5].parse().unwrap_or(0.0);
         let evalue: f64 = f[6].parse().unwrap_or(f64::INFINITY);
         let bitscore: f64 = f[7].parse().unwrap_or(0.0);
+        let locus = hit_locus(&f);
         match hits.get_mut(&gene_id) {
             Some(b) if b.bitscore >= bitscore => {}
             _ => {
@@ -103,6 +105,7 @@ pub fn panel_recheck(
                         pident,
                         evalue,
                         bitscore,
+                        locus,
                     },
                 );
             }
@@ -128,6 +131,7 @@ pub fn panel_recheck(
             identity: h.pident,
             best_evalue: format_evalue(h.evalue),
             call,
+            qry_locus: h.locus.clone(),
         });
     }
     // Panel genes without any hit: read the panel fasta for the id list
@@ -142,11 +146,28 @@ pub fn panel_recheck(
                 identity: 0.0,
                 best_evalue: "-".into(),
                 call: Call::Absent,
+                qry_locus: String::new(),
             });
         }
     }
     rows.sort_by(|a, b| a.gene_id.cmp(&b.gene_id));
     Ok(rows)
+}
+
+/// The query place of one panel hit line, "contig:start-end(+|-)", or
+/// just the contig for hits written before `sstart send` were asked for.
+pub fn hit_locus(f: &[&str]) -> String {
+    let contig = f.get(1).copied().unwrap_or("");
+    let pos = |i: usize| f.get(i).and_then(|v| v.parse::<u64>().ok());
+    match (pos(8), pos(9)) {
+        (Some(s), Some(e)) => format!(
+            "{contig}:{}-{}({})",
+            s.min(e),
+            s.max(e),
+            if s <= e { '+' } else { '-' }
+        ),
+        _ => contig.to_string(),
+    }
 }
 
 fn format_evalue(e: f64) -> String {

@@ -6,7 +6,8 @@ use std::collections::HashMap;
 use straincompass_types::GapRow;
 
 /// Compute unaligned regions (>= min_gap bp) per reference sequence, with
-/// the genes overlapping each region.
+/// the genes lying entirely inside each region (R parity: a gene that only
+/// straddles a gap edge is PARTIAL, not lost with the gap).
 pub fn unaligned_gaps(
     genes: &[Gene],
     delta: &DeltaFile,
@@ -46,7 +47,7 @@ pub fn unaligned_gaps(
             let mut inside: Vec<&Gene> = Vec::new();
             if let Some(gs2) = genes_by_seqid.get(seqid.as_str()) {
                 for g in gs2 {
-                    if g.start <= ge && g.end >= gs {
+                    if g.start >= gs && g.end <= ge {
                         inside.push(g);
                     }
                 }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import type { Project, ProjectFile, Run, RunParams } from "../types";
-import { formatSize, formatDuration, formatDate } from "../types";
+import { formatSize, formatDuration, formatDate, runLabel } from "../types";
 import {
   Button,
   ErrorBox,
@@ -266,6 +266,9 @@ export default function ProjectPage() {
             onDelete={(r) => {
               api.deleteRun(r.id).then(reload).catch((e) => setError((e as Error).message));
             }}
+            onRenamed={(r) =>
+              setRuns((prev) => prev.map((x) => (x.id === r.id ? { ...x, name: r.name } : x)))
+            }
           />
         )}
         {tab === "table" && selectedRun && (
@@ -529,6 +532,14 @@ function FileRow({
           {formatSize(file.size)} - added {formatDate(file.created_at)}
         </p>
       </div>
+      <div className="flex items-center gap-1 shrink-0">
+      <a
+        href={api.fileDownloadUrl(projectId, file.id)}
+        download={file.display_name}
+        className="text-sm text-zinc-500 hover:text-zinc-900 h-9 px-2 inline-flex items-center rounded-md hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800"
+      >
+        Download
+      </a>
       <button
         className="text-sm text-zinc-400 hover:text-red-600 h-9 px-2 rounded-md hover:bg-red-50 shrink-0 dark:text-zinc-500 dark:hover:text-red-400 dark:hover:bg-red-950/40"
         disabled={busy}
@@ -550,6 +561,7 @@ function FileRow({
       >
         Remove
       </button>
+      </div>
     </li>
   );
 }
@@ -578,14 +590,31 @@ function RunsTab({
   selectedRun,
   onSelect,
   onDelete,
+  onRenamed,
 }: {
   runs: Run[];
   selectedRun: Run | null;
   onSelect: (r: Run) => void;
   onDelete: (r: Run) => void;
+  onRenamed: (r: Run) => void;
 }) {
   const [paramsOf, setParamsOf] = useState<Record<number, RunParams>>({});
   const [showFiles, setShowFiles] = useState<number | null>(null);
+  /** The run whose name is being edited, and the draft. */
+  const [editing, setEditing] = useState<{ id: number; name: string } | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
+
+  async function saveName() {
+    if (!editing) return;
+    try {
+      // an empty name puts the run back to "Run #id"
+      onRenamed(await api.renameRun(editing.id, editing.name.trim()));
+      setEditing(null);
+      setRenameError(null);
+    } catch (e) {
+      setRenameError((e as Error).message);
+    }
+  }
 
   useEffect(() => {
     runs
@@ -616,9 +645,51 @@ function RunsTab({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
                 <StatusDot status={r.status} />
-                <div>
-                  <p className="text-[15px] font-medium">
-                    Run #{r.id}
+                <div className="min-w-0">
+                  {editing?.id === r.id ? (
+                    <form
+                      className="flex items-center gap-2"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        saveName();
+                      }}
+                    >
+                      <input
+                        autoFocus
+                        value={editing.name}
+                        maxLength={120}
+                        placeholder={`Run #${r.id}`}
+                        aria-label="Run name"
+                        onChange={(e) => setEditing({ id: r.id, name: e.target.value })}
+                        onKeyDown={(e) => {
+                          if (e.key === "Escape") {
+                            setEditing(null);
+                            setRenameError(null);
+                          }
+                        }}
+                        className="h-9 w-72 max-w-full px-2 rounded-md border border-zinc-300 text-[15px] dark:border-zinc-700 dark:bg-zinc-900"
+                      />
+                      <Button type="submit">Save</Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() => {
+                          setEditing(null);
+                          setRenameError(null);
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </form>
+                  ) : (
+                  <p className="text-[15px] font-medium truncate">
+                    {runLabel(r)}
+                    {r.name && (
+                      <span className="text-xs text-zinc-400 font-normal dark:text-zinc-500">
+                        {" "}
+                        #{r.id}
+                      </span>
+                    )}
                     {selectedRun?.id === r.id && (
                       <span className="text-xs text-zinc-400 font-normal dark:text-zinc-500">
                         {" "}
@@ -626,6 +697,10 @@ function RunsTab({
                       </span>
                     )}
                   </p>
+                  )}
+                  {editing?.id === r.id && renameError && (
+                    <p className="text-sm text-red-700 mt-1 dark:text-red-400">{renameError}</p>
+                  )}
                   <p className="text-xs text-zinc-400 mt-0.5 dark:text-zinc-500">
                     {formatDate(r.created_at)}
                     {r.finished_at
@@ -660,7 +735,16 @@ function RunsTab({
                 <Button
                   variant="ghost"
                   onClick={() => {
-                    if (window.confirm(`Delete run #${r.id} and its results?`))
+                    setEditing({ id: r.id, name: r.name ?? "" });
+                    setRenameError(null);
+                  }}
+                >
+                  Rename
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    if (window.confirm(`Delete ${runLabel(r)} and its results?`))
                       onDelete(r);
                   }}
                 >
@@ -684,7 +768,9 @@ function RunsTab({
       </ul>
       {showFiles !== null && (
         <div className="border border-zinc-200 rounded-xl bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-          <h3 className="font-medium mb-3">Files of run #{showFiles}</h3>
+          <h3 className="font-medium mb-3">
+            Files of {runLabel(runs.find((r) => r.id === showFiles) ?? { id: showFiles, name: null })}
+          </h3>
           <FilesPanel runId={showFiles} />
         </div>
       )}

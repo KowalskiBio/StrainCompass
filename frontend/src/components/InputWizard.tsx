@@ -10,7 +10,7 @@ export interface WizardResult {
 const DEFAULT_PARAMS: RunParams = {
   min_gap: 200,
   present_cov: 95,
-  partial_cov: 1,
+  partial_cov: 0,
   blast_cov: 90,
   blast_pid: 90,
   blast_evalue: 1e-10,
@@ -143,18 +143,20 @@ export function InputWizard({
     }
   }
 
-  async function buildPanelFromText() {
+  async function buildPanelFromText(append: boolean) {
     if (!geneList.trim()) {
       setError("Please type the gene names first.");
       return;
     }
-    setBusy("Building the gene panel (genes not in the reference are fetched from NCBI)...");
+    setBusy(
+      `${append ? "Adding to" : "Building"} the gene panel (genes not in the reference are fetched from NCBI)...`,
+    );
     setError(null);
     setNotice(null);
     try {
-      const r = await api.buildPanelFromText(projectId, geneList);
+      const r = await api.buildPanelFromText(projectId, geneList, append);
       onFilesChanged();
-      showPanelNotice(r);
+      showPanelNotice(r, append);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -162,16 +164,22 @@ export function InputWizard({
     }
   }
 
-  function showPanelNotice(r: {
-    found: string[];
-    from_ncbi: string[];
-    missing: string[];
-  }) {
+  function showPanelNotice(
+    r: {
+      found: string[];
+      from_ncbi: string[];
+      missing: string[];
+    },
+    append = false,
+  ) {
     if (r.found.length === 0 && r.from_ncbi.length === 0) return;
     const parts = [`${r.found.length} from the reference`];
     if (r.from_ncbi.length > 0)
       parts.push(`${r.from_ncbi.length} from NCBI`);
-    let msg = `The panel was built with ${r.found.length + r.from_ncbi.length} genes: ${parts.join(", ")}.`;
+    const n = r.found.length + r.from_ncbi.length;
+    let msg = append
+      ? `Added ${n} gene${n === 1 ? "" : "s"} to the panel: ${parts.join(", ")}.`
+      : `The panel was built with ${n} genes: ${parts.join(", ")}.`;
     if (r.from_ncbi.length > 0)
       msg += ` Fetched: ${r.from_ncbi.join(", ")}.`;
     if (r.missing.length > 0)
@@ -357,12 +365,31 @@ export function InputWizard({
                   value={geneList}
                   onChange={(e) => setGeneList(e.target.value)}
                 />
-                <button
-                  className="self-start h-11 px-4 rounded-lg bg-zinc-900 text-white text-[15px] hover:bg-zinc-700 whitespace-nowrap dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-                  onClick={buildPanelFromText}
-                >
-                  Build panel
-                </button>
+                {panel ? (
+                  <div className="self-start flex flex-col gap-2">
+                    <button
+                      className="h-11 px-4 rounded-lg bg-zinc-900 text-white text-[15px] hover:bg-zinc-700 whitespace-nowrap dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+                      title="Keep the current panel and add these genes to it"
+                      onClick={() => buildPanelFromText(true)}
+                    >
+                      Add to panel
+                    </button>
+                    <button
+                      className="h-11 px-4 rounded-lg border border-zinc-300 text-[15px] text-zinc-700 hover:bg-zinc-100 whitespace-nowrap dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      title="Discard the current panel and build a new one from these genes"
+                      onClick={() => buildPanelFromText(false)}
+                    >
+                      Replace panel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    className="self-start h-11 px-4 rounded-lg bg-zinc-900 text-white text-[15px] hover:bg-zinc-700 whitespace-nowrap dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+                    onClick={() => buildPanelFromText(false)}
+                  >
+                    Build panel
+                  </button>
+                )}
               </div>
               {notice && (
                 <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-[15px] text-zinc-700 dark:border-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-300">

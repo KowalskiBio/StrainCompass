@@ -251,11 +251,11 @@ pub fn run_comparison(
 /// Write a genes coverage table as TSV.
 pub fn write_genes_coverage_tsv(rows: &[GeneCoverageRow], out: &Path) -> std::io::Result<()> {
     let mut w = std::io::BufWriter::new(std::fs::File::create(out)?);
-    writeln!(w, "locus_tag\tsymbol\tprotein_id\tbiotype\tseqid\tstart\tend\tlength\tcov_bp\tcov_pct\tcall\tbest_identity\tmismatches\tindels")?;
+    writeln!(w, "locus_tag\tsymbol\tprotein_id\tbiotype\tseqid\tstart\tend\tlength\tcov_bp\tcov_pct\tcall\tbest_identity\tmismatches\tindels\tqry_loci")?;
     for r in rows {
         writeln!(
             w,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{:.2}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{:.2}\t{}\t{}\t{}",
             r.locus_tag,
             r.symbol,
             r.protein_id,
@@ -269,7 +269,8 @@ pub fn write_genes_coverage_tsv(rows: &[GeneCoverageRow], out: &Path) -> std::io
             r.call.as_str(),
             r.best_identity,
             r.mismatches,
-            r.indels
+            r.indels,
+            r.qry_loci
         )?;
     }
     Ok(())
@@ -344,17 +345,21 @@ pub fn write_gained_tsv(rows: &[GainedRow], out: &Path) -> std::io::Result<()> {
 
 pub fn write_panel_tsv(rows: &[PanelRow], out: &Path) -> std::io::Result<()> {
     let mut w = std::io::BufWriter::new(std::fs::File::create(out)?);
-    writeln!(w, "gene_id\tqlen\tcov_pct\tidentity\tbest_evalue\tcall")?;
+    writeln!(
+        w,
+        "gene_id\tqlen\tcov_pct\tidentity\tbest_evalue\tcall\tqry_locus"
+    )?;
     for r in rows {
         writeln!(
             w,
-            "{}\t{}\t{:.2}\t{:.2}\t{}\t{}",
+            "{}\t{}\t{:.2}\t{:.2}\t{}\t{}\t{}",
             r.gene_id,
             r.qlen,
             r.cov_pct,
             r.identity,
             r.best_evalue,
-            r.call.as_str()
+            r.call.as_str(),
+            r.qry_locus
         )?;
     }
     Ok(())

@@ -28,6 +28,8 @@ export interface RunQuery {
 export interface Run {
   id: number;
   project_id: number;
+  /** User-chosen label; null until the run is renamed. */
+  name: string | null;
   status: "queued" | "running" | "succeeded" | "failed";
   step: string | null;
   error: string | null;
@@ -38,6 +40,11 @@ export interface Run {
   has_panel: boolean;
   /** Runs computed before gained regions existed do not carry them. */
   has_gained: boolean;
+}
+
+/** A run's name as shown: its own, or "Run #id" until it has one. */
+export function runLabel(r: Pick<Run, "id" | "name">): string {
+  return r.name?.trim() ? r.name : `Run #${r.id}`;
 }
 
 export interface RunWithLogs {
@@ -60,6 +67,9 @@ export interface GeneCoverageRow {
   best_identity: number;
   mismatches: number;
   indels: number;
+  /** Where the gene lies in the query: "contig:start-end(+|-)", several
+   * joined with "; " when split or duplicated; "" when nothing aligned. */
+  qry_loci: string;
 }
 
 export interface GapRow {
@@ -235,6 +245,9 @@ export interface PanelRow {
   identity: number;
   best_evalue: string;
   call: Call;
+  /** The best hit's place in the query, "contig:start-end(+|-)"; only
+   * the contig for older runs, "" when not found. */
+  qry_locus: string;
 }
 
 export interface MatrixRow {

@@ -42,6 +42,12 @@ pub struct GeneCoverageRow {
     pub best_identity: f64,
     pub mismatches: u64,
     pub indels: u64,
+    /// Where the gene lies in the query assembly: the span its aligned
+    /// part maps to, as "contig:start-end(+|-)", several joined with "; "
+    /// (most aligned bases first) when it is split or duplicated. Empty
+    /// when nothing aligned.
+    #[serde(default)]
+    pub qry_loci: String,
 }
 
 /// One row of the unaligned gaps table.
@@ -334,6 +340,11 @@ pub struct PanelRow {
     pub identity: f64,
     pub best_evalue: String,
     pub call: Call,
+    /// The best hit's place in the query, "contig:start-end(+|-)"; just
+    /// the contig for runs made before positions were kept, empty when
+    /// the gene was not found.
+    #[serde(default)]
+    pub qry_locus: String,
 }
 
 /// Presence/absence across all queries of a run.

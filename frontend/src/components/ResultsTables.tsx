@@ -56,6 +56,7 @@ const COVERAGE_COLUMNS: Column[] = [
   { key: "cov_bp", label: "Covered bases", numeric: true, width: 110 },
   { key: "cov_pct", label: "Coverage %", numeric: true, width: 100 },
   { key: "call", label: "Call", width: 120 },
+  { key: "qry_loci", label: "Query contig", width: 230 },
   { key: "best_identity", label: "Best identity %", numeric: true, width: 110 },
   { key: "mismatches", label: "Mismatches", numeric: true, width: 100 },
   { key: "indels", label: "Indels", numeric: true, width: 80 },
@@ -93,6 +94,7 @@ const PANEL_COLUMNS: Column[] = [
   { key: "identity", label: "Identity %", numeric: true, width: 110 },
   { key: "best_evalue", label: "Best match significance", numeric: true, width: 140 },
   { key: "call", label: "Call", width: 120 },
+  { key: "qry_locus", label: "Query contig", width: 230 },
 ];
 
 // The backend caps page_size at 1000 per request; to show the whole table
@@ -283,6 +285,33 @@ export function ResultsTables({
   }, [run.id, table, JSON.stringify(query)]);
 
   const total = data && data.table === table ? data.total : 0;
+
+  // A search that finds no reference gene is often a gene the reference
+  // does not have at all (cadA, emrC from NCBI) or a locus tag of
+  // another strain (lmo0444 on a non-EGD-e reference). Those live only
+  // in the panel table, so look there and say so instead of a bare
+  // "no rows".
+  const noGeneMatch =
+    table === "genes_coverage" &&
+    !!debouncedSearch.trim() &&
+    !loading &&
+    data?.table === "genes_coverage" &&
+    data.total === 0;
+  const [panelHits, setPanelHits] = useState<PanelRow[] | null>(null);
+  useEffect(() => {
+    setPanelHits(null);
+    if (!noGeneMatch || !run.has_panel) return;
+    let cancelled = false;
+    api
+      .panelRecheck(run.id, { query_id: queryId, search: debouncedSearch, page: 0, page_size: 20 })
+      .then((p) => {
+        if (!cancelled) setPanelHits(p.rows as PanelRow[]);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [noGeneMatch, run.id, run.has_panel, queryId, debouncedSearch]);
 
   // The gained table's copy-to-clipboard column: the sequences of all
   // of this query's regions, fetched once per view and kept client-side,
@@ -493,6 +522,44 @@ export function ResultsTables({
           </span>
         </div>
       </div>
+
+      {noGeneMatch && (
+        <div className="mt-3 px-4 py-3 rounded-xl border border-zinc-200 bg-zinc-50 text-[15px] text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
+          {panelHits && panelHits.length > 0 ? (
+            <>
+              <p>
+                No gene of the reference annotation matches
+                {" \u201c"}
+                {debouncedSearch.trim()}
+                {"\u201d"}, so it is not in this table. It is in the gene panel:
+              </p>
+              <p className="mt-2 flex flex-wrap items-center gap-2">
+                {panelHits.map((h) => (
+                  <span key={h.gene_id} className="inline-flex items-center gap-1.5">
+                    <span className="font-medium text-zinc-800 dark:text-zinc-200">{h.gene_id}</span>
+                    <CallBadge call={h.call} />
+                  </span>
+                ))}
+                <button
+                  onClick={() => setTable("panel_recheck")}
+                  className="h-9 px-3 rounded-lg border border-zinc-300 bg-white text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+                >
+                  Show in Panel recheck
+                </button>
+              </p>
+            </>
+          ) : (
+            <p>
+              This table lists only the genes of the reference annotation, under
+              the reference{"\u2019"}s own names. A gene the reference does not
+              carry (e.g. cadA or emrC on a plasmid or transposon), or a locus tag
+              of another strain (e.g. an EGD-e lmo tag on a different reference),
+              is not here. Add it to the gene panel to have the queries searched
+              for it.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* right-click preview, pinned until another row is right-clicked or this is closed */}
       {pinnedGene && (table === "genes_coverage" || table === "matrix") && (
@@ -888,7 +955,11 @@ function Cell({
     return <span>{v.toLocaleString("en-US")}</span>;
   }
   if (v === null || v === undefined || v === "") return <span className="text-zinc-300 dark:text-zinc-700">-</span>;
-  return <span className="truncate">{String(v)}</span>;
+  return (
+    <span className="truncate" title={String(v)}>
+      {String(v)}
+    </span>
+  );
 }
 
 /**

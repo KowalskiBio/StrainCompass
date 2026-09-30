@@ -488,7 +488,72 @@ pub fn load_query_result(
     let mut res: ComparisonResultJson = serde_json::from_slice(&bytes)
         .map_err(|_| crate::error::ApiError::Internal("A result file is unreadable.".into()))?;
     backfill_protein_ids(state, project_id, &mut res.genes_coverage);
+    let qdir = path.parent().unwrap_or(&path).to_path_buf();
+    backfill_query_loci(&qdir, &mut res);
     Ok(res)
+}
+
+/// Runs made before gene rows carried their place in the query get it
+/// from the kept delta (gene coverage) and blast hits (panel), which
+/// needs neither the annotation nor a re-run. A panel hits file from
+/// then has no hit positions, so those rows get the contig alone.
+fn backfill_query_loci(qdir: &std::path::Path, res: &mut ComparisonResultJson) {
+    let rows = &mut res.genes_coverage;
+    if rows.iter().any(|r| r.cov_bp > 0 && r.qry_loci.is_empty()) {
+        match straincompass_engine::delta::DeltaFile::parse(qdir.join("work").join("cmp.delta")) {
+            Ok(delta) => {
+                let genes: Vec<straincompass_engine::gff::Gene> = rows
+                    .iter()
+                    .map(|r| straincompass_engine::gff::Gene {
+                        seqid: r.seqid.clone(),
+                        start: r.start,
+                        end: r.end,
+                        strand: 0,
+                        locus_tag: r.locus_tag.clone(),
+                        old_locus_tag: String::new(),
+                        symbol: String::new(),
+                        biotype: String::new(),
+                        protein_id: String::new(),
+                        product: String::new(),
+                    })
+                    .collect();
+                let loci = straincompass_engine::coverage::query_loci(&genes, &delta);
+                for (r, l) in rows.iter_mut().zip(loci) {
+                    r.qry_loci = l;
+                }
+            }
+            Err(e) => tracing::warn!("cannot read the delta to place genes in the query: {e}"),
+        }
+    }
+    let Some(panel) = res.panel.as_mut() else {
+        return;
+    };
+    if !panel
+        .iter()
+        .any(|r| r.call != straincompass_types::Call::Absent && r.qry_locus.is_empty())
+    {
+        return;
+    }
+    let Ok(text) = std::fs::read_to_string(qdir.join("work").join("panel").join("hits.tsv")) else {
+        return;
+    };
+    // same pick as the recheck itself: the highest-bitscore row per gene
+    let mut best: std::collections::HashMap<&str, (f64, String)> = std::collections::HashMap::new();
+    for line in text.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() < 8 {
+            continue;
+        }
+        let bits: f64 = f[7].parse().unwrap_or(0.0);
+        if best.get(f[0]).is_none_or(|b| bits > b.0) {
+            best.insert(f[0], (bits, straincompass_engine::blast::hit_locus(&f)));
+        }
+    }
+    for r in panel.iter_mut().filter(|r| r.qry_locus.is_empty()) {
+        if let Some((_, l)) = best.get(r.gene_id.as_str()) {
+            r.qry_locus = l.clone();
+        }
+    }
 }
 
 /// Slim read of a finished query: just the display name and the

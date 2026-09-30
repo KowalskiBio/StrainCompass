@@ -300,9 +300,9 @@ pub async fn export_table(
                 ApiError::BadRequest("This run has no gene panel results.".into())
             })?;
             rows.retain(|r| match &q.search {
-                Some(s) if !s.trim().is_empty() => {
-                    r.gene_id.to_lowercase().contains(&s.trim().to_lowercase())
-                }
+                Some(s) if !s.trim().is_empty() => format!("{} {}", r.gene_id, r.qry_locus)
+                    .to_lowercase()
+                    .contains(&s.trim().to_lowercase()),
                 _ => true,
             });
             let mut lines = vec![join(
@@ -313,6 +313,7 @@ pub async fn export_table(
                     "identity".into(),
                     "best_evalue".into(),
                     "call".into(),
+                    "qry_locus".into(),
                 ],
                 sep,
             )];
@@ -325,6 +326,7 @@ pub async fn export_table(
                         fmt_num(r.identity),
                         r.best_evalue.clone(),
                         r.call.as_str().to_string(),
+                        r.qry_locus.clone(),
                     ],
                     sep,
                 ));
@@ -405,7 +407,7 @@ fn join(fields: &[String], sep: &str) -> String {
 }
 
 fn filter_row(r: &GeneCoverageRow, q: &TableQuery) -> bool {
-    let text = format!("{} {} {}", r.locus_tag, r.symbol, r.seqid);
+    let text = format!("{} {} {} {}", r.locus_tag, r.symbol, r.seqid, r.qry_loci);
     let search_ok = match &q.search {
         Some(s) if !s.trim().is_empty() => text.to_lowercase().contains(&s.trim().to_lowercase()),
         _ => true,
@@ -443,6 +445,7 @@ fn sort_coverage(rows: &mut [GeneCoverageRow], q: &TableQuery) {
                 .unwrap_or(std::cmp::Ordering::Equal),
             "mismatches" => a.mismatches.cmp(&b.mismatches),
             "indels" => a.indels.cmp(&b.indels),
+            "qry_loci" => a.qry_loci.cmp(&b.qry_loci),
             _ => std::cmp::Ordering::Equal,
         };
         if asc {
@@ -468,6 +471,7 @@ const COVERAGE_ALL_COLS: &[(&str, &str)] = &[
     ("best_identity", "Best identity %"),
     ("mismatches", "Mismatches"),
     ("indels", "Indels"),
+    ("qry_loci", "Query contig"),
 ];
 
 fn coverage_cols(cols: &Option<String>) -> Vec<String> {
@@ -516,6 +520,7 @@ fn coverage_line(r: &GeneCoverageRow, cols: &[String], sep: &str) -> String {
             "best_identity" => fmt_num(r.best_identity),
             "mismatches" => r.mismatches.to_string(),
             "indels" => r.indels.to_string(),
+            "qry_loci" => r.qry_loci.clone(),
             _ => String::new(),
         })
         .collect();

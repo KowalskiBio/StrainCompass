@@ -9,7 +9,7 @@ mod models;
 mod state;
 
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{get, post, put};
 use axum::Router;
 use state::{AppState, SharedState};
 use std::sync::{Arc, Mutex};
@@ -30,7 +30,7 @@ fn routes() -> Router<SharedState> {
         .route("/projects/{id}/files", get(routes::uploads::list_files))
         .route(
             "/projects/{id}/files/{file_id}",
-            delete(routes::uploads::delete_file),
+            get(routes::uploads::download_file).delete(routes::uploads::delete_file),
         )
         .route(
             "/projects/{id}/reference",

@@ -278,15 +278,19 @@ export const api = {
       { method: "POST", body: form },
     );
   },
-  buildPanelFromText: (projectId: number, text: string) =>
+  /** `append` adds the genes to the current panel instead of replacing it. */
+  buildPanelFromText: (projectId: number, text: string, append = false) =>
     request<{ file: ProjectFile; found: string[]; from_ncbi: string[]; missing: string[] }>(
-      `/projects/${projectId}/panel/from_text`,
+      `/projects/${projectId}/panel/from_text${append ? "?append=true" : ""}`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ text }),
       },
     ),
+  /** The uploaded file exactly as it was stored, as a download. */
+  fileDownloadUrl: (projectId: number, fileId: number) =>
+    `${BASE}/projects/${projectId}/files/${fileId}`,
   deleteFile: (projectId: number, fileId: number) =>
     request<void>(`/projects/${projectId}/files/${fileId}`, {
       method: "DELETE",

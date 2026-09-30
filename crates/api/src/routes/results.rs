@@ -59,7 +59,10 @@ fn call_filter_ok(call: Call, filter: &Option<String>) -> bool {
 }
 
 fn row_str(row: &GeneCoverageRow) -> String {
-    format!("{} {} {}", row.locus_tag, row.symbol, row.seqid)
+    format!(
+        "{} {} {} {}",
+        row.locus_tag, row.symbol, row.seqid, row.qry_loci
+    )
 }
 
 fn sort_rows(rows: &mut [GeneCoverageRow], by: &Option<String>, dir: &Option<String>) {
@@ -86,6 +89,7 @@ fn sort_rows(rows: &mut [GeneCoverageRow], by: &Option<String>, dir: &Option<Str
                 .unwrap_or(std::cmp::Ordering::Equal),
             "mismatches" => a.mismatches.cmp(&b.mismatches),
             "indels" => a.indels.cmp(&b.indels),
+            "qry_loci" => a.qry_loci.cmp(&b.qry_loci),
             _ => std::cmp::Ordering::Equal,
         };
         if asc {
@@ -494,7 +498,10 @@ pub async fn panel_recheck(
     let mut rows = res.panel.ok_or_else(|| {
         ApiError::BadRequest("This run has no gene panel results (no panel was provided).".into())
     })?;
-    rows.retain(|r| matches_search(&r.gene_id, &q.search) && call_filter_ok(r.call, &q.call));
+    rows.retain(|r| {
+        matches_search(&format!("{} {}", r.gene_id, r.qry_locus), &q.search)
+            && call_filter_ok(r.call, &q.call)
+    });
     let asc = q.sort_dir.as_deref() != Some("desc");
     let by = q.sort_by.clone().unwrap_or_default();
     rows.sort_by(|a, b| {
@@ -510,6 +517,7 @@ pub async fn panel_recheck(
                 .partial_cmp(&b.identity)
                 .unwrap_or(std::cmp::Ordering::Equal),
             "call" => a.call.as_str().cmp(b.call.as_str()),
+            "qry_locus" => a.qry_locus.cmp(&b.qry_locus),
             _ => a.gene_id.cmp(&b.gene_id),
         };
         if asc {

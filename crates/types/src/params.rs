@@ -76,7 +76,7 @@ impl Default for RunParams {
         Self {
             min_gap: 200,
             present_cov: 95.0,
-            partial_cov: 1.0,
+            partial_cov: 0.0,
             blast_cov: 90.0,
             blast_pid: 90.0,
             blast_evalue: 1e-10,
@@ -162,10 +162,10 @@ pub fn param_schema() -> Vec<ParamSpec> {
         ParamSpec {
             name: "partial_cov".into(),
             label: "Partial above coverage %".into(),
-            help: "A gene is PARTIAL when its coverage is above this % but below the present threshold. Below it, the gene is reported as absent.".into(),
+            help: "A gene is PARTIAL when its coverage is above this % but below the present threshold. Below it, the gene is reported as absent. 0 = any aligned base makes it PARTIAL, as in the R pipeline.".into(),
             layer: ParamLayer::Postprocess,
             kind: ParamKind::Float {
-                default: 1.0,
+                default: 0.0,
                 min: 0.0,
                 max: 100.0,
             },

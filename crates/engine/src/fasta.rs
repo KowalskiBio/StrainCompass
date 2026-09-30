@@ -113,6 +113,21 @@ pub fn sanitize_id(raw: &str) -> String {
     out
 }
 
+/// The id the R pipeline gives a record: a description that starts with
+/// `#` is glued on with `_` (`>LM259 #1` -> `LM259_1`), anything else
+/// after the first word is dropped. Without this, assemblies whose
+/// headers differ only in the `#N` part all collapse to `LM259` and get
+/// renumbered by the collision counter, off by one from R's contig names.
+fn r_style_id(rec: &FastaRecord) -> String {
+    match rec.desc.strip_prefix('#') {
+        Some(rest) => {
+            let tail = rest.split_whitespace().next().unwrap_or("");
+            format!("{}_{}", rec.id, tail)
+        }
+        None => rec.id.clone(),
+    }
+}
+
 /// Write a sanitized copy of the input FASTA: safe unique ids, uppercase
 /// sequences, no description. Returns (records, map sanitized -> original).
 pub fn write_sanitized_fasta<P: AsRef<Path>>(
@@ -124,7 +139,7 @@ pub fn write_sanitized_fasta<P: AsRef<Path>>(
     let file = std::fs::File::create(dest.as_ref())?;
     let mut w = BufWriter::new(file);
     for rec in source {
-        let mut id = sanitize_id(&rec.id);
+        let mut id = sanitize_id(&r_style_id(rec));
         let n = used.entry(id.clone()).or_insert(0);
         if *n > 0 {
             id = format!("{id}_{n}");
