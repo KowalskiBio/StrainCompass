@@ -13,7 +13,7 @@ use straincompass_types::{
     TableQuery, WgaData, WgaQuery,
 };
 
-fn resolve_query_id(
+pub(crate) fn resolve_query_id(
     state: &SharedState,
     run_id: i64,
     query_id: Option<i64>,
@@ -40,7 +40,7 @@ fn resolve_query_id(
     Ok((project_id, run_id, qid))
 }
 
-fn matches_search(row_text: &str, search: &Option<String>) -> bool {
+pub(crate) fn matches_search(row_text: &str, search: &Option<String>) -> bool {
     match search {
         Some(s) if !s.trim().is_empty() => {
             row_text.to_lowercase().contains(&s.trim().to_lowercase())
@@ -116,7 +116,7 @@ pub async fn genes_coverage(
     Ok(Json(Page { rows: page, total }))
 }
 
-fn apply_page<T: Clone>(rows: &[T], page: u64, page_size: u64) -> Vec<T> {
+pub(crate) fn apply_page<T: Clone>(rows: &[T], page: u64, page_size: u64) -> Vec<T> {
     let page_size = page_size.clamp(1, 1000);
     let start = (page * page_size) as usize;
     rows.iter()
@@ -330,7 +330,7 @@ pub(crate) fn gained_region_ctx(
 
 /// Run one blocking gained examination (back-check or identification)
 /// under a cpu slot, in a per-call scratch dir that is cleaned up after.
-async fn gained_examine<T, F>(
+pub(crate) async fn gained_examine<T, F>(
     state: &SharedState,
     project_id: i64,
     run_id: i64,

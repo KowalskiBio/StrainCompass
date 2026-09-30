@@ -12,6 +12,7 @@ import {
 import { FilesPanel, NcbiNamingBadge, RunDrawer } from "../components/RunDrawer";
 import { InputWizard } from "../components/InputWizard";
 import { ResultsTables, type TableKind } from "../components/ResultsTables";
+import { PanelGeneDialog } from "../components/PanelGeneDialog";
 import { GenomeView } from "../components/GenomeView";
 import { AlignmentView } from "../components/AlignmentView";
 import { GeneMsaDialog } from "../components/GeneMsaDialog";
@@ -43,6 +44,8 @@ export default function ProjectPage() {
   const genomeMode = (params.get("gv") as GenomeMode) ?? "strain";
   const runId = params.get("run") ? Number(params.get("run")) : null;
   const gene = params.get("gene");
+  const panelGene = params.get("pgene");
+  const panelGeneQuery = params.get("pgq") ? Number(params.get("pgq")) : undefined;
 
   // Applies every key in `updates` to the URL in one history entry. Calling
   // setParams multiple times in a row (once per key) is unsafe: each call
@@ -288,6 +291,9 @@ export default function ProjectPage() {
               });
             }}
             onOpenGene={(locus) => setParam("gene", locus)}
+            onOpenPanelGene={(g, q) =>
+              setParams2({ pgene: g, pgq: q !== undefined ? String(q) : null })
+            }
           />
         )}
         {tab === "genome" && selectedRun && (
@@ -397,6 +403,15 @@ export default function ProjectPage() {
         run={selectedRun}
         onDone={() => setTableRefresh((n) => n + 1)}
       />
+
+      {selectedRun && (
+        <PanelGeneDialog
+          run={selectedRun}
+          geneId={panelGene}
+          initialQueryId={panelGeneQuery}
+          onClose={() => setParams2({ pgene: null, pgq: null })}
+        />
+      )}
 
       <GeneMsaDialog
         runId={selectedRun?.id ?? 0}

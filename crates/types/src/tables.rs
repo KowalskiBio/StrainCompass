@@ -361,6 +361,117 @@ pub struct MatrixRow {
     pub cov_pcts: Vec<f64>,
 }
 
+/// One panel gene across all queries of a run.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PanelMatrixRow {
+    pub gene_id: String,
+    pub qlen: u64,
+    /// One entry per query, same order as the run's query list.
+    pub calls: Vec<Call>,
+    pub cov_pcts: Vec<f64>,
+    pub identities: Vec<f64>,
+    pub loci: Vec<String>,
+}
+
+/// One query contig and how much of it aligns to the reference.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ContigStat {
+    pub seqid: String,
+    pub length: u64,
+    pub aligned_bp: u64,
+}
+
+/// A predicted gene near a panel hit, taken from the gained region ORFs.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ContextGene {
+    /// Query contig coordinates, 1-based inclusive.
+    pub start: u64,
+    pub end: u64,
+    pub strand: i8,
+    /// Reference-given name, else the NCBI-given one, else empty (novel).
+    pub label: String,
+    /// "reference", "ncbi" or "" when unnamed.
+    pub source: String,
+    /// Bases between this gene and the panel hit; 0 when they overlap.
+    pub distance: u64,
+    /// The gene overlaps the panel hit itself.
+    pub is_hit: bool,
+    /// The name points at a mobile element (transposase, resolvase,
+    /// integrase, plasmid replication...).
+    pub mobile: bool,
+    pub partial: bool,
+}
+
+/// Where a panel gene sits in one query genome.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PanelContext {
+    pub query_id: i64,
+    pub query_name: String,
+    pub gene_id: String,
+    pub call: Call,
+    pub cov_pct: f64,
+    pub identity: f64,
+    /// The hit, empty contig when the gene was not found.
+    pub contig: Option<ContigStat>,
+    pub hit_start: u64,
+    pub hit_end: u64,
+    pub hit_strand: i8,
+    pub n_contigs: usize,
+    pub genome_bp: u64,
+    /// The gained region (query stretch with no reference alignment)
+    /// containing the hit, if any.
+    pub region: Option<GainedRow>,
+    /// Predicted genes within the context window, in contig order.
+    pub genes: Vec<ContextGene>,
+    /// Half-width of the window `genes` covers, bp.
+    pub window: u64,
+    /// "plasmid", "chromosome_insertion", "chromosome_shared",
+    /// "unplaced" or "not_found".
+    pub verdict: String,
+    /// The plain language verdict with the numbers behind it.
+    pub verdict_text: String,
+    /// Names of the mobile-element genes near the hit.
+    pub mobile_markers: Vec<String>,
+    /// Why `genes` is empty although the hit is in a gained region
+    /// (the gene finder did not run), empty otherwise.
+    #[serde(default)]
+    pub genes_note: String,
+}
+
+/// How much of an element one query genome holds.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ElementHit {
+    pub query_id: i64,
+    pub query_name: String,
+    /// The query's panel call for the gene, when the run has a panel.
+    pub call: Option<Call>,
+    pub covered_bp: u64,
+    pub covered_pct: f64,
+    /// Separate stretches of the element found (after merging).
+    pub pieces: usize,
+    pub largest_piece: u64,
+    /// Identity over the matched bases, length-weighted, percent.
+    pub identity: f64,
+    /// Query contigs the element matched, most matched bases first.
+    pub contigs: Vec<String>,
+    pub genome_bp: u64,
+}
+
+/// A whole-element comparison across the queries of a run.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ElementReport {
+    pub gene_id: String,
+    pub source_query_id: i64,
+    /// "contig" (the contig carrying the gene) or "accession".
+    pub element_kind: String,
+    /// The contig name or the accession.
+    pub element_name: String,
+    /// NCBI title for an accession, empty for a contig.
+    pub element_title: String,
+    pub element_len: u64,
+    pub hits: Vec<ElementHit>,
+}
+
 /// Alignment block on the reference, for the genome viewer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WgaBlock {

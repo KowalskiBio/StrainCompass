@@ -8,8 +8,11 @@ import type {
   GainedVerify,
   GeneCoverageRow,
   IdentifiedOrf,
+  ElementReport,
   MatrixRow,
   Page,
+  PanelContext,
+  PanelMatrixRow,
   PanelRow,
   Project,
   ProjectFile,
@@ -149,6 +152,22 @@ function alignmentCached(runId: number): Promise<AlignmentData> {
   while (alignmentCache.size > ALIGNMENT_CACHE_MAX) {
     const oldest = alignmentCache.keys().next().value!;
     alignmentCache.delete(oldest);
+  }
+  return p;
+}
+
+/** A panel gene's surroundings and its element comparisons are immutable
+ * for a finished run; the comparison costs a blast search per strain, so
+ * each is fetched once per session and repeated opens share the promise. */
+const panelContextCache = new Map<string, Promise<PanelContext>>();
+const panelElementCache = new Map<string, Promise<ElementReport>>();
+
+function cached<T>(cache: Map<string, Promise<T>>, key: string, load: () => Promise<T>): Promise<T> {
+  let p = cache.get(key);
+  if (!p) {
+    p = load();
+    p.catch(() => cache.delete(key));
+    cache.set(key, p);
   }
   return p;
 }
@@ -331,6 +350,29 @@ export const api = {
   gainedAll,
   panelRecheck: (runId: number, q: TableQuery) =>
     request<Page<PanelRow>>(`/runs/${runId}/panel_recheck${qs(q)}`),
+  panelMatrix: (runId: number, q: TableQuery) =>
+    request<Page<PanelMatrixRow>>(`/runs/${runId}/panel_matrix${qs(q)}`),
+  panelContext: (runId: number, queryId: number, geneId: string) =>
+    cached(panelContextCache, `${runId}:${queryId}:${geneId}`, () =>
+      request<PanelContext>(
+        `/runs/${runId}/panel_context?query_id=${queryId}&gene_id=${encodeURIComponent(geneId)}`,
+      ),
+    ),
+  panelElement: (runId: number, geneId: string, sourceQueryId: number, accession?: string) =>
+    cached(
+      panelElementCache,
+      `${runId}:${geneId}:${sourceQueryId}:${accession ?? ""}`,
+      () =>
+        request<ElementReport>(`/runs/${runId}/panel_element`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            gene_id: geneId,
+            source_query_id: sourceQueryId,
+            accession: accession || undefined,
+          }),
+        }),
+    ),
   matrix: (runId: number, q: TableQuery) =>
     request<Page<MatrixRow>>(`/runs/${runId}/matrix${qs(q)}`),
   wga: (runId: number) => request<WgaData>(`/runs/${runId}/wga`),

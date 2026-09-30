@@ -98,6 +98,18 @@ fn routes() -> Router<SharedState> {
             get(routes::results::panel_recheck),
         )
         .route("/runs/{id}/matrix", get(routes::results::matrix))
+        .route(
+            "/runs/{id}/panel_matrix",
+            get(routes::element::panel_matrix),
+        )
+        .route(
+            "/runs/{id}/panel_context",
+            get(routes::element::panel_context),
+        )
+        .route(
+            "/runs/{id}/panel_element",
+            post(routes::element::panel_element),
+        )
         .route("/runs/{id}/wga", get(routes::results::wga))
         .route("/runs/{id}/alignment", get(routes::results::alignment))
         .route("/runs/{id}/refseq", get(routes::results::refseq))
@@ -238,6 +250,7 @@ async fn main() {
 }
 
 mod routes {
+    pub mod element;
     pub mod export;
     pub mod nblast;
     pub mod ncbi;

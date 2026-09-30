@@ -15,6 +15,7 @@ import type {
   MatrixRow,
   OrfMatch,
   Page,
+  PanelMatrixRow,
   PanelRow,
   Run,
   TableQuery,
@@ -27,10 +28,11 @@ export type TableKind =
   | "unaligned_gaps"
   | "gained"
   | "panel_recheck"
+  | "panel_matrix"
   | "matrix";
 
 /** Every row shape the table can render. */
-type AnyRow = GapRow | GeneCoverageRow | PanelRow | MatrixRow | GainedRow;
+type AnyRow = GapRow | GeneCoverageRow | PanelRow | PanelMatrixRow | MatrixRow | GainedRow;
 
 /** Stable identity of a gained region within one query's table. */
 function gainedKey(row: GainedRow): string {
@@ -119,15 +121,18 @@ export function ResultsTables({
   initialQueryId,
   onStateChange,
   onOpenGene,
+  onOpenPanelGene,
 }: {
   run: Run;
   initialTable: TableKind;
   initialQueryId: number | undefined;
   onStateChange: (table: TableKind, queryId: number | undefined) => void;
   onOpenGene: (locus: string) => void;
+  /** A panel gene row was clicked; the query is the one the row belongs to. */
+  onOpenPanelGene: (geneId: string, queryId: number | undefined) => void;
 }) {
   const safeInitialTable: TableKind =
-    (initialTable === "panel_recheck" && !run.has_panel) ||
+    ((initialTable === "panel_recheck" || initialTable === "panel_matrix") && !run.has_panel) ||
     (initialTable === "gained" && !run.has_gained)
       ? "genes_coverage"
       : initialTable;
@@ -205,6 +210,16 @@ export function ResultsTables({
     if (table === "unaligned_gaps") return GAP_COLUMNS;
     if (table === "gained") return GAINED_COLUMNS;
     if (table === "panel_recheck") return PANEL_COLUMNS;
+    if (table === "panel_matrix")
+      return [
+        { key: "gene_id", label: "Gene", width: 150 },
+        { key: "qlen", label: "Length", numeric: true, width: 90 },
+        ...run.queries.map((q) => ({
+          key: `q_${q.file_id}`,
+          label: q.name,
+          width: 140,
+        })),
+      ];
     // matrix: fixed columns + one per query
     return [
       { key: "locus_tag", label: "Locus tag", width: 150 },
@@ -251,6 +266,7 @@ export function ResultsTables({
       if (table === "unaligned_gaps") return api.unalignedGaps(run.id, q);
       if (table === "gained") return api.gained(run.id, q);
       if (table === "panel_recheck") return api.panelRecheck(run.id, q);
+      if (table === "panel_matrix") return api.panelMatrix(run.id, q);
       return api.matrix(run.id, q);
     }
 
@@ -380,9 +396,11 @@ export function ResultsTables({
             .map(([k, label]) => (
             <button
               key={k}
-              onClick={() => setTable(k)}
+              onClick={() =>
+                setTable(k === "panel_recheck" && table === "panel_matrix" ? table : k)
+              }
               className={`px-4 text-[15px] font-medium transition-colors ${
-                table === k
+                table === k || (k === "panel_recheck" && table === "panel_matrix")
                   ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
                   : "bg-white text-zinc-600 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
               }`}
@@ -394,13 +412,26 @@ export function ResultsTables({
 
         {(table === "genes_coverage" ||
           table === "panel_recheck" ||
+          table === "panel_matrix" ||
           table === "gained") &&
           run.queries.length > 1 && (
             <select
-              value={queryId ?? ""}
-              onChange={(e) => setQueryId(Number(e.target.value) || undefined)}
+              value={table === "panel_matrix" ? "all" : (queryId ?? "")}
+              onChange={(e) => {
+                // the panel's "All strains" is its own table: one row per
+                // gene, one column per strain
+                if (e.target.value === "all") {
+                  setTable("panel_matrix");
+                  return;
+                }
+                if (table === "panel_matrix") setTable("panel_recheck");
+                setQueryId(Number(e.target.value) || undefined);
+              }}
               className="h-11 px-3 rounded-lg border border-zinc-300 bg-white text-[15px] dark:border-zinc-700 dark:bg-zinc-900"
             >
+              {(table === "panel_recheck" || table === "panel_matrix") && (
+                <option value="all">All strains</option>
+              )}
               {run.queries.map((q) => (
                 <option key={q.file_id} value={q.file_id}>
                   {q.name}
@@ -461,7 +492,7 @@ export function ResultsTables({
           </div>
         )}
 
-        {table === "matrix" && run.queries.length > 1 && (
+        {(table === "matrix" || table === "panel_matrix") && run.queries.length > 1 && (
           <div className="flex rounded-lg border border-zinc-300 overflow-hidden h-11 dark:border-zinc-700">
             {[
               ["", "All genes"],
@@ -488,7 +519,9 @@ export function ResultsTables({
           onChange={setHiddenForTable}
         />
 
-        <ExportButton run={run} table={table} query={query} />
+        {table !== "panel_matrix" && (
+          <ExportButton run={run} table={table} query={query} />
+        )}
 
         {loading && <Spinner className="text-zinc-400" />}
       </div>
@@ -508,6 +541,9 @@ export function ResultsTables({
           onSort={toggleSort}
           onPinGene={setPinnedGene}
           onOpenGene={onOpenGene}
+          onOpenPanelGene={(g) =>
+            onOpenPanelGene(g, table === "panel_recheck" ? (queryId ?? run.queries[0]?.file_id) : undefined)
+          }
           run={run}
           colWidths={colWidths}
           onResizeColumn={resizeColumn}
@@ -591,6 +627,7 @@ function VirtualTable({
   onSort,
   onPinGene,
   onOpenGene,
+  onOpenPanelGene,
   run,
   colWidths,
   onResizeColumn,
@@ -604,6 +641,7 @@ function VirtualTable({
   onSort: (key: string) => void;
   onPinGene: React.Dispatch<React.SetStateAction<string | null>>;
   onOpenGene: (locus: string) => void;
+  onOpenPanelGene: (geneId: string) => void;
   run: Run;
   colWidths: Record<string, number>;
   onResizeColumn: (key: string, width: number) => void;
@@ -712,7 +750,14 @@ function VirtualTable({
               key={v.key}
               className={`flex items-center border-b border-zinc-100 text-[15px] dark:border-zinc-800 ${
                 v.index % 2 ? "bg-zinc-50/60 dark:bg-zinc-800/30" : "bg-white dark:bg-zinc-900"
-              } hover:bg-blue-50/50 dark:hover:bg-blue-950/30`}
+              } hover:bg-blue-50/50 dark:hover:bg-blue-950/30 ${
+                table === "genes_coverage" ||
+                table === "matrix" ||
+                table === "panel_recheck" ||
+                table === "panel_matrix"
+                  ? "cursor-pointer"
+                  : ""
+              }`}
               style={{
                 position: "absolute",
                 top: v.start,
@@ -738,6 +783,8 @@ function VirtualTable({
                 if (table === "genes_coverage" || table === "matrix") {
                   const locus = row["locus_tag"] as string;
                   if (locus) onOpenGene(locus);
+                } else if (table === "panel_recheck" || table === "panel_matrix") {
+                  onOpenPanelGene(row["gene_id"] as string);
                 }
               }}
             >
@@ -936,6 +983,19 @@ function Cell({
         )}
       </span>
     );
+  }
+  if (col.startsWith("q_") && table === "panel_matrix") {
+    const idx = run.queries.findIndex((q) => `q_${q.file_id}` === col);
+    const r = row as unknown as PanelMatrixRow;
+    if (idx >= 0 && r.calls) {
+      return (
+        <span
+          title={`Coverage ${r.cov_pcts[idx]?.toFixed(1) ?? 0}%, identity ${r.identities[idx]?.toFixed(1) ?? 0}%${r.loci[idx] ? `, ${r.loci[idx]}` : ""}`}
+        >
+          <CallBadge call={r.calls[idx]} />
+        </span>
+      );
+    }
   }
   if (col.startsWith("q_") && table === "matrix") {
     const idx = run.queries.findIndex((q) => `q_${q.file_id}` === col);

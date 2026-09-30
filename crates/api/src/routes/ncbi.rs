@@ -352,24 +352,21 @@ pub struct AccessionSpec {
 
 fn looks_like_accession(s: &str) -> bool {
     let core = s.split('.').next().unwrap_or(s);
-    // "NG_076629" / "NZ_JAARYM010000001" style (prefix + digits)
+    // "L28104" / "CP038643" / WGS "DBJORO010000002" style: 1-6 letters
+    // then digits
+    let plain = |c: &str| {
+        let letters = c.chars().take_while(|c| c.is_ascii_uppercase()).count();
+        let rest = &c[letters..];
+        (1..=6).contains(&letters) && rest.len() >= 5 && rest.chars().all(|c| c.is_ascii_digit())
+    };
+    // RefSeq "NG_076629" / "NZ_CP168866" / "NZ_JAARYM010000001": a
+    // two-letter prefix, then digits or a plain accession
     if let Some((pfx, num)) = core.split_once('_') {
-        return !pfx.is_empty()
-            && pfx.len() <= 2
+        return pfx.len() == 2
             && pfx.chars().all(|c| c.is_ascii_uppercase())
-            && num.len() >= 5
-            && num.chars().all(|c| c.is_ascii_digit());
+            && ((num.len() >= 5 && num.chars().all(|c| c.is_ascii_digit())) || plain(num));
     }
-    // "L28104" / "HF565366" / "CP038643" style (letters then digits)
-    let letters: String = core
-        .chars()
-        .take_while(|c| c.is_ascii_uppercase())
-        .collect();
-    let rest = &core[letters.len()..];
-    !letters.is_empty()
-        && letters.len() <= 2
-        && rest.len() >= 5
-        && rest.chars().all(|c| c.is_ascii_digit())
+    plain(core)
 }
 
 /// Recognize "name (ACC)", "name (ACC:start-end [rev])" or a bare "ACC"
@@ -622,4 +619,74 @@ fn gunzip(data: &[u8]) -> ApiResult<Vec<u8>> {
         ApiError::BadRequest("The downloaded genome file could not be unpacked.".into())
     })?;
     Ok(out)
+}
+
+/// Largest record `fetch_record` accepts: bigger than any plasmid, far
+/// smaller than a chromosome worth comparing this way.
+pub const MAX_RECORD_BP: usize = 1_000_000;
+
+/// Fetch one whole nucleotide record (e.g. a complete plasmid) by
+/// accession: (title, uppercase sequence).
+pub async fn fetch_record(accession: &str, api_key: Option<&str>) -> ApiResult<(String, Vec<u8>)> {
+    let acc = accession.trim();
+    if !looks_like_accession(acc) {
+        return Err(ApiError::BadRequest(format!(
+            "\u{201c}{acc}\u{201d} is not a GenBank accession. Use the accession of a complete record, e.g. NZ_CP168866.1."
+        )));
+    }
+    let mut url = format!(
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id={acc}&rettype=fasta&retmode=text"
+    );
+    if let Some(k) = api_key {
+        url.push_str(&format!("&api_key={k}"));
+    }
+    let bytes = download(&client(), &url).await?;
+    let text = String::from_utf8_lossy(&bytes);
+    let mut lines = text.lines();
+    let title = match lines.next() {
+        Some(h) if h.starts_with('>') => h[1..].trim().to_string(),
+        _ => {
+            return Err(ApiError::BadRequest(format!(
+                "NCBI has no nucleotide record {acc}."
+            )))
+        }
+    };
+    let seq: Vec<u8> = lines
+        .take_while(|l| !l.starts_with('>'))
+        .flat_map(|l| l.trim().bytes())
+        .map(|b| b.to_ascii_uppercase())
+        .collect();
+    if seq.len() > MAX_RECORD_BP {
+        return Err(ApiError::BadRequest(format!(
+            "{acc} is {} bp long; only records up to 1 Mb (plasmids, transposons) can be compared this way.",
+            seq.len()
+        )));
+    }
+    if seq.is_empty() {
+        return Err(ApiError::BadRequest(format!(
+            "NCBI returned no sequence for {acc}."
+        )));
+    }
+    Ok((title, seq))
+}
+
+#[cfg(test)]
+mod accession_tests {
+    use super::looks_like_accession;
+
+    #[test]
+    fn accepts_genbank_refseq_and_wgs_accessions() {
+        for a in ["L28104.1", "CP038643.1", "HF565366", "NG_076629.1", "NZ_CP168866.1",
+                  "NZ_DBJORO010000002.1", "DBJORO010000002.1", "NC_003210.1"] {
+            assert!(looks_like_accession(a), "{a}");
+        }
+    }
+
+    #[test]
+    fn rejects_gene_names_and_locus_tags() {
+        for a in ["emrC", "lmo0444", "LM4B_02324", "LM6179_RS03640", "ACTATD_RS15010",
+                  "ACCESSION", "inlA", "lm4b_02329", ""] {
+            assert!(!looks_like_accession(a), "{a}");
+        }
+    }
 }

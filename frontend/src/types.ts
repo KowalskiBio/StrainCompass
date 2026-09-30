@@ -250,6 +250,85 @@ export interface PanelRow {
   qry_locus: string;
 }
 
+/** One panel gene across all queries of a run. */
+export interface PanelMatrixRow {
+  gene_id: string;
+  qlen: number;
+  /** One entry per query, in the run's query order. */
+  calls: Call[];
+  cov_pcts: number[];
+  identities: number[];
+  loci: string[];
+}
+
+export interface ContigStat {
+  seqid: string;
+  length: number;
+  aligned_bp: number;
+}
+
+/** A predicted gene near a panel hit (from the gained region ORFs). */
+export interface ContextGene {
+  start: number;
+  end: number;
+  strand: number;
+  label: string;
+  /** "reference", "ncbi" or "" when unnamed. */
+  source: string;
+  distance: number;
+  is_hit: boolean;
+  mobile: boolean;
+  partial: boolean;
+}
+
+/** Where a panel gene sits in one query genome. */
+export interface PanelContext {
+  query_id: number;
+  query_name: string;
+  gene_id: string;
+  call: Call;
+  cov_pct: number;
+  identity: number;
+  contig: ContigStat | null;
+  hit_start: number;
+  hit_end: number;
+  hit_strand: number;
+  n_contigs: number;
+  genome_bp: number;
+  region: GainedRow | null;
+  genes: ContextGene[];
+  window: number;
+  verdict: "plasmid" | "chromosome_insertion" | "chromosome_shared" | "unplaced" | "not_found";
+  verdict_text: string;
+  mobile_markers: string[];
+  /** Why `genes` is empty in a gained region (gene finder did not run). */
+  genes_note: string;
+}
+
+export interface ElementHit {
+  query_id: number;
+  query_name: string;
+  call: Call | null;
+  covered_bp: number;
+  covered_pct: number;
+  pieces: number;
+  largest_piece: number;
+  identity: number;
+  contigs: string[];
+  genome_bp: number;
+}
+
+/** How much of the element carrying a panel gene each query holds. */
+export interface ElementReport {
+  gene_id: string;
+  source_query_id: number;
+  element_kind: "contig" | "accession";
+  element_name: string;
+  element_title: string;
+  element_len: number;
+  hits: ElementHit[];
+}
+
 export interface MatrixRow {
   locus_tag: string;
   symbol: string;
