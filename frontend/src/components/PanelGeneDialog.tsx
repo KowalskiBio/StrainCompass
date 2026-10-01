@@ -205,18 +205,25 @@ function WhereItSits({
             </dl>
           )}
 
-          {ctx.contig && ctx.region && (
+          {ctx.contig && (
             <div>
-              <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+              <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                 Genes within {fmtBp(ctx.window)} of the hit
+              </p>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-2">
+                Where this strain matches the reference, the reference{"\u2019"}s own genes are
+                shown at their aligned place. In stretches the reference lacks, genes are predicted
+                and named by similarity.
               </p>
               {ctx.genes.length > 0 ? (
                 <ContextGenes ctx={ctx} />
               ) : (
                 <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                  {ctx.genes_note ||
-                    "No genes were predicted around the hit. Genes are predicted and named only inside gained regions."}
+                  No genes were found around the hit.
                 </p>
+              )}
+              {ctx.genes_note && (
+                <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{ctx.genes_note}</p>
               )}
             </div>
           )}
@@ -249,6 +256,13 @@ function AlignedBar({ pct }: { pct: number }) {
   );
 }
 
+const SOURCE_LABEL: Record<string, string> = {
+  annotation: "reference annotation",
+  reference: "predicted, like a reference gene",
+  ncbi: "predicted, named by NCBI",
+  "": "predicted, unnamed",
+};
+
 function ContextGenes({ ctx }: { ctx: PanelContext }) {
   return (
     <div className="border border-zinc-200 rounded-lg overflow-hidden dark:border-zinc-800">
@@ -257,13 +271,14 @@ function ContextGenes({ ctx }: { ctx: PanelContext }) {
           <tr>
             <th className="text-left font-medium px-3 py-2">Position</th>
             <th className="text-left font-medium px-3 py-2">Name</th>
+            <th className="text-left font-medium px-3 py-2">Source</th>
             <th className="text-right font-medium px-3 py-2">Distance</th>
           </tr>
         </thead>
         <tbody>
           {ctx.genes.map((g) => (
             <tr
-              key={`${g.start}-${g.end}`}
+              key={`${g.source}:${g.locus_tag}:${g.start}-${g.end}`}
               className={`border-t border-zinc-100 dark:border-zinc-800 ${
                 g.is_hit ? "bg-emerald-50/60 dark:bg-emerald-950/20" : ""
               }`}
@@ -271,23 +286,33 @@ function ContextGenes({ ctx }: { ctx: PanelContext }) {
               <td className="px-3 py-1.5 font-mono tabular-nums whitespace-nowrap">
                 {g.start.toLocaleString("en-US")}-{g.end.toLocaleString("en-US")} ({g.strand < 0 ? "-" : "+"})
               </td>
-              <td className="px-3 py-1.5">
-                <span className="inline-flex items-center gap-2 flex-wrap">
-                  {g.label || <span className="text-zinc-400 dark:text-zinc-500">unnamed</span>}
-                  {g.is_hit && (
-                    <span className="px-1.5 py-0.5 rounded text-xs bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
+              <td className="px-3 py-1.5 leading-6">
+                {g.label ||
+                  (!g.locus_tag && <span className="text-zinc-400 dark:text-zinc-500">unnamed</span>)}
+                {g.locus_tag && g.locus_tag !== g.label && (
+                  <> <span className="font-mono text-xs text-zinc-500 dark:text-zinc-400">{g.locus_tag}</span></>
+                )}
+                {g.is_hit && (
+                  <> <span className="inline-block px-1.5 rounded text-xs bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
                       {ctx.gene_id}
-                    </span>
-                  )}
-                  {g.mobile && (
-                    <span className="px-1.5 py-0.5 rounded text-xs bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300">
+                    </span></>
+                )}
+                {g.mobile && (
+                  <> <span className="inline-block px-1.5 rounded text-xs bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300">
                       mobile element
-                    </span>
-                  )}
-                  {g.partial && (
-                    <span className="text-xs text-zinc-400 dark:text-zinc-500">partial</span>
-                  )}
-                </span>
+                    </span></>
+                )}
+                {g.partial && (
+                  <> <span
+                      className="text-xs text-zinc-400 dark:text-zinc-500"
+                      title="Only part of this gene is here: it runs past the edge of the aligned stretch or of the region the gene was predicted in."
+                    >
+                      (partial)
+                    </span></>
+                )}
+              </td>
+              <td className="px-3 py-1.5 text-xs text-zinc-500 whitespace-nowrap dark:text-zinc-400">
+                {SOURCE_LABEL[g.source] ?? g.source}
               </td>
               <td className="px-3 py-1.5 text-right tabular-nums text-zinc-500 dark:text-zinc-400">
                 {g.is_hit ? "" : fmtBp(g.distance)}

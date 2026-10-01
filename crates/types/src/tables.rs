@@ -390,8 +390,14 @@ pub struct ContextGene {
     pub strand: i8,
     /// Reference-given name, else the NCBI-given one, else empty (novel).
     pub label: String,
-    /// "reference", "ncbi" or "" when unnamed.
+    /// Where the gene comes from: "annotation" (a reference gene placed
+    /// through the alignment), or a gene predicted in a stretch the
+    /// reference lacks, named from the reference proteome ("reference"),
+    /// by NCBI ("ncbi"), or unnamed ("").
     pub source: String,
+    /// The reference locus tag, for "annotation" genes.
+    #[serde(default)]
+    pub locus_tag: String,
     /// Bases between this gene and the panel hit; 0 when they overlap.
     pub distance: u64,
     /// The gene overlaps the panel hit itself.

@@ -24,7 +24,9 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use straincompass_types::{ContextGene, ContigStat, ElementHit, GainedAnchor, GainedRow};
+use straincompass_types::{
+    ContextGene, ContigStat, ElementHit, GainedAnchor, GainedRow, WgaGene,
+};
 
 /// Genes this far either side of the hit are listed as its context.
 pub const CONTEXT_WINDOW: u64 = 10_000;
@@ -132,6 +134,7 @@ pub fn context_genes(
                 mobile: is_mobile_name(&label),
                 label,
                 source: source.into(),
+                locus_tag: String::new(),
                 distance,
                 is_hit: distance == 0,
                 partial: o.partial,
@@ -140,6 +143,117 @@ pub fn context_genes(
     }
     out.sort_by_key(|g| g.start);
     out
+}
+
+/// The reference's own genes in the parts of the window that align to
+/// the reference, placed on the query contig through the alignment
+/// blocks. Predicted genes exist only in gained regions, so without these
+/// a gene in a shared stretch (plcA in LIPI-1) has no neighbours at all.
+///
+/// Positions are mapped by offset within each block, which ignores the
+/// block's few indels: good to a handful of bases, plenty for a list.
+pub fn annotation_context_genes(
+    alignments: &[crate::delta::Alignment],
+    genes: &[WgaGene],
+    contig: &str,
+    hit: (u64, u64),
+    window: u64,
+) -> Vec<ContextGene> {
+    let lo = hit.0.saturating_sub(window);
+    let hi = hit.1 + window;
+    let mut by_seqid: HashMap<&str, Vec<&WgaGene>> = HashMap::new();
+    for g in genes {
+        by_seqid.entry(g.seqid.as_str()).or_default().push(g);
+    }
+    let mut out: Vec<ContextGene> = Vec::new();
+    for a in alignments.iter().filter(|a| a.qry_seqid == contig) {
+        let (qs, qe) = (a.qry_lo.max(lo), a.qry_hi.min(hi));
+        if qs > qe {
+            continue;
+        }
+        // the clipped query stretch on the reference
+        let to_ref = |q: u64| {
+            if a.qry_rev {
+                a.ref_end.saturating_sub(q - a.qry_lo)
+            } else {
+                a.ref_start + (q - a.qry_lo)
+            }
+        };
+        let (rs, re) = {
+            let (x, y) = (to_ref(qs), to_ref(qe));
+            (x.min(y).max(a.ref_start), x.max(y).min(a.ref_end))
+        };
+        let to_qry = |r: u64| {
+            if a.qry_rev {
+                a.qry_lo + (a.ref_end - r)
+            } else {
+                a.qry_lo + (r - a.ref_start)
+            }
+        };
+        let Some(cands) = by_seqid.get(a.ref_seqid.as_str()) else {
+            continue;
+        };
+        for g in cands.iter().filter(|g| g.end >= rs && g.start <= re) {
+            // the part of the gene this block covers, back on the query
+            let (gs, ge) = (g.start.max(a.ref_start), g.end.min(a.ref_end));
+            let (x, y) = (to_qry(gs), to_qry(ge));
+            let (start, end) = (x.min(y), x.max(y));
+            let distance = if end < hit.0 {
+                hit.0 - end
+            } else {
+                start.saturating_sub(hit.1)
+            };
+            let product = gff_unescape(&g.product);
+            let label = if !g.symbol.is_empty() {
+                g.symbol.clone()
+            } else {
+                product.clone()
+            };
+            let gene = ContextGene {
+                start,
+                end,
+                strand: if a.qry_rev { -g.strand } else { g.strand },
+                mobile: is_mobile_name(&label) || is_mobile_name(&product),
+                label,
+                source: "annotation".into(),
+                locus_tag: g.locus_tag.clone(),
+                distance,
+                is_hit: distance == 0,
+                partial: g.start < a.ref_start || g.end > a.ref_end,
+            };
+            // a gene split over two blocks, or seen through a repeat
+            // block too: keep the copy closest to the hit
+            match out.iter_mut().find(|o| o.locus_tag == gene.locus_tag) {
+                Some(o) if o.distance > gene.distance => *o = gene,
+                Some(_) => {}
+                None => out.push(gene),
+            }
+        }
+    }
+    out.sort_by_key(|g| g.start);
+    out
+}
+
+/// Undo GFF3 attribute escaping ("ABC transporter%2C ATP-binding").
+fn gff_unescape(v: &str) -> String {
+    let b = v.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && b[i + 1].is_ascii_hexdigit()
+            && b[i + 2].is_ascii_hexdigit()
+        {
+            let hex = |c: u8| (c as char).to_digit(16).unwrap_or(0) as u8;
+            out.push(hex(b[i + 1]) * 16 + hex(b[i + 2]));
+            i += 3;
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| v.to_string())
 }
 
 /// The verdict for one hit: a short key and the sentence behind it.
@@ -443,6 +557,50 @@ mod tests {
         let s = contig_stats(&recs, &delta);
         assert_eq!((s[0].length, s[0].aligned_bp), (500, 150));
         assert_eq!((s[1].length, s[1].aligned_bp), (40, 0));
+    }
+
+    #[test]
+    fn places_reference_genes_through_the_alignment() {
+        // query 1001-3000 = ref 501-2500 forward; query 5001-6000 = ref
+        // 9001-10000 reversed
+        let delta = crate::delta::parse_delta_str(
+            "/r.fa /q.fa\nNUCMER\n>ref q1 20000 9000\n501 2500 1001 3000 0 0 0\n0\n9001 10000 6000 5001 0 0 0\n0\n",
+        )
+        .unwrap();
+        let g = |tag: &str, sym: &str, s: u64, e: u64, strand: i8| WgaGene {
+            locus_tag: tag.into(),
+            symbol: sym.into(),
+            biotype: "protein_coding".into(),
+            seqid: "ref".into(),
+            start: s,
+            end: e,
+            strand,
+            product: "transposase".into(),
+        };
+        let genes = vec![
+            g("t1", "plcA", 1001, 1500, 1),
+            g("t2", "", 2400, 2700, 1),
+            g("t3", "hly", 9101, 9200, 1),
+            g("t4", "far", 15000, 15100, 1),
+        ];
+        let out = annotation_context_genes(&delta.alignments, &genes, "q1", (1501, 2000), 10_000);
+        let tags: Vec<&str> = out.iter().map(|o| o.locus_tag.as_str()).collect();
+        assert_eq!(tags, vec!["t1", "t2", "t3"]);
+        assert!(out[0].is_hit && !out[0].partial && (out[0].start, out[0].end) == (1501, 2000));
+        // clipped at the block end, unnamed so labelled by its product
+        assert!(out[1].partial && out[1].end == 3000 && out[1].label == "transposase" && out[1].mobile);
+        // reversed block: ref 9101-9200 -> query 5801-5900 on the other strand
+        assert_eq!((out[2].start, out[2].end, out[2].strand), (5801, 5900, -1));
+        assert_eq!(out[2].distance, 5801 - 2000);
+    }
+
+    #[test]
+    fn unescapes_gff_attribute_values() {
+        assert_eq!(gff_unescape("ABC transporter%2C ATP-binding"), "ABC transporter, ATP-binding");
+        assert_eq!(gff_unescape("a%3Bb%3Dc%25"), "a;b=c%");
+        assert_eq!(gff_unescape("100%"), "100%");
+        assert_eq!(gff_unescape("%zz"), "%zz");
+        assert_eq!(gff_unescape("%\u{e9}t\u{e9}"), "%\u{e9}t\u{e9}");
     }
 
     #[test]

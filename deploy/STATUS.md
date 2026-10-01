@@ -84,16 +84,11 @@ the top open item.
 
 ## Updating later
 
-    # on the workstation
-    rsync -az --delete --exclude target --exclude node_modules --exclude .git \
-        /home/kowalski/Work/straincompass/ proxmox1:straincompass-src/
-    # on the VM
-    cd ~/straincompass-src && ~/.cargo/bin/cargo build --release
-    systemctl --user stop straincompass
-    cp target/release/straincompass-api ~/straincompass/bin/
-    # frontend (if changed): rebuild locally and
-    rsync -az frontend/dist/ proxmox1:straincompass/frontend/dist/
-    systemctl --user start straincompass
+    deploy/deploy.sh
 
-Back up `~/straincompass/data` before deploys that change the database schema
-(currently: the whole app state lives there, SQLite + project files).
+Pre-flight, verified backup, build on the VM, switch with the previous
+version kept, health check and automatic rollback: see deployment.md
+section 6. Deployed commits are logged in `~/straincompass/deployed.log`.
+
+The script backs up `~/straincompass/data` (SQLite + project files) on every
+deploy.

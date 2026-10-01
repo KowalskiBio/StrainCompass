@@ -200,61 +200,70 @@ ssh proxmox1 '
 
 ## 6. Routine update (every later push)
 
-1. Pre-deployment check (section 3).
-2. Backup (section 5). No backup, no deploy.
-3. Build locally, upload as a NEW version dir, flip the symlink:
+Use the script; it is the only sanctioned way to update production:
 
 ```bash
-rsync -av target/release/straincompass-api proxmox1:~/straincompass/versions/<V>/
-rsync -av frontend/dist proxmox1:~/straincompass/versions/<V>/
-ssh proxmox1 'ln -sfn ~/straincompass/versions/<V>/straincompass-api ~/straincompass/app/straincompass-api
-              ln -sfn ~/straincompass/versions/<V>/dist ~/straincompass/app/dist'
+deploy/deploy.sh
 ```
 
-4. Restart ONLY our unit:
+It refuses to run unless HEAD is committed and pushed, so the server
+always runs a known commit (appended to `~/straincompass/deployed.log`).
+In order, and aborting at the first failure:
+
+1. Pre-flight (section 3, read-only): load, at least 1.5 GB free on /,
+   foreign services active, port 8010 free or ours.
+2. Backup (section 5): SQLite `.backup` plus a tarball of `data/`,
+   retried when a run changes during the read, then verified (gzip
+   test, file count). No backup, no deploy.
+3. Build: frontend locally, server binary on the VM from
+   `~/straincompass-src` (a macOS binary cannot run there).
+4. Switch: the running binary and frontend are copied to
+   `~/straincompass/versions/prev-<timestamp>/` first. The new files are
+   staged before the stop, so while the service is down only renames
+   run, and an error restarts it regardless.
+5. Health check on `http://127.0.0.1:8010/api/health`. If the new
+   version does not answer within 30 s, the script restores the
+   previous version, restarts it and exits non-zero.
+
+It touches only `~/straincompass`, `~/straincompass-src` and the user
+unit `straincompass` (`systemctl --user`, no sudo). It never deletes
+backups or old versions; prune those by hand (section 5 retention).
+
+After it finishes: smoke test in the browser and watch the log a while:
 
 ```bash
-sudo systemctl restart straincompass.service
-systemctl status straincompass.service --no-pager
-curl -s http://127.0.0.1:8010/api/health
-```
-
-5. Smoke test from the browser: create a throwaway project, upload a
-  small FASTA, run it, open table + genome views, export a TSV, delete
-  the project.
-6. Watch logs for a few minutes:
-
-```bash
-journalctl -u straincompass.service -f --since "5 min ago"
+journalctl --user -u straincompass -f --since "5 min ago"
 ```
 
 Database schema changes: the app runs migrations at startup and keeps
-them additive/backward compatible where possible; the section 5 backup
-is the safety net. If a migration is destructive it must be called out
-in the release notes and the backup verified extra carefully.
+them additive/backward compatible where possible; the backup is the
+safety net. If a migration is destructive it must be called out in the
+release notes and the backup verified extra carefully.
 
 ## 7. Rollback
 
+`deploy/deploy.sh` rolls back by itself when the health check fails.
+To go back by hand, use the newest `prev-*` copy (the version that ran
+before the last deploy):
+
 ```bash
-ssh proxmox1 'ln -sfn ~/straincompass/versions/<PREVIOUS>/straincompass-api ~/straincompass/app/straincompass-api
-              ln -sfn ~/straincompass/versions/<PREVIOUS>/dist ~/straincompass/app/dist'
-sudo systemctl restart straincompass.service
+ssh proxmox1 'cd ~/straincompass && P=$(ls -d versions/prev-* | tail -1) && echo "restoring $P" && systemctl --user stop straincompass && cp $P/straincompass-api bin/ && rm -rf frontend/dist && cp -a $P/dist frontend/dist && systemctl --user start straincompass'
 ```
 
 If user data must also be restored (last resort, destroys projects
 created after the backup):
 
 ```bash
-ssh proxmox1 'cd ~/straincompass
+ssh proxmox1 'cd ~/straincompass && systemctl --user stop straincompass
               rm -rf data/*          # ONLY inside ~/straincompass/data
-              tar -xzf backups/data-<V>.tar.gz -C data'
-sudo systemctl restart straincompass.service
+              tar -xzf backups/data-<V>.tar.gz -C data
+              systemctl --user start straincompass'
 ```
 
 ## 8. Explicitly forbidden (on this VM)
 
 - `kill`, `pkill`, `systemctl restart/stop` for anything not named
-  `straincompass*`.
+  `straincompass*` (ours is a user unit: `systemctl --user ... straincompass`).
 - `docker` anything (not our deployment path, avoid surprises).
 - Editing files under other apps' dirs, `/etc/nginx/sites-*` files not
   named `straincompass`, pm2, syncthing folders.

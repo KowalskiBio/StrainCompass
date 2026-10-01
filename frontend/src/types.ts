@@ -273,8 +273,12 @@ export interface ContextGene {
   end: number;
   strand: number;
   label: string;
-  /** "reference", "ncbi" or "" when unnamed. */
+  /** "annotation" (reference gene placed through the alignment), or a
+   * predicted gene named from the reference ("reference"), by NCBI
+   * ("ncbi"), or unnamed (""). */
   source: string;
+  /** Reference locus tag, for "annotation" genes. */
+  locus_tag: string;
   distance: number;
   is_hit: boolean;
   mobile: boolean;

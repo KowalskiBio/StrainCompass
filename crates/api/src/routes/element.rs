@@ -114,6 +114,13 @@ pub async fn panel_context(
     let mut gained = res.gained.unwrap_or_default();
     crate::routes::nblast::merge_ncbi_names(&qdir, &mut gained);
     let query_name = res.query_name;
+    // the reference's own genes, to list neighbours in shared stretches;
+    // a run without them still answers, with predicted genes only
+    let ref_genes: Vec<straincompass_types::WgaGene> =
+        jobs::load_reference_json(&state, project_id, run_id)
+            .ok()
+            .and_then(|v| serde_json::from_value(v["genes"].clone()).ok())
+            .unwrap_or_default();
 
     let ctx = tokio::task::spawn_blocking(move || -> ApiResult<PanelContext> {
         let qry_fa = qdir.join("query.fa");
@@ -156,7 +163,16 @@ pub async fn panel_context(
             .iter()
             .find(|r| r.qry_seqid == contig && r.start <= end && r.end >= start)
             .cloned();
-        let genes = element::context_genes(&gained, &contig, (start, end), element::CONTEXT_WINDOW);
+        let mut genes =
+            element::context_genes(&gained, &contig, (start, end), element::CONTEXT_WINDOW);
+        genes.extend(element::annotation_context_genes(
+            &delta.alignments,
+            &ref_genes,
+            &contig,
+            (start, end),
+            element::CONTEXT_WINDOW,
+        ));
+        genes.sort_by_key(|g| g.start);
         let mut markers: Vec<String> = Vec::new();
         for g in genes.iter().filter(|g| g.mobile && !g.is_hit) {
             if !markers.contains(&g.label) {
