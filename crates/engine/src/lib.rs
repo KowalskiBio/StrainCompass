@@ -14,6 +14,7 @@ pub mod longest_match;
 pub mod msa;
 pub mod panel;
 pub mod pipeline;
+pub mod screen;
 pub mod tools;
 pub mod variants;
 

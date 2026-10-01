@@ -23,6 +23,9 @@ import type {
   RunParams,
   RunQuery,
   RunWithLogs,
+  ScreenHit,
+  ScreenMatrixRow,
+  ScreenStatus,
   NcbiStatus,
   TableQuery,
   WgaData,
@@ -351,6 +354,12 @@ export const api = {
   gainedAll,
   panelRecheck: (runId: number, q: TableQuery) =>
     request<Page<PanelRow>>(`/runs/${runId}/panel_recheck${qs(q)}`),
+  screen: (runId: number, q: TableQuery) =>
+    request<Page<ScreenHit>>(`/runs/${runId}/screen${qs(q)}`),
+  screenMatrix: (runId: number, q: TableQuery) =>
+    request<Page<ScreenMatrixRow>>(`/runs/${runId}/screen_matrix${qs(q)}`),
+  screenStatus: (runId: number) =>
+    request<{ query_id: number; status: ScreenStatus }[]>(`/runs/${runId}/screen_status`),
   panelMatrix: (runId: number, q: TableQuery) =>
     request<Page<PanelMatrixRow>>(`/runs/${runId}/panel_matrix${qs(q)}`),
   panelContext: (runId: number, queryId: number, geneId: string) =>

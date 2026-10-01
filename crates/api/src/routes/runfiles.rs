@@ -76,6 +76,12 @@ pub async fn list_run_files(
         );
         push_artifact(
             &mut files,
+            &qdir.join("resistance_virulence.tsv"),
+            "Resistance and virulence genes (AMRFinderPlus + VFDB)",
+            &format!("{stem}_resistance_virulence.tsv"),
+        );
+        push_artifact(
+            &mut files,
             &qdir.join("dnadiff.report"),
             "Overall alignment report",
             &format!("{stem}_dnadiff.report"),
@@ -220,6 +226,10 @@ fn scan_dirs(run_dir: &std::path::Path, query_ids: &[i64]) -> ApiResult<Vec<(Pat
             out.push((
                 qdir.join("panel_recheck.tsv"),
                 format!("{stem}_panel_recheck.tsv"),
+            ));
+            out.push((
+                qdir.join("resistance_virulence.tsv"),
+                format!("{stem}_resistance_virulence.tsv"),
             ));
             out.push((
                 qdir.join("dnadiff.report"),

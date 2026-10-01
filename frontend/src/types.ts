@@ -40,6 +40,8 @@ export interface Run {
   has_panel: boolean;
   /** Runs computed before gained regions existed do not carry them. */
   has_gained: boolean;
+  /** Started with the resistance/virulence screen setting. */
+  has_screen?: boolean;
 }
 
 /** A run's name as shown: its own, or "Run #id" until it has one. */
@@ -358,6 +360,42 @@ export interface GeneOrigin {
   message: string;
   /** Too few matches in the genus; a (slow) all-bacteria search is offered. */
   can_widen: boolean;
+}
+
+/** One gene found by the resistance/virulence screen. */
+export interface ScreenHit {
+  source: "AMRFinderPlus" | "VFDB";
+  gene: string;
+  product: string;
+  /** "AMR", "STRESS" or "VIRULENCE". */
+  kind: string;
+  category: string;
+  class: string;
+  contig: string;
+  start: number;
+  end: number;
+  strand: number;
+  identity: number;
+  coverage: number;
+  reference: string;
+  method: string;
+}
+
+export type ScreenStatus =
+  | { state: "done" }
+  | { state: "partial"; reason: string }
+  | { state: "unavailable"; reason: string }
+  | { state: "unknown" };
+
+export interface ScreenMatrixRow {
+  source: string;
+  gene: string;
+  product: string;
+  kind: string;
+  category: string;
+  class: string;
+  /** Best identity per query, run order; null where not found. */
+  identities: (number | null)[];
 }
 
 export interface MatrixRow {

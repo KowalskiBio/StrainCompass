@@ -51,6 +51,10 @@ fn run_dto(conn: &MutexGuard<'_, rusqlite::Connection>, run_id: i64) -> ApiResul
         .ok()
         .and_then(|v| v.get("min_gained").cloned())
         .is_some();
+    let has_screen = serde_json::from_str::<serde_json::Value>(&params_json)
+        .ok()
+        .and_then(|v| v.get("screen").and_then(|x| x.as_bool()))
+        .unwrap_or(false);
     let has_panel: bool = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM files WHERE project_id = ?1 AND role = 'panel')",
@@ -83,6 +87,7 @@ fn run_dto(conn: &MutexGuard<'_, rusqlite::Connection>, run_id: i64) -> ApiResul
         queries,
         has_panel,
         has_gained,
+        has_screen,
     }))
 }
 

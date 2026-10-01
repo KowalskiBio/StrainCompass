@@ -114,6 +114,15 @@ fn routes() -> Router<SharedState> {
             "/runs/{id}/panel_origin",
             get(routes::origin::panel_origin),
         )
+        .route("/runs/{id}/screen", get(routes::screen::screen))
+        .route(
+            "/runs/{id}/screen_status",
+            get(routes::screen::screen_status),
+        )
+        .route(
+            "/runs/{id}/screen_matrix",
+            get(routes::screen::screen_matrix),
+        )
         .route("/runs/{id}/wga", get(routes::results::wga))
         .route("/runs/{id}/alignment", get(routes::results::alignment))
         .route("/runs/{id}/refseq", get(routes::results::refseq))
@@ -263,6 +272,7 @@ mod routes {
     pub mod results;
     pub mod runfiles;
     pub mod runs;
+    pub mod screen;
     pub mod settings;
     pub mod uploads;
 

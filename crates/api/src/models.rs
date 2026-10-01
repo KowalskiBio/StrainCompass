@@ -43,6 +43,9 @@ pub struct RunDto {
     /// feature existed do not, and cannot without being re-run, so the UI
     /// hides the tab rather than showing one that always errors.
     pub has_gained: bool,
+    /// The run was started with the resistance/virulence screen setting.
+    #[serde(default)]
+    pub has_screen: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

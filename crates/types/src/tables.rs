@@ -521,6 +521,62 @@ pub struct GeneOrigin {
     pub can_widen: bool,
 }
 
+/// One gene found by the resistance/virulence screen.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ScreenHit {
+    /// "AMRFinderPlus" or "VFDB".
+    pub source: String,
+    pub gene: String,
+    pub product: String,
+    /// AMRFinderPlus: "AMR", "STRESS" or "VIRULENCE"; VFDB: "VIRULENCE".
+    pub kind: String,
+    /// AMRFinderPlus subtype (ACID, BIOCIDE, METAL, POINT ...) or the
+    /// VFDB category ("Exotoxin", "Invasion" ...).
+    pub category: String,
+    /// AMRFinderPlus class ("QUATERNARY AMMONIUM", "CADMIUM", ...) or
+    /// the VFDB virulence factor ("Listeriolysin O (LLO)").
+    pub class: String,
+    pub contig: String,
+    pub start: u64,
+    pub end: u64,
+    pub strand: i8,
+    pub identity: f64,
+    /// Share of the reference gene covered, percent.
+    pub coverage: f64,
+    /// The reference the hit was matched to (accession + name).
+    pub reference: String,
+    /// AMRFinderPlus method (EXACTX, BLASTX, PARTIALX, HMM ...) or "blastn".
+    pub method: String,
+}
+
+/// Whether the screen ran for a query, and why not.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(tag = "state", content = "reason", rename_all = "snake_case")]
+pub enum ScreenStatus {
+    Done,
+    /// One of the two resources is missing; carries which.
+    Partial(String),
+    /// Switched off, or the tools/database are missing; carries why.
+    Unavailable(String),
+    /// The run predates the screen.
+    #[default]
+    Unknown,
+}
+
+/// One screened gene across all queries of a run.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ScreenMatrixRow {
+    pub source: String,
+    pub gene: String,
+    pub product: String,
+    pub kind: String,
+    pub category: String,
+    pub class: String,
+    /// Identity of the best hit per query, same order as the run's query
+    /// list; None where the gene was not found.
+    pub identities: Vec<Option<f64>>,
+}
+
 /// Alignment block on the reference, for the genome viewer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WgaBlock {

@@ -18,6 +18,9 @@ import type {
   PanelMatrixRow,
   PanelRow,
   Run,
+  ScreenHit,
+  ScreenMatrixRow,
+  ScreenStatus,
   TableQuery,
 } from "../types";
 import { nuccoreRangeUrl } from "../types";
@@ -29,10 +32,20 @@ export type TableKind =
   | "gained"
   | "panel_recheck"
   | "panel_matrix"
+  | "screen"
+  | "screen_matrix"
   | "matrix";
 
 /** Every row shape the table can render. */
-type AnyRow = GapRow | GeneCoverageRow | PanelRow | PanelMatrixRow | MatrixRow | GainedRow;
+type AnyRow =
+  | GapRow
+  | GeneCoverageRow
+  | PanelRow
+  | PanelMatrixRow
+  | MatrixRow
+  | GainedRow
+  | ScreenHit
+  | ScreenMatrixRow;
 
 /** Stable identity of a gained region within one query's table. */
 function gainedKey(row: GainedRow): string {
@@ -110,7 +123,24 @@ const HIDDEN_COLS_KEY = "straincompass-hidden-cols";
 
 // Columns hidden by default per table, until the user changes it via the
 // Columns picker (then their choice is remembered instead).
+const SCREEN_COLUMNS: Column[] = [
+  { key: "gene", label: "Gene", width: 120 },
+  { key: "product", label: "Product", width: 300 },
+  { key: "kind", label: "Type", width: 110 },
+  { key: "category", label: "Category", width: 150 },
+  { key: "class", label: "Class / factor", width: 190 },
+  { key: "source", label: "Found by", width: 130 },
+  { key: "contig", label: "Contig", width: 150 },
+  { key: "start", label: "Start", numeric: true, width: 90 },
+  { key: "end", label: "End", numeric: true, width: 90 },
+  { key: "identity", label: "Identity %", numeric: true, width: 100 },
+  { key: "coverage", label: "Coverage %", numeric: true, width: 100 },
+  { key: "method", label: "Method", width: 100 },
+  { key: "reference", label: "Closest reference", width: 260 },
+];
+
 const DEFAULT_HIDDEN_COLS: Partial<Record<TableKind, string[]>> = {
+  screen: ["end", "method", "reference"],
   genes_coverage: ["start", "end", "length", "cov_bp"],
   gained: ["end", "anchor_end", "n_orfs"],
 };
@@ -133,6 +163,7 @@ export function ResultsTables({
 }) {
   const safeInitialTable: TableKind =
     ((initialTable === "panel_recheck" || initialTable === "panel_matrix") && !run.has_panel) ||
+    ((initialTable === "screen" || initialTable === "screen_matrix") && !run.has_screen) ||
     (initialTable === "gained" && !run.has_gained)
       ? "genes_coverage"
       : initialTable;
@@ -210,6 +241,19 @@ export function ResultsTables({
     if (table === "unaligned_gaps") return GAP_COLUMNS;
     if (table === "gained") return GAINED_COLUMNS;
     if (table === "panel_recheck") return PANEL_COLUMNS;
+    if (table === "screen") return SCREEN_COLUMNS;
+    if (table === "screen_matrix")
+      return [
+        { key: "gene", label: "Gene", width: 120 },
+        { key: "kind", label: "Type", width: 110 },
+        { key: "class", label: "Class / factor", width: 190 },
+        { key: "source", label: "Found by", width: 130 },
+        ...run.queries.map((q) => ({
+          key: `q_${q.file_id}`,
+          label: q.name,
+          width: 165,
+        })),
+      ];
     if (table === "panel_matrix")
       return [
         { key: "gene_id", label: "Gene", width: 150 },
@@ -267,6 +311,8 @@ export function ResultsTables({
       if (table === "gained") return api.gained(run.id, q);
       if (table === "panel_recheck") return api.panelRecheck(run.id, q);
       if (table === "panel_matrix") return api.panelMatrix(run.id, q);
+      if (table === "screen") return api.screen(run.id, q);
+      if (table === "screen_matrix") return api.screenMatrix(run.id, q);
       return api.matrix(run.id, q);
     }
 
@@ -385,22 +431,31 @@ export function ResultsTables({
               ["unaligned_gaps", "Unaligned gaps"],
               ["gained", "Gained"],
               ["panel_recheck", "Panel recheck"],
+              ["screen", "Resistance & virulence"],
               ["matrix", "Presence / absence"],
             ] as [TableKind, string][]
           )
             .filter(
               ([k]) =>
                 (k !== "panel_recheck" || run.has_panel) &&
+                (k !== "screen" || run.has_screen) &&
                 (k !== "gained" || run.has_gained),
             )
             .map(([k, label]) => (
             <button
               key={k}
               onClick={() =>
-                setTable(k === "panel_recheck" && table === "panel_matrix" ? table : k)
+                setTable(
+                  (k === "panel_recheck" && table === "panel_matrix") ||
+                    (k === "screen" && table === "screen_matrix")
+                    ? table
+                    : k,
+                )
               }
               className={`px-4 text-[15px] font-medium transition-colors ${
-                table === k || (k === "panel_recheck" && table === "panel_matrix")
+                table === k ||
+                (k === "panel_recheck" && table === "panel_matrix") ||
+                (k === "screen" && table === "screen_matrix")
                   ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
                   : "bg-white text-zinc-600 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
               }`}
@@ -413,25 +468,29 @@ export function ResultsTables({
         {(table === "genes_coverage" ||
           table === "panel_recheck" ||
           table === "panel_matrix" ||
+          table === "screen" ||
+          table === "screen_matrix" ||
           table === "gained") &&
           run.queries.length > 1 && (
             <select
-              value={table === "panel_matrix" ? "all" : (queryId ?? "")}
+              value={table === "panel_matrix" || table === "screen_matrix" ? "all" : (queryId ?? "")}
               onChange={(e) => {
-                // the panel's "All strains" is its own table: one row per
-                // gene, one column per strain
+                // "All strains" is its own table: one row per gene, one
+                // column per strain
                 if (e.target.value === "all") {
-                  setTable("panel_matrix");
+                  setTable(table === "screen" ? "screen_matrix" : "panel_matrix");
                   return;
                 }
                 if (table === "panel_matrix") setTable("panel_recheck");
+                if (table === "screen_matrix") setTable("screen");
                 setQueryId(Number(e.target.value) || undefined);
               }}
               className="h-11 px-3 rounded-lg border border-zinc-300 bg-white text-[15px] dark:border-zinc-700 dark:bg-zinc-900"
             >
-              {(table === "panel_recheck" || table === "panel_matrix") && (
-                <option value="all">All strains</option>
-              )}
+              {(table === "panel_recheck" ||
+                table === "panel_matrix" ||
+                table === "screen" ||
+                table === "screen_matrix") && <option value="all">All strains</option>}
               {run.queries.map((q) => (
                 <option key={q.file_id} value={q.file_id}>
                   {q.name}
@@ -492,6 +551,30 @@ export function ResultsTables({
           </div>
         )}
 
+        {(table === "screen" || table === "screen_matrix") && (
+          <div className="flex rounded-lg border border-zinc-300 overflow-hidden h-11 dark:border-zinc-700">
+            {[
+              ["", "All"],
+              ["AMR", "Resistance"],
+              ["STRESS", "Stress"],
+              ["VIRULENCE", "Virulence"],
+              ...(table === "screen_matrix" ? [["not_present", "Not in every strain"]] : []),
+            ].map(([v, label]) => (
+              <button
+                key={v}
+                onClick={() => setCall(v)}
+                className={`px-3 text-sm font-medium transition-colors ${
+                  call === v
+                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : "bg-white text-zinc-600 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {(table === "matrix" || table === "panel_matrix") && run.queries.length > 1 && (
           <div className="flex rounded-lg border border-zinc-300 overflow-hidden h-11 dark:border-zinc-700">
             {[
@@ -519,7 +602,7 @@ export function ResultsTables({
           onChange={setHiddenForTable}
         />
 
-        {table !== "panel_matrix" && (
+        {table !== "panel_matrix" && table !== "screen" && table !== "screen_matrix" && (
           <ExportButton run={run} table={table} query={query} />
         )}
 
@@ -528,6 +611,10 @@ export function ResultsTables({
 
       {error && (
         <p className="text-red-700 text-[15px] py-2 dark:text-red-400">{error}</p>
+      )}
+
+      {(table === "screen" || table === "screen_matrix") && (
+        <ScreenStatusNote run={run} queryId={table === "screen" ? queryId : undefined} />
       )}
 
       {/* table */}
@@ -984,6 +1071,25 @@ function Cell({
       </span>
     );
   }
+  if (col.startsWith("q_") && table === "screen_matrix") {
+    const idx = run.queries.findIndex((q) => `q_${q.file_id}` === col);
+    const v = (row as unknown as ScreenMatrixRow).identities?.[idx];
+    if (idx >= 0) {
+      return v === null || v === undefined ? (
+        <CallBadge call="ABSENT" />
+      ) : (
+        <span title={`Best match ${v.toFixed(1)} % identity`} className="inline-flex items-center gap-2">
+          <CallBadge call="PRESENT" />
+          <span className="font-mono text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
+            {v.toFixed(1)}
+          </span>
+        </span>
+      );
+    }
+  }
+  if (col === "kind" && (table === "screen" || table === "screen_matrix")) {
+    return <KindBadge kind={String(v ?? "")} />;
+  }
   if (col.startsWith("q_") && table === "panel_matrix") {
     const idx = run.queries.findIndex((q) => `q_${q.file_id}` === col);
     const r = row as unknown as PanelMatrixRow;
@@ -1010,7 +1116,13 @@ function Cell({
     }
   }
   if (typeof v === "number") {
-    if (col === "cov_pct" || col === "identity" || col === "best_identity" || col === "cov_pcts")
+    if (
+      col === "cov_pct" ||
+      col === "identity" ||
+      col === "best_identity" ||
+      col === "cov_pcts" ||
+      col === "coverage"
+    )
       return <span>{v.toFixed(2)}</span>;
     return <span>{v.toLocaleString("en-US")}</span>;
   }
@@ -1930,3 +2042,59 @@ function GenePreview({
   );
 }
 
+
+/** Resistance, stress or virulence, at a glance. */
+function KindBadge({ kind }: { kind: string }) {
+  const map: Record<string, [string, string]> = {
+    AMR: ["Resistance", "bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300"],
+    STRESS: ["Stress", "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"],
+    VIRULENCE: ["Virulence", "bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300"],
+  };
+  const [label, cls] = map[kind] ?? [kind, "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"];
+  return <span className={`px-2 py-0.5 rounded text-xs ${cls}`}>{label}</span>;
+}
+
+/** Why the screen did not (fully) run, for the strains it concerns. */
+function ScreenStatusNote({ run, queryId }: { run: Run; queryId: number | undefined }) {
+  const [statuses, setStatuses] = useState<{ query_id: number; status: ScreenStatus }[] | null>(
+    null,
+  );
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .screenStatus(run.id)
+      .then((s) => !cancelled && setStatuses(s))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [run.id]);
+  if (!statuses) return null;
+  const shown = statuses.filter(
+    (s) => s.status.state !== "done" && (queryId === undefined || s.query_id === queryId),
+  );
+  if (shown.length === 0) return null;
+  const reasons = new Map<string, string[]>();
+  for (const s of shown) {
+    const why =
+      s.status.state === "unknown"
+        ? "This run was computed before the screen existed; run the comparison again to get it."
+        : "reason" in s.status
+          ? s.status.reason
+          : "";
+    const name = run.queries.find((q) => q.file_id === s.query_id)?.name ?? String(s.query_id);
+    reasons.set(why, [...(reasons.get(why) ?? []), name]);
+  }
+  return (
+    <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[15px] text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+      {[...reasons.entries()].map(([why, names]) => (
+        <p key={why}>
+          {why}
+          {queryId === undefined && statuses.length > 1 && (
+            <span className="text-sm opacity-80"> ({names.join(", ")})</span>
+          )}
+        </p>
+      ))}
+    </div>
+  );
+}

@@ -59,6 +59,15 @@ fn which(name: &str) -> std::result::Result<PathBuf, EngineError> {
     )))
 }
 
+/// An optional tool, looked up like the required ones (the
+/// STRAINCOMPASS_TOOLS_DIRS directories, then PATH).
+pub fn find_optional(name: &str) -> Option<PathBuf> {
+    let extra: Vec<PathBuf> = std::env::var("STRAINCOMPASS_TOOLS_DIRS")
+        .map(|v| v.split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect())
+        .unwrap_or_default();
+    find_tool(name, &extra).ok()
+}
+
 impl ToolPaths {
     /// Discover tools from extra dirs (from STRAINCOMPASS_TOOLS_DIRS, colon
     /// separated) then from PATH.

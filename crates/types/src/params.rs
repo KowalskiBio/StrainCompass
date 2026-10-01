@@ -61,6 +61,12 @@ pub struct RunParams {
     #[garde(skip)]
     #[serde(default = "default_gained_orfs")]
     pub gained_orfs: bool,
+    /// Screen every query with AMRFinderPlus (resistance and stress genes)
+    /// and the VFDB core set (virulence genes). Defaults on; runs saved
+    /// before it existed read as on, but their stored results have none.
+    #[garde(skip)]
+    #[serde(default = "default_screen")]
+    pub screen: bool,
 }
 
 fn default_min_gained() -> u64 {
@@ -68,6 +74,10 @@ fn default_min_gained() -> u64 {
 }
 
 fn default_gained_orfs() -> bool {
+    true
+}
+
+fn default_screen() -> bool {
     true
 }
 
@@ -85,6 +95,7 @@ impl Default for RunParams {
             dnadiff: true,
             min_gained: default_min_gained(),
             gained_orfs: default_gained_orfs(),
+            screen: default_screen(),
         }
     }
 }
@@ -145,6 +156,13 @@ pub fn param_schema() -> Vec<ParamSpec> {
             name: "gained_orfs".into(),
             label: "Predict genes in gained regions".into(),
             help: "Look for protein coding genes inside the gained regions. This needs the gene finder on the server; when it is missing the regions are still reported, just without gene counts.".into(),
+            layer: ParamLayer::Postprocess,
+            kind: ParamKind::Bool { default: true },
+        },
+        ParamSpec {
+            name: "screen".into(),
+            label: "Screen for resistance and virulence genes".into(),
+            help: "Search every strain with AMRFinderPlus (antibiotic resistance, disinfectant, metal and stress genes) and the VFDB core set (virulence genes), independent of the gene panel. Needs AMRFinderPlus and the VFDB file on the server; without them the run still succeeds.".into(),
             layer: ParamLayer::Postprocess,
             kind: ParamKind::Bool { default: true },
         },
@@ -286,6 +304,9 @@ impl RunParams {
         }
         if self.min_gained != other.min_gained {
             changed.push("min_gained".into());
+        }
+        if self.screen != other.screen {
+            changed.push("screen".into());
         }
         if self.gained_orfs != other.gained_orfs {
             changed.push("gained_orfs".into());

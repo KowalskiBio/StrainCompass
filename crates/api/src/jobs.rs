@@ -10,7 +10,7 @@ use straincompass_engine::pipeline::{
     self, ComparisonInputs, ComparisonResult, QueryAlignmentSource, WorkDirs,
 };
 use straincompass_engine::tools::ToolPaths;
-use straincompass_types::{MatrixRow, RunParams};
+use straincompass_types::{MatrixRow, RunParams, ScreenHit, ScreenStatus};
 
 pub fn spawn_run(state: SharedState, run_id: i64) {
     tokio::spawn(async move {
@@ -216,7 +216,20 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
     } else {
         None
     };
+    // the screen needs the project's organism (AMRFinderPlus species rules)
+    let organism: Option<String> = {
+        let conn = state.db.lock().unwrap();
+        conn.query_row(
+            "SELECT organism FROM projects WHERE id = ?1",
+            [project_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+        .filter(|o| !o.trim().is_empty())
+    };
     for (qid, name, _path) in queries.iter() {
+        let organism = organism.clone();
         let state3 = state.clone();
         let run_id2 = run_id;
         let project_id2 = project_id;
@@ -254,7 +267,32 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
                 ctx2.set_step(&format!("{msg} ({name2})"));
             };
             let res = pipeline::run_comparison(&tools, &inputs, &dirs, &progress)?;
-            Ok((qid, name, res))
+            let screen = if params2.screen {
+                progress("Screening for resistance and virulence genes", 3, 3);
+                let cfg = straincompass_engine::screen::ScreenConfig::discover(Some(
+                    state3.data_dir.join("db").join("VFDB_setA_nt.fas"),
+                ));
+                // a failing screen is recorded on this query, never fatal
+                match straincompass_engine::screen::screen_query(
+                    &tools,
+                    &cfg,
+                    &qdir.join("query.fa"),
+                    organism.as_deref(),
+                    &work.join("screen"),
+                ) {
+                    Ok(r) => r,
+                    Err(e) => (Vec::new(), ScreenStatus::Unavailable(e.to_string())),
+                }
+            } else {
+                (
+                    Vec::new(),
+                    ScreenStatus::Unavailable(
+                        "The resistance and virulence screen was switched off for this run."
+                            .into(),
+                    ),
+                )
+            };
+            Ok((qid, name, res, screen))
         });
         let sem = state2.cpu_slots.clone();
         let handle = async move {
@@ -267,10 +305,11 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
         };
         handles.push(handle);
     }
-    let mut results: Vec<(i64, String, ComparisonResult)> = Vec::new();
+    type QueryOutcome = (i64, String, ComparisonResult, (Vec<ScreenHit>, ScreenStatus));
+    let mut results: Vec<QueryOutcome> = Vec::new();
     for h in handles {
         let outcome: std::result::Result<
-            straincompass_engine::Result<(i64, String, ComparisonResult)>,
+            straincompass_engine::Result<QueryOutcome>,
             tokio::task::JoinError,
         > = h.await;
         match outcome {
@@ -290,11 +329,11 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
             }
         }
     }
-    results.sort_by_key(|(qid, _, _)| *qid);
+    results.sort_by_key(|(qid, _, _, _)| *qid);
 
     // 6. write artifacts
     ctx.set_step("Writing the result tables");
-    for (qid, name, res) in &results {
+    for (qid, name, res, (screen_hits, screen_status)) in &results {
         let qdir = run_dir.join("queries").join(qid.to_string());
         pipeline::write_genes_coverage_tsv(&res.genes_coverage, &qdir.join("genes_coverage.tsv"))?;
         pipeline::write_gaps_tsv(&res.unaligned_gaps, &qdir.join("unaligned_gaps.tsv"))?;
@@ -308,6 +347,9 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
         }
         if let Some(p) = &res.panel {
             pipeline::write_panel_tsv(p, &qdir.join("panel_recheck.tsv"))?;
+        }
+        if !screen_hits.is_empty() {
+            write_screen_tsv(screen_hits, &qdir.join("resistance_virulence.tsv"))?;
         }
         if let Some(rep) = &res.dnadiff_report {
             std::fs::write(qdir.join("dnadiff.report"), rep)?;
@@ -323,6 +365,10 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
                 panel: res.panel.clone(),
                 blocks: res.blocks.clone(),
                 ref_lengths: res.ref_lengths.clone(),
+                screen: (*screen_status == ScreenStatus::Done
+                    || matches!(screen_status, ScreenStatus::Partial(_)))
+                .then(|| screen_hits.clone()),
+                screen_status: screen_status.clone(),
             })
             .unwrap(),
         )?;
@@ -380,7 +426,7 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
         for (i, g) in results[0].2.genes_coverage.iter().enumerate() {
             let mut calls = Vec::with_capacity(n);
             let mut covs = Vec::with_capacity(n);
-            for (_, _, res) in &results {
+            for (_, _, res, _) in &results {
                 let r = &res.genes_coverage[i];
                 calls.push(r.call);
                 covs.push(r.cov_pct);
@@ -400,7 +446,7 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
             &rows,
             &results
                 .iter()
-                .map(|(_, n, _)| n.clone())
+                .map(|(_, n, _, _)| n.clone())
                 .collect::<Vec<_>>(),
             &run_dir.join("matrix.tsv"),
         )?;
@@ -441,6 +487,26 @@ pub struct ComparisonResultJson {
     pub gained_orfs: straincompass_types::GainedOrfStatus,
     pub blocks: Vec<straincompass_types::WgaBlock>,
     pub ref_lengths: Vec<(String, u64)>,
+    /// Resistance/virulence screen hits; `None` when it did not run (old
+    /// run, switched off, tools missing - `screen_status` says which).
+    #[serde(default)]
+    pub screen: Option<Vec<ScreenHit>>,
+    #[serde(default)]
+    pub screen_status: ScreenStatus,
+}
+
+fn write_screen_tsv(rows: &[ScreenHit], out: &std::path::Path) -> std::io::Result<()> {
+    let mut w = std::io::BufWriter::new(std::fs::File::create(out)?);
+    writeln!(w, "source\tgene\tproduct\tkind\tcategory\tclass\tcontig\tstart\tend\tstrand\tidentity\tcoverage\treference\tmethod")?;
+    for r in rows {
+        writeln!(
+            w,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{:.2}\t{}\t{}",
+            r.source, r.gene, r.product, r.kind, r.category, r.class, r.contig, r.start, r.end,
+            if r.strand < 0 { "-" } else { "+" }, r.identity, r.coverage, r.reference, r.method
+        )?;
+    }
+    Ok(())
 }
 
 fn write_matrix_tsv(
