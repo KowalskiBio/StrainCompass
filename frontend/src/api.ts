@@ -2,6 +2,7 @@ import type {
   AlignmentData,
   AlignmentDataWire,
   GeneDetail,
+  GeneOrigin,
   GainedRow,
   GapRow,
   GainedIdentify,
@@ -357,6 +358,11 @@ export const api = {
       request<PanelContext>(
         `/runs/${runId}/panel_context?query_id=${queryId}&gene_id=${encodeURIComponent(geneId)}`,
       ),
+    ),
+  /** Starts or continues the NCBI lookup; poll while state is "running". */
+  panelOrigin: (runId: number, geneId: string, wide = false) =>
+    request<GeneOrigin>(
+      `/runs/${runId}/panel_origin?gene_id=${encodeURIComponent(geneId)}${wide ? "&wide=true" : ""}`,
     ),
   panelElement: (runId: number, geneId: string, sourceQueryId: number, accession?: string) =>
     cached(

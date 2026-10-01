@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import type { ElementReport, PanelContext, Run } from "../types";
+import type { ElementReport, GeneOrigin, OriginRecord, PanelContext, Run } from "../types";
 import { CallBadge, ErrorBox, Modal, Spinner } from "./ui";
 
 /**
@@ -21,6 +21,9 @@ export function PanelGeneDialog({
 }) {
   const [queryId, setQueryId] = useState<number | undefined>(initialQueryId);
   useEffect(() => setQueryId(initialQueryId), [geneId, initialQueryId]);
+  // a plasmid picked in the NCBI section, handed to the comparison
+  const [preset, setPreset] = useState<{ acc: string; n: number } | null>(null);
+  useEffect(() => setPreset(null), [geneId]);
 
   return (
     <Modal
@@ -41,9 +44,17 @@ export function PanelGeneDialog({
             queryId={queryId ?? run.queries[0]?.file_id}
             onQuery={setQueryId}
           />
-          {run.queries.length > 1 && (
-            <AcrossStrains run={run} geneId={geneId} preferredSource={queryId} />
-          )}
+          <GeneOriginSection
+            run={run}
+            geneId={geneId}
+            onCompare={(acc) => setPreset({ acc, n: Date.now() })}
+          />
+          <AcrossStrains
+            run={run}
+            geneId={geneId}
+            preferredSource={queryId}
+            preset={preset}
+          />
         </div>
       )}
     </Modal>
@@ -329,10 +340,12 @@ function AcrossStrains({
   run,
   geneId,
   preferredSource,
+  preset,
 }: {
   run: Run;
   geneId: string;
   preferredSource: number | undefined;
+  preset: { acc: string; n: number } | null;
 }) {
   // the strains carrying the gene, from the panel matrix row
   const [positives, setPositives] = useState<Set<number> | null>(null);
@@ -374,21 +387,31 @@ function AcrossStrains({
     );
   }, [positives, preferredSource]);
 
-  async function compare() {
-    if (source === undefined) return;
+  async function compare(presetAcc?: string) {
+    const acc = presetAcc ?? (useAccession ? accession.trim() : undefined);
+    // a record needs no strain carrying the gene; the strain then only
+    // anchors the genome-size differences
+    const src = source ?? (acc ? run.queries[0]?.file_id : undefined);
+    if (src === undefined) return;
     setBusy(true);
     setError(null);
     setReport(null);
     try {
-      setReport(
-        await api.panelElement(run.id, geneId, source, useAccession ? accession.trim() : undefined),
-      );
+      setReport(await api.panelElement(run.id, geneId, src, acc));
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (!preset) return;
+    setUseAccession(true);
+    setAccession(preset.acc);
+    compare(preset.acc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset]);
 
   const sourceSize = useMemo(
     () => report?.hits.find((h) => h.query_id === report.source_query_id)?.genome_bp,
@@ -444,7 +467,7 @@ function AcrossStrains({
           />
         )}
         <button
-          onClick={compare}
+          onClick={() => compare()}
           disabled={
             busy ||
             (useAccession || noPositives
@@ -540,5 +563,210 @@ function AcrossStrains({
         </>
       )}
     </section>
+  );
+}
+
+/** NCBI asks for at most one poll a minute per search; the server
+ * enforces that, so polling a little faster only catches the answer
+ * sooner after it lands. */
+const ORIGIN_POLL_MS = 20_000;
+
+function GeneOriginSection({
+  run,
+  geneId,
+  onCompare,
+}: {
+  run: Run;
+  geneId: string;
+  onCompare: (accession: string) => void;
+}) {
+  const [origin, setOrigin] = useState<GeneOrigin | null>(null);
+  const [started, setStarted] = useState(false);
+  const [wide, setWide] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setOrigin(null);
+    setStarted(false);
+    setWide(false);
+    setError(null);
+  }, [run.id, geneId]);
+
+  useEffect(() => {
+    if (!started) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    setError(null);
+    const tick = () => {
+      api
+        .panelOrigin(run.id, geneId, wide)
+        .then((o) => {
+          if (cancelled) return;
+          setOrigin(o);
+          if (o.state === "running") timer = setTimeout(tick, ORIGIN_POLL_MS);
+        })
+        .catch((e) => {
+          if (!cancelled) setError((e as Error).message);
+        });
+    };
+    tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [started, wide, attempt, run.id, geneId]);
+
+  const done = origin?.state === "done";
+  const scope = origin?.scope === "all bacteria" ? "bacterial" : origin?.scope;
+
+  return (
+    <section className="space-y-3">
+      <SectionTitle>Where does this gene usually occur?</SectionTitle>
+      <p className="text-sm text-zinc-600 dark:text-zinc-400">
+        Searches NCBI for other genomes that carry {geneId} over its whole length and counts how
+        many of them have it on a plasmid or on the chromosome. Only the gene{"’"}s sequence is
+        sent to NCBI, never your strains. This describes other genomes, not your strains.
+      </p>
+      {!started && (
+        <button
+          onClick={() => setStarted(true)}
+          className="h-9 px-4 rounded-lg bg-zinc-900 text-white text-sm font-medium hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+        >
+          Look it up in NCBI
+        </button>
+      )}
+      {error && (
+        <div className="space-y-2">
+          <ErrorBox message={error} />
+          <button
+            onClick={() => setAttempt((n) => n + 1)}
+            className="h-9 px-4 rounded-lg border border-zinc-300 bg-white text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+          >
+            Try again
+          </button>
+        </div>
+      )}
+      {started && !done && !error && (
+        <p className="flex items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400">
+          <Spinner className="text-zinc-400" />
+          {origin?.message || "Asking NCBI BLAST..."}{" "}
+          {wide
+            ? "A search of all bacteria often waits 10 to 30 minutes in NCBI\u2019s queue."
+            : "This usually takes one to three minutes."}{" "}
+          You can close the dialog; reopen it and look the gene up again to pick up the same search.
+        </p>
+      )}
+      {done && origin && (
+        <>
+          {origin.n_matches === 0 ? (
+            <p className="text-[15px] text-zinc-700 dark:text-zinc-300">{origin.message}</p>
+          ) : (
+            <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-[15px] dark:border-zinc-800 dark:bg-zinc-800/60">
+              <p className="text-zinc-900 dark:text-zinc-100">
+                Found in <b>{origin.n_matches}</b> {scope} record{origin.n_matches === 1 ? "" : "s"}:{" "}
+                <b>{origin.n_plasmid}</b> on a plasmid, <b>{origin.n_chromosome}</b> on a chromosome
+                {origin.n_contig > 0 && (
+                  <>
+                    , <b>{origin.n_contig}</b> on draft-assembly contigs that NCBI does not place
+                  </>
+                )}
+                .
+              </p>
+              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                {originReading(origin)} {origin.scope_note}
+              </p>
+            </div>
+          )}
+          {origin.n_matches === 0 && (
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">{origin.scope_note}</p>
+          )}
+          {origin.can_widen && (
+            <button
+              onClick={() => {
+                setOrigin(null);
+                setWide(true);
+              }}
+              className="h-9 px-4 rounded-lg border border-zinc-300 bg-white text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+            >
+              Search all bacteria (slow: often 10 to 30 minutes)
+            </button>
+          )}
+          {origin.plasmids.length > 0 && (
+            <div>
+              <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+                Complete plasmids carrying {geneId}
+              </p>
+              <OriginRecords records={origin.plasmids} onCompare={onCompare} />
+            </div>
+          )}
+          {origin.chromosomes.length > 0 && (
+            <div>
+              <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+                Chromosomes carrying {geneId}
+              </p>
+              <OriginRecords records={origin.chromosomes} />
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+/** A plain-language reading of the counts, never stronger than they are. */
+function originReading(o: GeneOrigin): string {
+  const placed = o.n_plasmid + o.n_chromosome;
+  if (placed === 0) return "None of the records says whether it is a plasmid or a chromosome.";
+  const share = o.n_plasmid / placed;
+  if (share >= 0.8) return "Mostly plasmid-borne.";
+  if (share <= 0.2) return "Mostly chromosomal.";
+  return "Found on both plasmids and chromosomes.";
+}
+
+function OriginRecords({
+  records,
+  onCompare,
+}: {
+  records: OriginRecord[];
+  onCompare?: (accession: string) => void;
+}) {
+  return (
+    <div className="border border-zinc-200 rounded-lg overflow-x-auto dark:border-zinc-800">
+      <table className="w-full text-sm">
+        <tbody>
+          {records.map((r) => (
+            <tr key={r.accession} className="border-t first:border-t-0 border-zinc-100 dark:border-zinc-800">
+              <td className="px-3 py-1.5 whitespace-nowrap">
+                <a
+                  href={`https://www.ncbi.nlm.nih.gov/nuccore/${r.accession}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-mono underline hover:text-zinc-900 dark:hover:text-zinc-100"
+                >
+                  {r.accession}
+                </a>
+              </td>
+              <td className="px-3 py-1.5 text-zinc-700 dark:text-zinc-300">{r.title}</td>
+              <td className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">{fmtBp(r.length)}</td>
+              <td className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">
+                {r.identity.toFixed(1)} %
+              </td>
+              {onCompare && (
+                <td className="px-3 py-1.5 text-right">
+                  <button
+                    onClick={() => onCompare(r.accession)}
+                    className="h-8 px-3 rounded-lg border border-zinc-300 bg-white text-xs font-medium whitespace-nowrap hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+                    title="Compare this plasmid with every strain of the run (section below)"
+                  >
+                    Compare with my strains
+                  </button>
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

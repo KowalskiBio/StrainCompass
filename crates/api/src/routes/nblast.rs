@@ -19,7 +19,7 @@ use straincompass_types::{GainedRow, IdentifiedOrf, OrfMatch};
 
 /// The BLAST URL API endpoint; overridable so tests can point the whole
 /// pass at a stand-in server, the same trade the tool stubs make.
-fn blast_url() -> String {
+pub(crate) fn blast_url() -> String {
     std::env::var("STRAINCOMPASS_BLAST_URL")
         .unwrap_or_else(|_| "https://blast.ncbi.nlm.nih.gov/Blast.cgi".into())
 }
@@ -27,7 +27,7 @@ fn blast_url() -> String {
 /// A region with more novel genes than this is refused rather than
 /// flooding the public service; regions this gene-rich are rare.
 const MAX_ORFS: usize = 20;
-fn client() -> reqwest::Client {
+pub(crate) fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(concat!(
             "StrainCompass/",

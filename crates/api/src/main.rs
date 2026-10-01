@@ -110,6 +110,10 @@ fn routes() -> Router<SharedState> {
             "/runs/{id}/panel_element",
             post(routes::element::panel_element),
         )
+        .route(
+            "/runs/{id}/panel_origin",
+            get(routes::origin::panel_origin),
+        )
         .route("/runs/{id}/wga", get(routes::results::wga))
         .route("/runs/{id}/alignment", get(routes::results::alignment))
         .route("/runs/{id}/refseq", get(routes::results::refseq))
@@ -254,6 +258,7 @@ mod routes {
     pub mod export;
     pub mod nblast;
     pub mod ncbi;
+    pub mod origin;
     pub mod projects;
     pub mod results;
     pub mod runfiles;

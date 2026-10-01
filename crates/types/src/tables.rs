@@ -478,6 +478,49 @@ pub struct ElementReport {
     pub hits: Vec<ElementHit>,
 }
 
+/// One NCBI record carrying a panel gene, from the gene origin lookup.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OriginRecord {
+    pub accession: String,
+    pub title: String,
+    pub length: u64,
+    /// "plasmid", "chromosome" or "contig" (a draft-assembly piece that
+    /// NCBI does not place on either).
+    pub kind: String,
+    pub identity: f64,
+    /// Share of the panel gene the best match covers, percent.
+    pub coverage: f64,
+}
+
+/// Where a panel gene usually occurs, from an NCBI BLAST search of its
+/// sequence. The answer is evidence about other genomes, never about the
+/// strains of the run.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GeneOrigin {
+    pub gene_id: String,
+    /// "running", "done" or "error".
+    pub state: String,
+    /// What was searched: a genus ("Listeria") or "all bacteria".
+    pub scope: String,
+    /// Why the scope is what it is (e.g. widened for too few matches).
+    pub scope_note: String,
+    /// Records matching the gene over (nearly) its whole length.
+    pub n_matches: usize,
+    pub n_plasmid: usize,
+    pub n_chromosome: usize,
+    pub n_contig: usize,
+    /// Complete plasmids carrying the gene, smallest first: ready-made
+    /// elements for the whole-element comparison.
+    pub plasmids: Vec<OriginRecord>,
+    /// A few chromosome records carrying it, for contrast.
+    pub chromosomes: Vec<OriginRecord>,
+    pub message: String,
+    /// The genus held too few matches; searching all bacteria (slow) is
+    /// offered.
+    #[serde(default)]
+    pub can_widen: bool,
+}
+
 /// Alignment block on the reference, for the genome viewer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WgaBlock {

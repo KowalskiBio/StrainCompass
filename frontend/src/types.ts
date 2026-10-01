@@ -333,6 +333,33 @@ export interface ElementReport {
   hits: ElementHit[];
 }
 
+/** One NCBI record carrying a panel gene. */
+export interface OriginRecord {
+  accession: string;
+  title: string;
+  length: number;
+  kind: "plasmid" | "chromosome" | "contig";
+  identity: number;
+  coverage: number;
+}
+
+/** Where a panel gene usually occurs, from an NCBI BLAST search. */
+export interface GeneOrigin {
+  gene_id: string;
+  state: "running" | "done" | "error";
+  scope: string;
+  scope_note: string;
+  n_matches: number;
+  n_plasmid: number;
+  n_chromosome: number;
+  n_contig: number;
+  plasmids: OriginRecord[];
+  chromosomes: OriginRecord[];
+  message: string;
+  /** Too few matches in the genus; a (slow) all-bacteria search is offered. */
+  can_widen: boolean;
+}
+
 export interface MatrixRow {
   locus_tag: string;
   symbol: string;
