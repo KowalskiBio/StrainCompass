@@ -149,7 +149,7 @@ export function InputWizard({
       return;
     }
     setBusy(
-      `${append ? "Adding to" : "Building"} the gene panel (genes not in the reference are fetched from NCBI)...`,
+      `${append ? "Adding to" : "Building"} the gene panel (genes not in the reference are taken from the curated AMRFinderPlus and VFDB databases, or else fetched from NCBI)...`,
     );
     setError(null);
     setNotice(null);
@@ -588,12 +588,18 @@ function PanelHelp() {
           <p>
             Paste a list of genes (separated by commas or new lines: symbols
             like inlA, locus tags like lmo0444) or drop a CSV file, and the
-            sequences are collected automatically: from your reference
-            genome, and for genes it does not carry, from NCBI. A
-            ready-made FASTA panel also works.
+            sequences are collected automatically, in this order: from your
+            reference genome; then from the curated AMRFinderPlus
+            (resistance, disinfectant, metal, stress) and VFDB (virulence)
+            databases, picking the entry for your project{"\u2019"}s organism;
+            and only then from NCBI by name. A ready-made FASTA panel also
+            works.
           </p>
           <p>
-            For genes NCBI cannot find by name, pin the GenBank record:{" "}
+            Gene names are not unique, so check the list of what was taken
+            from where after building. A database entry can be asked for by
+            its own name (e.g. cadA_Lm). To take a gene from one exact
+            GenBank record instead, pin it:{" "}
             {"\"qacH (HF565366.1)\""} uses the record's own annotation, and
             {" "}{"\"emrC (CP038643.1:1496-1882 rev)\""} pinpoints the exact
             spot when the record does not name the gene.

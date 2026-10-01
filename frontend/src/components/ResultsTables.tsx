@@ -349,7 +349,7 @@ export function ResultsTables({
   const total = data && data.table === table ? data.total : 0;
 
   // A search that finds no reference gene is often a gene the reference
-  // does not have at all (cadA, emrC from NCBI) or a locus tag of
+  // does not have at all (cadA, emrC from a curated database or NCBI) or a locus tag of
   // another strain (lmo0444 on a non-EGD-e reference). Those live only
   // in the panel table, so look there and say so instead of a bare
   // "no rows".
