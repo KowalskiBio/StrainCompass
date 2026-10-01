@@ -423,8 +423,9 @@ export function ResultsTables({
   return (
     <div>
       {/* toolbar */}
-      <div className="flex flex-wrap items-center gap-2 py-3">
-        <div className="flex rounded-lg border border-zinc-300 overflow-hidden h-11 dark:border-zinc-700">
+      {/* two fixed rows: the table tabs, then the tools for the shown table */}
+      <div className="pt-3">
+        <div className="inline-flex rounded-lg border border-zinc-300 overflow-hidden h-11 dark:border-zinc-700">
           {(
             [
               ["genes_coverage", "Genes coverage"],
@@ -452,7 +453,7 @@ export function ResultsTables({
                     : k,
                 )
               }
-              className={`px-4 text-[15px] font-medium transition-colors ${
+              className={`px-4 text-[15px] font-medium whitespace-nowrap transition-colors ${
                 table === k ||
                 (k === "panel_recheck" && table === "panel_matrix") ||
                 (k === "screen" && table === "screen_matrix")
@@ -464,7 +465,8 @@ export function ResultsTables({
             </button>
           ))}
         </div>
-
+      </div>
+      <div className="flex flex-nowrap items-center gap-2 py-3 [&>*:not(input)]:shrink-0">
         {(table === "genes_coverage" ||
           table === "panel_recheck" ||
           table === "panel_matrix" ||
@@ -485,7 +487,7 @@ export function ResultsTables({
                 if (table === "screen_matrix") setTable("screen");
                 setQueryId(Number(e.target.value) || undefined);
               }}
-              className="h-11 px-3 rounded-lg border border-zinc-300 bg-white text-[15px] dark:border-zinc-700 dark:bg-zinc-900"
+              className="h-11 px-2 max-w-40 rounded-lg border border-zinc-300 bg-white text-sm dark:border-zinc-700 dark:bg-zinc-900"
             >
               {(table === "panel_recheck" ||
                 table === "panel_matrix" ||
@@ -503,7 +505,7 @@ export function ResultsTables({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search genes..."
-          className="h-11 px-3 rounded-lg border border-zinc-300 text-[15px] w-56 dark:border-zinc-700 dark:bg-zinc-900"
+          className="h-11 px-3 rounded-lg border border-zinc-300 text-sm w-48 min-w-24 shrink dark:border-zinc-700 dark:bg-zinc-900"
         />
 
         {table === "genes_coverage" && (
@@ -517,7 +519,7 @@ export function ResultsTables({
               <button
                 key={v}
                 onClick={() => setCall(v)}
-                className={`px-3 text-sm font-medium transition-colors ${
+                className={`px-2.5 text-sm font-medium whitespace-nowrap transition-colors ${
                   call === v
                     ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
                     : "bg-white text-zinc-600 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
@@ -539,7 +541,7 @@ export function ResultsTables({
               <button
                 key={v}
                 onClick={() => setCall(v)}
-                className={`px-3 text-sm font-medium transition-colors ${
+                className={`px-2.5 text-sm font-medium whitespace-nowrap transition-colors ${
                   call === v
                     ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
                     : "bg-white text-zinc-600 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
@@ -563,7 +565,7 @@ export function ResultsTables({
               <button
                 key={v}
                 onClick={() => setCall(v)}
-                className={`px-3 text-sm font-medium transition-colors ${
+                className={`px-2.5 text-sm font-medium whitespace-nowrap transition-colors ${
                   call === v
                     ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
                     : "bg-white text-zinc-600 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
@@ -584,7 +586,7 @@ export function ResultsTables({
               <button
                 key={v}
                 onClick={() => setCall(v)}
-                className={`px-3 text-sm font-medium transition-colors ${
+                className={`px-2.5 text-sm font-medium whitespace-nowrap transition-colors ${
                   call === v
                     ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
                     : "bg-white text-zinc-600 hover:bg-zinc-100 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
@@ -596,17 +598,18 @@ export function ResultsTables({
           </div>
         )}
 
-        <ColumnPicker
-          columns={columns}
-          hidden={hidden}
-          onChange={setHiddenForTable}
-        />
-
-        {table !== "panel_matrix" && table !== "screen" && table !== "screen_matrix" && (
-          <ExportButton run={run} table={table} query={query} />
-        )}
-
         {loading && <Spinner className="text-zinc-400" />}
+
+        <div className="ml-auto flex items-center gap-2">
+          <ColumnPicker
+            columns={columns}
+            hidden={hidden}
+            onChange={setHiddenForTable}
+          />
+          {table !== "panel_matrix" && table !== "screen" && table !== "screen_matrix" && (
+            <ExportButton run={run} table={table} query={query} />
+          )}
+        </div>
       </div>
 
       {error && (
@@ -1837,7 +1840,7 @@ function ColumnPicker({
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen(!open)}
-        className="h-11 px-3 rounded-lg border border-zinc-300 bg-white text-[15px] hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+        className="h-11 px-3 rounded-lg border border-zinc-300 bg-white text-sm whitespace-nowrap hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
       >
         Columns
       </button>
@@ -1895,7 +1898,7 @@ function ExportButton({
     <div className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="h-11 px-4 rounded-lg bg-zinc-900 text-white text-[15px] font-medium hover:bg-zinc-700 inline-flex items-center gap-2 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+        className="h-11 px-3 rounded-lg bg-zinc-900 text-white text-sm font-medium whitespace-nowrap hover:bg-zinc-700 inline-flex items-center gap-2 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
       >
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
           <path d="M8 2v8m0 0l-3-3m3 3l3-3M3 13h10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
