@@ -687,7 +687,7 @@ export function ResultsTables({
         </div>
       )}
 
-      {/* right-click preview, pinned until another row is right-clicked or this is closed */}
+      {/* row preview (right-click, or click for a gained region), pinned until another row is picked or this is closed */}
       {pinnedGene && (table === "genes_coverage" || table === "matrix") && (
         <GenePreview
           runId={run.id}
@@ -844,7 +844,8 @@ function VirtualTable({
                 table === "genes_coverage" ||
                 table === "matrix" ||
                 table === "panel_recheck" ||
-                table === "panel_matrix"
+                table === "panel_matrix" ||
+                table === "gained"
                   ? "cursor-pointer"
                   : ""
               }`}
@@ -875,6 +876,10 @@ function VirtualTable({
                   if (locus) onOpenGene(locus);
                 } else if (table === "panel_recheck" || table === "panel_matrix") {
                   onOpenPanelGene(row["gene_id"] as string);
+                } else if (table === "gained") {
+                  // The genes column can only show a handful of names; the
+                  // region card below the table lists every one of them.
+                  onPinGene(gainedKey(row as unknown as GainedRow));
                 }
               }}
             >
@@ -1175,8 +1180,8 @@ function AnchorBadge({ row }: { row: GainedRow }) {
   );
 }
 
-/** The genes predicted inside one gained region, pinned by right-click,
- * plus the reference back-check of the region itself. */
+/** The genes predicted inside one gained region, pinned by clicking its
+ * row, plus the reference back-check of the region itself. */
 function GainedOrfsCard({
   row,
   runId,
@@ -1189,6 +1194,11 @@ function GainedOrfsCard({
   onClose: () => void;
 }) {
   const ref = usePopoverDismiss(true, onClose);
+  // The card sits below the table, out of sight when the table fills the
+  // window: bring it into view whenever a row is picked.
+  useEffect(() => {
+    ref.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [ref, row.qry_seqid, row.start, row.end]);
   const annotateTimer = useRef<number | null>(null);
   useEffect(
     () => () => {
