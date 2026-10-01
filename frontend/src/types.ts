@@ -275,10 +275,16 @@ export interface ContextGene {
   end: number;
   strand: number;
   label: string;
-  /** "annotation" (reference gene placed through the alignment), or a
-   * predicted gene named from the reference ("reference"), by NCBI
-   * ("ncbi"), or unnamed (""). */
+  /** "annotation" (reference gene placed through the alignment), the
+   * panel hit itself ("panel"), or a predicted gene named from the
+   * reference ("reference"), by NCBI ("ncbi"), or unnamed (""). */
   source: string;
+  /** On the panel hit: the protein it most resembles, for context. */
+  match_label: string;
+  /** Amino-acid identity to the protein the gene was named after, %. */
+  match_identity: number | null;
+  /** Share of the gene covered by that match, %, when known. */
+  match_coverage: number | null;
   /** Reference locus tag, for "annotation" genes. */
   locus_tag: string;
   distance: number;

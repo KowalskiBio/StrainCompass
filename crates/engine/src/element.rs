@@ -100,12 +100,33 @@ pub fn is_mobile_name(label: &str) -> bool {
     })
 }
 
+/// Share of both the predicted gene and the hit that must overlap for the
+/// gene to count as the panel gene itself, percent.
+const SAME_LOCUS_MIN_OVERLAP: f64 = 80.0;
+
+/// The two intervals overlap over at least `SAME_LOCUS_MIN_OVERLAP` % of
+/// each, so they are the same gene seen twice.
+fn same_locus(a: (u64, u64), b: (u64, u64)) -> bool {
+    let shared = a.1.min(b.1) + 1;
+    let shared = shared.saturating_sub(a.0.max(b.0)) as f64;
+    let len = |x: (u64, u64)| (x.1 + 1).saturating_sub(x.0).max(1) as f64;
+    shared * 100.0 >= SAME_LOCUS_MIN_OVERLAP * len(a)
+        && shared * 100.0 >= SAME_LOCUS_MIN_OVERLAP * len(b)
+}
+
 /// The predicted genes of the gained regions within `window` of the hit.
+///
+/// The predicted gene that is the hit is named after the panel gene
+/// (`gene_id`): the panel search has already identified it, while its
+/// reference-proteome name is only the closest relative the reference
+/// has (an emrC hit came out as the reference's "sugE2"). That name is
+/// kept as `match_label`, with its identity, so the reader can judge it.
 pub fn context_genes(
     rows: &[GainedRow],
     contig: &str,
     hit: (u64, u64),
     window: u64,
+    gene_id: &str,
 ) -> Vec<ContextGene> {
     let lo = hit.0.saturating_sub(window);
     let hi = hit.1 + window;
@@ -115,17 +136,31 @@ pub fn context_genes(
             if o.end < lo || o.start > hi {
                 continue;
             }
-            let (label, source) = match (&o.best, &o.ncbi) {
-                (Some(b), _) if !b.label.is_empty() => (b.label.clone(), "reference"),
-                (Some(b), None) => (b.locus_tag.clone(), "reference"),
-                (_, Some(n)) => (n.label.clone(), "ncbi"),
-                _ => (String::new(), ""),
+            let (m, source) = match (&o.best, &o.ncbi) {
+                (Some(b), _) if !b.label.is_empty() || o.ncbi.is_none() => (Some(b), "reference"),
+                (_, Some(n)) => (Some(n), "ncbi"),
+                _ => (None, ""),
             };
+            let name = m
+                .map(|m| {
+                    if m.label.is_empty() {
+                        m.locus_tag.clone()
+                    } else {
+                        m.label.clone()
+                    }
+                })
+                .unwrap_or_default();
             let distance = if o.end < hit.0 {
                 hit.0 - o.end
             } else {
                 // 0 when the gene overlaps the hit
                 o.start.saturating_sub(hit.1)
+            };
+            let is_panel = !gene_id.is_empty() && same_locus((o.start, o.end), hit);
+            let (label, source, match_label) = if is_panel {
+                (gene_id.to_string(), "panel", name)
+            } else {
+                (name, source, String::new())
             };
             out.push(ContextGene {
                 start: o.start,
@@ -134,6 +169,9 @@ pub fn context_genes(
                 mobile: is_mobile_name(&label),
                 label,
                 source: source.into(),
+                match_label,
+                match_identity: m.map(|m| m.identity),
+                match_coverage: m.map(|m| m.coverage).filter(|c| *c > 0.0),
                 locus_tag: String::new(),
                 distance,
                 is_hit: distance == 0,
@@ -220,6 +258,7 @@ pub fn annotation_context_genes(
                 distance,
                 is_hit: distance == 0,
                 partial: g.start < a.ref_start || g.end > a.ref_end,
+                ..Default::default()
             };
             // a gene split over two blocks, or seen through a repeat
             // block too: keep the copy closest to the hit
@@ -658,6 +697,51 @@ mod tests {
     }
 
     #[test]
+    fn hit_gene_takes_the_panel_name_and_keeps_its_match() {
+        let mut hit = orf(2027, 2413, "");
+        hit.best = Some(OrfMatch {
+            label: "sugE2".into(),
+            identity: 41.2,
+            coverage: 80.0,
+            ..Default::default()
+        });
+        let mut near = orf(2400, 2900, "");
+        near.best = Some(OrfMatch {
+            label: "lmo0855".into(),
+            identity: 99.0,
+            coverage: 100.0,
+            ..Default::default()
+        });
+        let region = GainedRow {
+            qry_seqid: "c1".into(),
+            orfs: vec![hit, near],
+            ..Default::default()
+        };
+        let genes = context_genes(
+            std::slice::from_ref(&region),
+            "c1",
+            (2030, 2413),
+            CONTEXT_WINDOW,
+            "emrC",
+        );
+        let g = &genes[0];
+        assert_eq!((g.label.as_str(), g.source.as_str()), ("emrC", "panel"));
+        assert_eq!(g.match_label, "sugE2");
+        assert_eq!(
+            (g.match_identity, g.match_coverage),
+            (Some(41.2), Some(80.0))
+        );
+        // overlapping the hit by a few bases does not make it the hit gene
+        let g = &genes[1];
+        assert!(g.is_hit);
+        assert_eq!(
+            (g.label.as_str(), g.source.as_str()),
+            ("lmo0855", "reference")
+        );
+        assert!(g.match_label.is_empty());
+    }
+
+    #[test]
     fn verdict_calls_small_unaligned_contigs_plasmids() {
         let region = GainedRow {
             qry_seqid: "c1".into(),
@@ -676,6 +760,7 @@ mod tests {
             "c1",
             (2027, 2413),
             CONTEXT_WINDOW,
+            "emrC",
         );
         assert_eq!(genes.len(), 2);
         assert!(genes[0].mobile && !genes[0].is_hit && genes[0].distance == 1127);

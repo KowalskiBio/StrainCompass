@@ -389,12 +389,27 @@ pub struct ContextGene {
     pub end: u64,
     pub strand: i8,
     /// Reference-given name, else the NCBI-given one, else empty (novel).
+    /// The predicted gene that is the panel hit carries the panel gene's
+    /// name instead.
     pub label: String,
     /// Where the gene comes from: "annotation" (a reference gene placed
-    /// through the alignment), or a gene predicted in a stretch the
-    /// reference lacks, named from the reference proteome ("reference"),
-    /// by NCBI ("ncbi"), or unnamed ("").
+    /// through the alignment), the panel hit itself ("panel"), or a gene
+    /// predicted in a stretch the reference lacks, named from the
+    /// reference proteome ("reference"), by NCBI ("ncbi"), or unnamed ("").
     pub source: String,
+    /// The protein a predicted gene was named after. Set on the panel hit,
+    /// whose own label is the panel gene: there it is only the closest
+    /// relative found, worth showing with its identity.
+    #[serde(default)]
+    pub match_label: String,
+    /// Amino-acid identity of the predicted gene to the protein it was
+    /// named after, percent.
+    #[serde(default)]
+    pub match_identity: Option<f64>,
+    /// Share of the predicted gene covered by that match, percent, when
+    /// the search reported it.
+    #[serde(default)]
+    pub match_coverage: Option<f64>,
     /// The reference locus tag, for "annotation" genes.
     #[serde(default)]
     pub locus_tag: String,

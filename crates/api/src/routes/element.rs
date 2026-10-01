@@ -164,8 +164,13 @@ pub async fn panel_context(
             .iter()
             .find(|r| r.qry_seqid == contig && r.start <= end && r.end >= start)
             .cloned();
-        let mut genes =
-            element::context_genes(&gained, &contig, (start, end), element::CONTEXT_WINDOW);
+        let mut genes = element::context_genes(
+            &gained,
+            &contig,
+            (start, end),
+            element::CONTEXT_WINDOW,
+            &row.gene_id,
+        );
         genes.extend(element::annotation_context_genes(
             &delta.alignments,
             &ref_genes,

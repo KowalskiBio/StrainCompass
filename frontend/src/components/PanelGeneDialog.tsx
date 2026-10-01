@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import type { ElementReport, GeneOrigin, OriginRecord, PanelContext, Run } from "../types";
+import type { ContextGene, ElementReport, GeneOrigin, OriginRecord, PanelContext, Run } from "../types";
 import { CallBadge, ErrorBox, Modal, Spinner } from "./ui";
 
 /**
@@ -269,10 +269,24 @@ function AlignedBar({ pct }: { pct: number }) {
 
 const SOURCE_LABEL: Record<string, string> = {
   annotation: "reference annotation",
+  panel: "predicted, found by the panel search",
   reference: "predicted, like a reference gene",
   ncbi: "predicted, named by NCBI",
   "": "predicted, unnamed",
 };
+
+/** How closely a predicted gene matches the protein it is named after. */
+function MatchStats({ g }: { g: ContextGene }) {
+  return (
+    <span
+      className="text-xs text-zinc-500 tabular-nums dark:text-zinc-400"
+      title="Amino-acid identity over the aligned part, and the share of this gene the alignment covers."
+    >
+      {g.match_identity!.toFixed(0)} % identity
+      {g.match_coverage != null && <> over {g.match_coverage.toFixed(0)} % of the gene</>}
+    </span>
+  );
+}
 
 function ContextGenes({ ctx }: { ctx: PanelContext }) {
   return (
@@ -305,8 +319,11 @@ function ContextGenes({ ctx }: { ctx: PanelContext }) {
                 )}
                 {g.is_hit && (
                   <> <span className="inline-block px-1.5 rounded text-xs bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
-                      {ctx.gene_id}
+                      {g.source === "panel" ? "hit" : ctx.gene_id}
                     </span></>
+                )}
+                {g.source !== "panel" && g.label && g.match_identity != null && (
+                  <> <span className="text-xs text-zinc-500 dark:text-zinc-400">(<MatchStats g={g} />)</span></>
                 )}
                 {g.mobile && (
                   <> <span className="inline-block px-1.5 rounded text-xs bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300">
@@ -320,6 +337,11 @@ function ContextGenes({ ctx }: { ctx: PanelContext }) {
                     >
                       (partial)
                     </span></>
+                )}
+                {g.source === "panel" && g.match_label && g.match_identity != null && (
+                  <div className="text-xs text-zinc-500 dark:text-zinc-400">
+                    most similar named protein: {g.match_label}, <MatchStats g={g} />
+                  </div>
                 )}
               </td>
               <td className="px-3 py-1.5 text-xs text-zinc-500 whitespace-nowrap dark:text-zinc-400">
