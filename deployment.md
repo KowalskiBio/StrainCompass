@@ -211,10 +211,12 @@ always runs a known commit (appended to `~/straincompass/deployed.log`).
 In order, and aborting at the first failure:
 
 1. Pre-flight (section 3, read-only): load, at least 1.5 GB free on /,
-   foreign services active, port 8010 free or ours.
+   foreign services active, port 8010 free or ours, and no analysis run
+   queued or running (the restart would kill it; deploy afterwards).
 2. Backup (section 5): SQLite `.backup` plus a tarball of `data/`,
    retried when a run changes during the read, then verified (gzip
-   test, file count). No backup, no deploy.
+   test, file count). A backup that fails verification is deleted, so a
+   failed attempt costs no disk. No backup, no deploy.
 3. Build: frontend locally, server binary on the VM from
    `~/straincompass-src` (a macOS binary cannot run there).
 4. Switch: the running binary and frontend are copied to

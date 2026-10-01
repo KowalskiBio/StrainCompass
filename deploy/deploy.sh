@@ -42,6 +42,12 @@ awk -v l="$load" "BEGIN{exit !(l < 4)}" || { echo "load too high"; exit 1; }
 for s in oligool svatba pm2-kowalski nginx; do
   [ "$(systemctl is-active $s)" = active ] || { echo "foreign service $s is not active; not deploying into an incident"; exit 1; }
 done
+# a restart kills analyses in flight: never deploy under a running one
+busy=$(sqlite3 "$HOME/straincompass/data/straincompass.db" "SELECT COUNT(*) FROM runs WHERE status IN ('queued','running')" 2>/dev/null || echo "?")
+if [ "$busy" != "0" ]; then
+  echo "$busy analysis run(s) queued or running; the restart would kill them. Deploy once they have finished."
+  exit 1
+fi
 owner=$(ss -tlnp 2>/dev/null | awk "/:8010 /" || true)
 if [ -n "$owner" ] && ! grep -q straincompass <<<"$owner"; then
   echo "port 8010 is held by something else: $owner"; exit 1
@@ -54,6 +60,8 @@ say "Backing up the data"
 ssh -o ConnectTimeout=15 "$HOST" "cd $APP && bash -s" <<'EOF' || die "backup failed; nothing was changed"
 set -e
 V=$(date +%Y%m%d-%H%M%S)
+# an incomplete backup is worse than none: it costs disk and looks valid
+trap 'st=$?; if [ $st -ne 0 ]; then rm -f "backups/data-$V.tar.gz" "backups/db-$V.sqlite"; echo "removed the incomplete backup $V"; fi' EXIT
 sqlite3 data/straincompass.db ".backup backups/db-$V.sqlite" 2>/dev/null \
   || cp data/straincompass.db "backups/db-$V.sqlite"
 # a run deleted or written while tar reads it makes tar exit 1; try again
