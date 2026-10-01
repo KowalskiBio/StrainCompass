@@ -207,12 +207,45 @@ export function InputWizard({
     onClose();
   }
 
+  // The step buttons sit both above and below the step: with many query
+  // FASTA files the footer is a long scroll away.
+  const nav = (big: boolean) => (
+    <>
+      <Button variant="ghost" onClick={onClose}>
+        Cancel
+      </Button>
+      <div className="flex gap-3">
+        {step > 1 && (
+          <Button variant="secondary" onClick={() => setStep(step - 1)}>
+            Back
+          </Button>
+        )}
+        {step < 4 ? (
+          <Button disabled={!stepReady[step - 1]} onClick={() => setStep(step + 1)}>
+            Continue
+          </Button>
+        ) : (
+          <Button
+            disabled={!stepReady[3] || selectedQueries.length === 0}
+            onClick={compare}
+            size={big ? "lg" : undefined}
+          >
+            Compare genomes
+          </Button>
+        )}
+      </div>
+    </>
+  );
+
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-zinc-900/40 p-4 sm:p-8 overflow-y-auto">
       <div className="bg-white rounded-xl shadow-xl border border-zinc-200 w-full max-w-3xl my-auto dark:bg-zinc-900 dark:border-zinc-800">
         {/* header */}
         <div className="px-8 pt-6 pb-4">
-          <h2 className="text-xl font-semibold">Set up the comparison</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-xl font-semibold">Set up the comparison</h2>
+            <div className="flex items-center gap-3">{nav(false)}</div>
+          </div>
           <div className="flex gap-2 mt-4" aria-hidden>
             {steps.map((s, i) => (
               <div key={s.n} className="flex items-center flex-1 last:flex-none">
@@ -484,32 +517,7 @@ export function InputWizard({
 
         {/* footer */}
         <div className="flex items-center justify-between px-8 py-4 border-t border-zinc-200 dark:border-zinc-800">
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <div className="flex gap-3">
-            {step > 1 && (
-              <Button variant="secondary" onClick={() => setStep(step - 1)}>
-                Back
-              </Button>
-            )}
-            {step < 4 ? (
-              <Button
-                disabled={!stepReady[step - 1]}
-                onClick={() => setStep(step + 1)}
-              >
-                Continue
-              </Button>
-            ) : (
-              <Button
-                disabled={!stepReady[3] || selectedQueries.length === 0}
-                onClick={compare}
-                size="lg"
-              >
-                Compare genomes
-              </Button>
-            )}
-          </div>
+          {nav(true)}
         </div>
       </div>
     </div>
