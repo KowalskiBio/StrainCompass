@@ -63,7 +63,12 @@ fn which(name: &str) -> std::result::Result<PathBuf, EngineError> {
 /// STRAINCOMPASS_TOOLS_DIRS directories, then PATH).
 pub fn find_optional(name: &str) -> Option<PathBuf> {
     let extra: Vec<PathBuf> = std::env::var("STRAINCOMPASS_TOOLS_DIRS")
-        .map(|v| v.split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect())
+        .map(|v| {
+            v.split(':')
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
+                .collect()
+        })
         .unwrap_or_default();
     find_tool(name, &extra).ok()
 }

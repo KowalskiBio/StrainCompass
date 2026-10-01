@@ -676,16 +676,33 @@ mod accession_tests {
 
     #[test]
     fn accepts_genbank_refseq_and_wgs_accessions() {
-        for a in ["L28104.1", "CP038643.1", "HF565366", "NG_076629.1", "NZ_CP168866.1",
-                  "NZ_DBJORO010000002.1", "DBJORO010000002.1", "NC_003210.1"] {
+        for a in [
+            "L28104.1",
+            "CP038643.1",
+            "HF565366",
+            "NG_076629.1",
+            "NZ_CP168866.1",
+            "NZ_DBJORO010000002.1",
+            "DBJORO010000002.1",
+            "NC_003210.1",
+        ] {
             assert!(looks_like_accession(a), "{a}");
         }
     }
 
     #[test]
     fn rejects_gene_names_and_locus_tags() {
-        for a in ["emrC", "lmo0444", "LM4B_02324", "LM6179_RS03640", "ACTATD_RS15010",
-                  "ACCESSION", "inlA", "lm4b_02329", ""] {
+        for a in [
+            "emrC",
+            "lmo0444",
+            "LM4B_02324",
+            "LM6179_RS03640",
+            "ACTATD_RS15010",
+            "ACCESSION",
+            "inlA",
+            "lm4b_02329",
+            "",
+        ] {
             assert!(!looks_like_accession(a), "{a}");
         }
     }

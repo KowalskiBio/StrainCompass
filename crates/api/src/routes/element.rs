@@ -57,7 +57,8 @@ pub async fn panel_matrix(
                 row.calls.push(hit.map(|h| h.call).unwrap_or(Call::Absent));
                 row.cov_pcts.push(hit.map(|h| h.cov_pct).unwrap_or(0.0));
                 row.identities.push(hit.map(|h| h.identity).unwrap_or(0.0));
-                row.loci.push(hit.map(|h| h.qry_locus.clone()).unwrap_or_default());
+                row.loci
+                    .push(hit.map(|h| h.qry_locus.clone()).unwrap_or_default());
             }
             rows.push(row);
         }
@@ -216,7 +217,9 @@ pub async fn panel_element(
 ) -> ApiResult<Json<ElementReport>> {
     let (project_id, query_ids) = succeeded_queries(&state, run_id)?;
     if !query_ids.contains(&body.source_query_id) {
-        return Err(ApiError::BadRequest("This query is not part of the run.".into()));
+        return Err(ApiError::BadRequest(
+            "This query is not part of the run.".into(),
+        ));
     }
     let run_dir = state.run_dir(project_id, run_id);
     let qdir = |qid: i64| run_dir.join("queries").join(qid.to_string());

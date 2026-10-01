@@ -287,8 +287,7 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
                 (
                     Vec::new(),
                     ScreenStatus::Unavailable(
-                        "The resistance and virulence screen was switched off for this run."
-                            .into(),
+                        "The resistance and virulence screen was switched off for this run.".into(),
                     ),
                 )
             };
@@ -305,7 +304,12 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
         };
         handles.push(handle);
     }
-    type QueryOutcome = (i64, String, ComparisonResult, (Vec<ScreenHit>, ScreenStatus));
+    type QueryOutcome = (
+        i64,
+        String,
+        ComparisonResult,
+        (Vec<ScreenHit>, ScreenStatus),
+    );
     let mut results: Vec<QueryOutcome> = Vec::new();
     for h in handles {
         let outcome: std::result::Result<
@@ -502,8 +506,20 @@ fn write_screen_tsv(rows: &[ScreenHit], out: &std::path::Path) -> std::io::Resul
         writeln!(
             w,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{:.2}\t{}\t{}",
-            r.source, r.gene, r.product, r.kind, r.category, r.class, r.contig, r.start, r.end,
-            if r.strand < 0 { "-" } else { "+" }, r.identity, r.coverage, r.reference, r.method
+            r.source,
+            r.gene,
+            r.product,
+            r.kind,
+            r.category,
+            r.class,
+            r.contig,
+            r.start,
+            r.end,
+            if r.strand < 0 { "-" } else { "+" },
+            r.identity,
+            r.coverage,
+            r.reference,
+            r.method
         )?;
     }
     Ok(())

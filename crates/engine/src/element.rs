@@ -24,9 +24,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use straincompass_types::{
-    ContextGene, ContigStat, ElementHit, GainedAnchor, GainedRow, WgaGene,
-};
+use straincompass_types::{ContextGene, ContigStat, ElementHit, GainedAnchor, GainedRow, WgaGene};
 
 /// Genes this far either side of the hit are listed as its context.
 pub const CONTEXT_WINDOW: u64 = 10_000;
@@ -96,7 +94,9 @@ pub fn is_mobile_name(label: &str) -> bool {
         sym.len() >= 4
             && sym.len() <= 6
             && sym.to_lowercase().starts_with(p)
-            && sym[3..].chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+            && sym[3..]
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
     })
 }
 
@@ -551,8 +551,16 @@ mod tests {
         )
         .unwrap();
         let recs = vec![
-            FastaRecord { id: "q1".into(), desc: String::new(), seq: vec![b'A'; 500] },
-            FastaRecord { id: "q2".into(), desc: String::new(), seq: vec![b'A'; 40] },
+            FastaRecord {
+                id: "q1".into(),
+                desc: String::new(),
+                seq: vec![b'A'; 500],
+            },
+            FastaRecord {
+                id: "q2".into(),
+                desc: String::new(),
+                seq: vec![b'A'; 40],
+            },
         ];
         let s = contig_stats(&recs, &delta);
         assert_eq!((s[0].length, s[0].aligned_bp), (500, 150));
@@ -588,7 +596,9 @@ mod tests {
         assert_eq!(tags, vec!["t1", "t2", "t3"]);
         assert!(out[0].is_hit && !out[0].partial && (out[0].start, out[0].end) == (1501, 2000));
         // clipped at the block end, unnamed so labelled by its product
-        assert!(out[1].partial && out[1].end == 3000 && out[1].label == "transposase" && out[1].mobile);
+        assert!(
+            out[1].partial && out[1].end == 3000 && out[1].label == "transposase" && out[1].mobile
+        );
         // reversed block: ref 9101-9200 -> query 5801-5900 on the other strand
         assert_eq!((out[2].start, out[2].end, out[2].strand), (5801, 5900, -1));
         assert_eq!(out[2].distance, 5801 - 2000);
@@ -596,7 +606,10 @@ mod tests {
 
     #[test]
     fn unescapes_gff_attribute_values() {
-        assert_eq!(gff_unescape("ABC transporter%2C ATP-binding"), "ABC transporter, ATP-binding");
+        assert_eq!(
+            gff_unescape("ABC transporter%2C ATP-binding"),
+            "ABC transporter, ATP-binding"
+        );
         assert_eq!(gff_unescape("a%3Bb%3Dc%25"), "a;b=c%");
         assert_eq!(gff_unescape("100%"), "100%");
         assert_eq!(gff_unescape("%zz"), "%zz");
@@ -605,11 +618,26 @@ mod tests {
 
     #[test]
     fn recognises_mobile_element_names() {
-        for yes in ["transposase", "IS30 family transposase", "tnpA", "tnpR", "repA",
-                    "Tn3 family resolvase", "plasmid replication protein", "site-specific integrase"] {
+        for yes in [
+            "transposase",
+            "IS30 family transposase",
+            "tnpA",
+            "tnpR",
+            "repA",
+            "Tn3 family resolvase",
+            "plasmid replication protein",
+            "site-specific integrase",
+        ] {
             assert!(is_mobile_name(yes), "{yes}");
         }
-        for no in ["cadC", "hly", "internalin A", "replicase-associated protein X", "repressor", ""] {
+        for no in [
+            "cadC",
+            "hly",
+            "internalin A",
+            "replicase-associated protein X",
+            "repressor",
+            "",
+        ] {
             assert!(!is_mobile_name(no), "{no}");
         }
     }
@@ -636,23 +664,53 @@ mod tests {
             start: 1,
             end: 4265,
             length: 4265,
-            orfs: vec![orf(100, 900, "Tn3 family resolvase"), orf(2027, 2413, "SMR transporter"), orf(20_000, 20_100, "far")],
+            orfs: vec![
+                orf(100, 900, "Tn3 family resolvase"),
+                orf(2027, 2413, "SMR transporter"),
+                orf(20_000, 20_100, "far"),
+            ],
             ..Default::default()
         };
-        let genes = context_genes(std::slice::from_ref(&region), "c1", (2027, 2413), CONTEXT_WINDOW);
+        let genes = context_genes(
+            std::slice::from_ref(&region),
+            "c1",
+            (2027, 2413),
+            CONTEXT_WINDOW,
+        );
         assert_eq!(genes.len(), 2);
         assert!(genes[0].mobile && !genes[0].is_hit && genes[0].distance == 1127);
         assert!(genes[1].is_hit && !genes[1].mobile);
-        let contig = ContigStat { seqid: "c1".into(), length: 4265, aligned_bp: 0 };
+        let contig = ContigStat {
+            seqid: "c1".into(),
+            length: 4265,
+            aligned_bp: 0,
+        };
         let (k, t) = verdict(&contig, Some(&region), &["Tn3 family resolvase".into()]);
         assert_eq!(k, "plasmid");
         assert!(t.contains("0 %") && t.contains("resolvase"), "{t}");
 
-        let chrom = ContigStat { seqid: "c2".into(), length: 900_000, aligned_bp: 880_000 };
-        let placed = GainedRow { anchor: GainedAnchor::Between, left_gene: "lmo1".into(), right_gene: "lmo2".into(), length: 3000, ..Default::default() };
-        assert_eq!(verdict(&chrom, Some(&placed), &[]).0, "chromosome_insertion");
+        let chrom = ContigStat {
+            seqid: "c2".into(),
+            length: 900_000,
+            aligned_bp: 880_000,
+        };
+        let placed = GainedRow {
+            anchor: GainedAnchor::Between,
+            left_gene: "lmo1".into(),
+            right_gene: "lmo2".into(),
+            length: 3000,
+            ..Default::default()
+        };
+        assert_eq!(
+            verdict(&chrom, Some(&placed), &[]).0,
+            "chromosome_insertion"
+        );
         assert_eq!(verdict(&chrom, None, &[]).0, "chromosome_shared");
-        let big = ContigStat { seqid: "c3".into(), length: 900_000, aligned_bp: 1000 };
+        let big = ContigStat {
+            seqid: "c3".into(),
+            length: 900_000,
+            aligned_bp: 1000,
+        };
         assert_eq!(verdict(&big, None, &[]).0, "unplaced");
     }
 }

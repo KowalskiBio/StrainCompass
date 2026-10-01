@@ -49,7 +49,8 @@ fn records(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
         if let Some(h) = line.strip_prefix('>') {
             out.push((h.trim().to_string(), Vec::new()));
         } else if let Some(last) = out.last_mut() {
-            last.1.extend(line.trim().bytes().map(|b| b.to_ascii_uppercase()));
+            last.1
+                .extend(line.trim().bytes().map(|b| b.to_ascii_uppercase()));
         }
     }
     out
@@ -254,7 +255,10 @@ mod tests {
         CCCCACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT\n";
 
     fn cats() -> Vec<Catalog> {
-        vec![Catalog::amrfinder(AMR.as_bytes()), Catalog::vfdb(VF.as_bytes())]
+        vec![
+            Catalog::amrfinder(AMR.as_bytes()),
+            Catalog::vfdb(VF.as_bytes()),
+        ]
     }
 
     #[test]
@@ -262,10 +266,18 @@ mod tests {
         let c = cats();
         let lm = Some("Listeria monocytogenes");
         assert_eq!(lookup("emrC", lm, &c).unwrap().symbol, "emrC_Lis");
-        assert_eq!(lookup("emrC", Some("Escherichia coli"), &c).unwrap().symbol, "emrC");
+        assert_eq!(
+            lookup("emrC", Some("Escherichia coli"), &c).unwrap().symbol,
+            "emrC"
+        );
         assert_eq!(lookup("emrC", None, &c).unwrap().symbol, "emrC");
         assert_eq!(lookup("cadC", lm, &c).unwrap().symbol, "cadC_Lm");
-        assert_eq!(lookup("cadC", Some("Staphylococcus aureus"), &c).unwrap().symbol, "cadC_Sa");
+        assert_eq!(
+            lookup("cadC", Some("Staphylococcus aureus"), &c)
+                .unwrap()
+                .symbol,
+            "cadC_Sa"
+        );
         let h = lookup("hly", lm, &c).unwrap();
         assert_eq!(h.source, "VFDB");
         assert!(h.origin.contains("EGD-e"), "{}", h.origin);
@@ -275,7 +287,10 @@ mod tests {
     fn finds_family_prefixed_and_vfdb_names() {
         let c = cats();
         let b = lookup("bcrB", Some("Listeria monocytogenes"), &c).unwrap();
-        assert_eq!((b.symbol.as_str(), b.origin.as_str()), ("SMR_efflux_bcrB", "NG_055638.1:101-418"));
+        assert_eq!(
+            (b.symbol.as_str(), b.origin.as_str()),
+            ("SMR_efflux_bcrB", "NG_055638.1:101-418")
+        );
         assert!(b.product.contains("BcrB"));
         let l = lookup("llsG", Some("Listeria monocytogenes"), &c).unwrap();
         assert_eq!(l.source, "VFDB");

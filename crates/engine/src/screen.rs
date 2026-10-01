@@ -114,7 +114,13 @@ fn amr_organisms(bin: &Path, cfg: &ScreenConfig) -> &'static [String] {
         }
         let out = cmd.output().ok();
         let text = out
-            .map(|o| format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)))
+            .map(|o| {
+                format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&o.stdout),
+                    String::from_utf8_lossy(&o.stderr)
+                )
+            })
             .unwrap_or_default();
         parse_organism_list(&text)
     })
@@ -173,12 +179,18 @@ fn run_amrfinder(
         .map_err(|e| EngineError::ToolMissing(format!("amrfinder: {e}")))?;
     if !o.status.success() {
         let msg = String::from_utf8_lossy(&o.stderr);
-        let last = msg.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
+        let last = msg
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("");
         return Err(friendly(format!(
             "The resistance screen (AMRFinderPlus) failed. {last}"
         )));
     }
-    Ok(parse_amrfinder(&String::from_utf8_lossy(&std::fs::read(&out)?)))
+    Ok(parse_amrfinder(&String::from_utf8_lossy(&std::fs::read(
+        &out,
+    )?)))
 }
 
 /// AMRFinderPlus TSV, by column name: version 4 and the older version 3
@@ -206,7 +218,10 @@ pub fn parse_amrfinder(text: &str) -> Vec<ScreenHit> {
     let i_method = idx(&["Method"]);
     let i_cov = idx(&["% Coverage of reference"]);
     let i_id = idx(&["% Identity to reference"]);
-    let i_acc = idx(&["Closest reference accession", "Accession of closest sequence"]);
+    let i_acc = idx(&[
+        "Closest reference accession",
+        "Accession of closest sequence",
+    ]);
     let i_ref = idx(&["Closest reference name", "Name of closest sequence"]);
     let mut hits = Vec::new();
     for line in lines {
@@ -259,7 +274,9 @@ pub fn parse_vfdb_header(h: &str) -> (String, String, String, String, String, St
     let mut product_end = rest.len();
     let mut s = rest;
     while let Some(close) = s.rfind(']') {
-        let Some(open) = s[..close].rfind('[') else { break };
+        let Some(open) = s[..close].rfind('[') else {
+            break;
+        };
         groups.push(&s[open + 1..close]);
         product_end = open;
         s = &s[..open];
@@ -295,7 +312,9 @@ fn run_vfdb(
         .output()
         .map_err(|e| EngineError::ToolMissing(format!("makeblastdb: {e}")))?;
     if !o.status.success() {
-        return Err(friendly("The virulence screen could not prepare the genome."));
+        return Err(friendly(
+            "The virulence screen could not prepare the genome.",
+        ));
     }
     let out = work.join("vfdb.tsv");
     let o = Command::new(&tools.blastn)
@@ -322,7 +341,10 @@ fn run_vfdb(
     // headers by record id, for the names; read leniently, VFDB carries
     // a few Latin-1 characters in organism names
     let headers = vfdb_headers(&std::fs::read(vfdb)?);
-    Ok(select_vfdb_hits(&String::from_utf8_lossy(&std::fs::read(&out)?), &headers))
+    Ok(select_vfdb_hits(
+        &String::from_utf8_lossy(&std::fs::read(&out)?),
+        &headers,
+    ))
 }
 
 /// Record id -> full header line (without '>'), tolerating bytes that
@@ -375,7 +397,11 @@ pub fn select_vfdb_hits(text: &str, headers: &HashMap<String, String>) -> Vec<Sc
         })
         .filter(|r| r.pid >= VFDB_MIN_ID && r.cov >= VFDB_MIN_COV)
         .collect();
-    rows.sort_by(|a, b| b.bits.partial_cmp(&a.bits).unwrap_or(std::cmp::Ordering::Equal));
+    rows.sort_by(|a, b| {
+        b.bits
+            .partial_cmp(&a.bits)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut kept: Vec<Row> = Vec::new();
     for r in rows {
         let overlaps = kept.iter().any(|k| {
@@ -423,9 +449,15 @@ mod tests {
             NA\tLM226_contig46\t2466\t2822\t-\tcadC\tCd(II)-sensing repressor CadC\tplus\tSTRESS\tMETAL\tCADMIUM\tCADMIUM\tBLASTX\t119\t120\t99.17\t98.32\t119\tWP_002\tcadC\tNA\tNA\n";
         let h = parse_amrfinder(tsv);
         assert_eq!(h.len(), 2);
-        assert_eq!((h[0].gene.as_str(), h[0].kind.as_str(), h[0].class.as_str()), ("emrC", "AMR", "QUATERNARY AMMONIUM"));
+        assert_eq!(
+            (h[0].gene.as_str(), h[0].kind.as_str(), h[0].class.as_str()),
+            ("emrC", "AMR", "QUATERNARY AMMONIUM")
+        );
         assert_eq!((h[0].start, h[0].end, h[0].strand), (2030, 2413, -1));
-        assert_eq!((h[1].category.as_str(), h[1].identity, h[1].coverage), ("METAL", 98.32, 99.17));
+        assert_eq!(
+            (h[1].category.as_str(), h[1].identity, h[1].coverage),
+            ("METAL", 98.32, 99.17)
+        );
         assert!(parse_amrfinder("").is_empty());
     }
 
@@ -433,8 +465,14 @@ mod tests {
     fn picks_amrfinder_organism_only_when_it_has_rules() {
         let list = parse_organism_list("Available --organism options: Campylobacter, Escherichia, Salmonella, Staphylococcus_aureus");
         assert_eq!(list.len(), 4);
-        assert_eq!(amr_organism("Staphylococcus aureus", &list).as_deref(), Some("Staphylococcus_aureus"));
-        assert_eq!(amr_organism("Salmonella enterica", &list).as_deref(), Some("Salmonella"));
+        assert_eq!(
+            amr_organism("Staphylococcus aureus", &list).as_deref(),
+            Some("Staphylococcus_aureus")
+        );
+        assert_eq!(
+            amr_organism("Salmonella enterica", &list).as_deref(),
+            Some("Salmonella")
+        );
         assert_eq!(amr_organism("Listeria monocytogenes", &list), None);
         assert_eq!(amr_organism("Bacillus cereus", &list), None);
         assert_eq!(amr_organism("", &list), None);
@@ -451,7 +489,15 @@ mod tests {
         assert_eq!((factor.as_str(), cat.as_str()), ("ActA", "Motility"));
         assert_eq!(org, "Listeria monocytogenes EGD-e");
         let (_, g, p, f, c, _) = parse_vfdb_header("VFG1 (hbp1/svpA) Haemoglobin binding protein 1 [SvpA (VF0263) - Nutritional/Metabolic factor (VFC0272)] [Listeria monocytogenes EGD-e]");
-        assert_eq!((g.as_str(), p.as_str(), f.as_str(), c.as_str()), ("hbp1/svpA", "Haemoglobin binding protein 1", "SvpA", "Nutritional/Metabolic factor"));
+        assert_eq!(
+            (g.as_str(), p.as_str(), f.as_str(), c.as_str()),
+            (
+                "hbp1/svpA",
+                "Haemoglobin binding protein 1",
+                "SvpA",
+                "Nutritional/Metabolic factor"
+            )
+        );
     }
 
     #[test]
@@ -469,7 +515,11 @@ mod tests {
     fn keeps_the_best_vfdb_gene_per_genome_stretch() {
         let mut h = HashMap::new();
         h.insert("A".to_string(), "A (hly) listeriolysin O [LLO (VF0064) - Exotoxin (VFC0235)] [Listeria monocytogenes EGD-e]".to_string());
-        h.insert("B".to_string(), "B (hly) listeriolysin O [LLO (VF0064) - Exotoxin (VFC0235)] [Listeria ivanovii]".to_string());
+        h.insert(
+            "B".to_string(),
+            "B (hly) listeriolysin O [LLO (VF0064) - Exotoxin (VFC0235)] [Listeria ivanovii]"
+                .to_string(),
+        );
         h.insert("C".to_string(), "C (prfA) regulator [PrfA (VF0062) - Regulation (VFC0301)] [Listeria monocytogenes EGD-e]".to_string());
         let rows = "A\tc1\t99.9\t1590\t1590\t100\t1689\t2900\n\
             B\tc1\t85.0\t1580\t1590\t105\t1684\t1800\n\
@@ -478,7 +528,14 @@ mod tests {
         let hits = select_vfdb_hits(rows, &h);
         // B overlaps A (homologue), C fails identity on c1 and coverage on c2
         assert_eq!(hits.len(), 1);
-        assert_eq!((hits[0].gene.as_str(), hits[0].class.as_str(), hits[0].category.as_str()), ("hly", "LLO", "Exotoxin"));
+        assert_eq!(
+            (
+                hits[0].gene.as_str(),
+                hits[0].class.as_str(),
+                hits[0].category.as_str()
+            ),
+            ("hly", "LLO", "Exotoxin")
+        );
         assert_eq!(hits[0].reference, "A [Listeria monocytogenes EGD-e]");
     }
 }

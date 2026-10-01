@@ -95,7 +95,10 @@ pub async fn panel_origin(
     let seq = panel_gene_seq(&state, project_id, run_id, &q.gene_id)?;
     let genus = project_genus(&state, project_id);
     let (scope, scope_note) = match (&genus, q.wide) {
-        (Some(g), false) => (g.clone(), format!("Searched {g} records (the project's genus).")),
+        (Some(g), false) => (
+            g.clone(),
+            format!("Searched {g} records (the project's genus)."),
+        ),
         (None, false) => (
             BACTERIA.to_string(),
             "The project names no organism, so all bacteria were searched.".to_string(),
@@ -204,7 +207,10 @@ fn panel_gene_seq(
     run_id: i64,
     gene_id: &str,
 ) -> ApiResult<Vec<u8>> {
-    let panel = state.run_dir(project_id, run_id).join("panel").join("panel.fa");
+    let panel = state
+        .run_dir(project_id, run_id)
+        .join("panel")
+        .join("panel.fa");
     let recs = straincompass_engine::fasta::parse_fasta(&panel).map_err(|_| {
         ApiError::NotFound("This run's gene panel file is no longer on the server.".into())
     })?;
@@ -239,7 +245,10 @@ fn project_genus(state: &SharedState, project_id: i64) -> Option<String> {
     std::io::BufReader::new(std::fs::File::open(fasta).ok()?)
         .read_line(&mut first)
         .ok()?;
-    let desc = first.trim_start_matches('>').split_once(char::is_whitespace)?.1;
+    let desc = first
+        .trim_start_matches('>')
+        .split_once(char::is_whitespace)?
+        .1;
     genus_of(desc)
 }
 
@@ -281,7 +290,11 @@ async fn submit(c: &reqwest::Client, url: &str, seq: &[u8], scope: &str) -> ApiR
         .await
         .map_err(|e| ApiError::Internal(format!("NCBI BLAST answered oddly. ({e})")))?;
     text.lines()
-        .find_map(|l| l.trim().strip_prefix("RID = ").map(|r| r.trim().to_string()))
+        .find_map(|l| {
+            l.trim()
+                .strip_prefix("RID = ")
+                .map(|r| r.trim().to_string())
+        })
         .ok_or_else(|| ApiError::Internal("NCBI BLAST did not accept the search.".into()))
 }
 
@@ -338,8 +351,11 @@ fn full_length_matches(text: &str, qlen: u64) -> HashMap<String, (f64, f64)> {
         if line.starts_with('#') || f.len() < 8 {
             continue;
         }
-        let (Ok(pid), Ok(qs), Ok(qe)) = (f[2].parse::<f64>(), f[6].parse::<u64>(), f[7].parse::<u64>())
-        else {
+        let (Ok(pid), Ok(qs), Ok(qe)) = (
+            f[2].parse::<f64>(),
+            f[6].parse::<u64>(),
+            f[7].parse::<u64>(),
+        ) else {
             continue;
         };
         let cov = 100.0 * (qe.max(qs) - qe.min(qs) + 1) as f64 / qlen.max(1) as f64;
@@ -378,7 +394,10 @@ async fn summarize(
                 if uid == "uids" {
                     continue;
                 }
-                let acc = r["accessionversion"].as_str().unwrap_or_default().to_string();
+                let acc = r["accessionversion"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
                 out.insert(
                     acc,
                     (
@@ -472,8 +491,14 @@ mod tests {
 
     #[test]
     fn reads_genus_from_organism_or_header() {
-        assert_eq!(genus_of("Listeria monocytogenes").as_deref(), Some("Listeria"));
-        assert_eq!(genus_of("Bacillus cereus ATCC 14579 chromosome").as_deref(), Some("Bacillus"));
+        assert_eq!(
+            genus_of("Listeria monocytogenes").as_deref(),
+            Some("Listeria")
+        );
+        assert_eq!(
+            genus_of("Bacillus cereus ATCC 14579 chromosome").as_deref(),
+            Some("Bacillus")
+        );
         assert_eq!(genus_of("").as_deref(), None);
         assert_eq!(genus_of("LM226_contig1").as_deref(), None);
         assert_eq!(genus_of("unknown bug").as_deref(), None);
@@ -481,7 +506,10 @@ mod tests {
 
     #[test]
     fn takes_accessions_out_of_subject_ids() {
-        assert_eq!(subject_accession("gi|1897675539|gb|CP060527.1|"), "CP060527.1");
+        assert_eq!(
+            subject_accession("gi|1897675539|gb|CP060527.1|"),
+            "CP060527.1"
+        );
         assert_eq!(subject_accession("NZ_CP060527.1"), "NZ_CP060527.1");
         assert_eq!(subject_accession("ref|NC_003210.1|"), "NC_003210.1");
     }
@@ -518,10 +546,25 @@ mod tests {
 
     #[test]
     fn sorts_records_into_plasmid_chromosome_and_contig() {
-        assert_eq!(record_kind("Listeria monocytogenes strain X plasmid pX, complete sequence", ""), "plasmid");
-        assert_eq!(record_kind("Listeria monocytogenes EGD-e complete genome", ""), "chromosome");
+        assert_eq!(
+            record_kind(
+                "Listeria monocytogenes strain X plasmid pX, complete sequence",
+                ""
+            ),
+            "plasmid"
+        );
+        assert_eq!(
+            record_kind("Listeria monocytogenes EGD-e complete genome", ""),
+            "chromosome"
+        );
         assert_eq!(record_kind("whatever", "chromosome"), "chromosome");
-        assert_eq!(record_kind("Listeria monocytogenes strain Y NODE_1, whole genome shotgun sequence", ""), "contig");
+        assert_eq!(
+            record_kind(
+                "Listeria monocytogenes strain Y NODE_1, whole genome shotgun sequence",
+                ""
+            ),
+            "contig"
+        );
 
         let mut matches = HashMap::new();
         matches.insert("P1".to_string(), (100.0, 100.0));
@@ -530,14 +573,52 @@ mod tests {
         matches.insert("W1".to_string(), (98.0, 100.0));
         matches.insert("G1".to_string(), (100.0, 100.0));
         let mut s = HashMap::new();
-        s.insert("P1".to_string(), ("x plasmid p1, complete sequence".to_string(), 90_000, "plasmid".to_string()));
-        s.insert("P2".to_string(), ("x plasmid p2, complete sequence".to_string(), 50_000, "plasmid".to_string()));
-        s.insert("G1".to_string(), ("x plasmid pLM80 bcrB gene, complete CDS".to_string(), 518, "".to_string()));
-        s.insert("C1".to_string(), ("x chromosome, complete genome".to_string(), 3_000_000, "chromosome".to_string()));
-        s.insert("W1".to_string(), ("x contig_5, whole genome shotgun sequence".to_string(), 40_000, "".to_string()));
+        s.insert(
+            "P1".to_string(),
+            (
+                "x plasmid p1, complete sequence".to_string(),
+                90_000,
+                "plasmid".to_string(),
+            ),
+        );
+        s.insert(
+            "P2".to_string(),
+            (
+                "x plasmid p2, complete sequence".to_string(),
+                50_000,
+                "plasmid".to_string(),
+            ),
+        );
+        s.insert(
+            "G1".to_string(),
+            (
+                "x plasmid pLM80 bcrB gene, complete CDS".to_string(),
+                518,
+                "".to_string(),
+            ),
+        );
+        s.insert(
+            "C1".to_string(),
+            (
+                "x chromosome, complete genome".to_string(),
+                3_000_000,
+                "chromosome".to_string(),
+            ),
+        );
+        s.insert(
+            "W1".to_string(),
+            (
+                "x contig_5, whole genome shotgun sequence".to_string(),
+                40_000,
+                "".to_string(),
+            ),
+        );
         let g = classify(&matches, &s);
         // the gene record counts as a plasmid match but is not offered
-        assert_eq!((g.n_matches, g.n_plasmid, g.n_chromosome, g.n_contig), (5, 3, 1, 1));
+        assert_eq!(
+            (g.n_matches, g.n_plasmid, g.n_chromosome, g.n_contig),
+            (5, 3, 1, 1)
+        );
         let order: Vec<&str> = g.plasmids.iter().map(|p| p.accession.as_str()).collect();
         assert_eq!(order, vec!["P2", "P1"]);
         assert_eq!(g.chromosomes.len(), 1);

@@ -386,15 +386,15 @@ async fn build_panel(
     let mut missing = panel.missing.clone();
     let mut from_catalog = Vec::new();
     let organism: String = {
-            let conn = state.db.lock().unwrap();
-            conn.query_row(
-                "SELECT organism FROM projects WHERE id = ?1",
-                [project_id],
-                |r| r.get::<_, Option<String>>(0),
-            )
-            .ok()
-            .flatten()
-            .unwrap_or_default()
+        let conn = state.db.lock().unwrap();
+        conn.query_row(
+            "SELECT organism FROM projects WHERE id = ?1",
+            [project_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+        .unwrap_or_default()
     };
     let vfdb_default = state.data_dir.join("db").join("VFDB_setA_nt.fas");
     let wanted = missing.clone();
@@ -748,7 +748,11 @@ fn catalog_lookup(
                     g.source,
                     g.symbol,
                     g.product,
-                    if g.origin.is_empty() { String::new() } else { format!(" ({})", g.origin) }
+                    if g.origin.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", g.origin)
+                    }
                 );
                 resolved.push((rec, note));
             }
@@ -762,9 +766,9 @@ fn catalog_lookup(
             let Some(rec) = recs.iter().find(|r| &r.id == name) else {
                 continue;
             };
-            if let Some(v) = straincompass_engine::catalog::organism_variant(
-                name, organism, &rec.seq, &catalogs,
-            ) {
+            if let Some(v) =
+                straincompass_engine::catalog::organism_variant(name, organism, &rec.seq, &catalogs)
+            {
                 hints.push(format!(
                     "{name}: taken from your reference genome. {} also has {}, a different gene of that name ({}). To use that one instead, write {}.",
                     v.source, v.symbol, v.product, v.symbol

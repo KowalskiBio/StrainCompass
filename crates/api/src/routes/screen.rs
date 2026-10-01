@@ -39,13 +39,24 @@ pub async fn screen(
     rows.sort_by(|a, b| {
         let ord = match q.sort_by.as_deref() {
             Some("gene") => a.gene.to_lowercase().cmp(&b.gene.to_lowercase()),
-            Some("kind") => (a.kind.as_str(), a.category.as_str()).cmp(&(b.kind.as_str(), b.category.as_str())),
+            Some("kind") => {
+                (a.kind.as_str(), a.category.as_str()).cmp(&(b.kind.as_str(), b.category.as_str()))
+            }
             Some("class") => a.class.cmp(&b.class),
             Some("source") => a.source.cmp(&b.source),
-            Some("identity") => a.identity.partial_cmp(&b.identity).unwrap_or(std::cmp::Ordering::Equal),
-            Some("coverage") => a.coverage.partial_cmp(&b.coverage).unwrap_or(std::cmp::Ordering::Equal),
-            _ => (a.kind.as_str(), a.category.as_str(), a.gene.to_lowercase())
-                .cmp(&(b.kind.as_str(), b.category.as_str(), b.gene.to_lowercase())),
+            Some("identity") => a
+                .identity
+                .partial_cmp(&b.identity)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            Some("coverage") => a
+                .coverage
+                .partial_cmp(&b.coverage)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            _ => (a.kind.as_str(), a.category.as_str(), a.gene.to_lowercase()).cmp(&(
+                b.kind.as_str(),
+                b.category.as_str(),
+                b.gene.to_lowercase(),
+            )),
         };
         if asc {
             ord
@@ -125,7 +136,10 @@ pub async fn screen_matrix(
     let mut rows: Vec<ScreenMatrixRow> = rows.into_values().collect();
     rows.retain(|r| {
         matches_search(
-            &format!("{} {} {} {} {}", r.gene, r.product, r.kind, r.category, r.class),
+            &format!(
+                "{} {} {} {} {}",
+                r.gene, r.product, r.kind, r.category, r.class
+            ),
             &q.search,
         ) && kind_ok(&r.kind, &q.call)
     });
