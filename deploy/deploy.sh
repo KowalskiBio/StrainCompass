@@ -121,6 +121,12 @@ trap - ERR
 if healthy; then
   echo "$COMMIT $(date -Is)" >> deployed.log
   echo "healthy: $COMMIT is live"
+  # retention, only after a good deploy: the newest 3 backups and the
+  # newest 3 rollback copies (this deploy's included); the disk is small
+  ls -1t backups/data-*.tar.gz 2>/dev/null | tail -n +4 | xargs -r rm -f --
+  ls -1t backups/db-*.sqlite 2>/dev/null | tail -n +4 | xargs -r rm -f --
+  ls -1dt versions/prev-* 2>/dev/null | tail -n +4 | xargs -r rm -rf --
+  echo "kept $(ls backups/data-*.tar.gz | wc -l) backups and $(ls -d versions/prev-* | wc -l) rollback copies; $(df -h / | awk 'NR==2{print $4}') free"
   exit 0
 fi
 

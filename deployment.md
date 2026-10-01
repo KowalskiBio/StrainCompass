@@ -228,8 +228,11 @@ In order, and aborting at the first failure:
    previous version, restarts it and exits non-zero.
 
 It touches only `~/straincompass`, `~/straincompass-src` and the user
-unit `straincompass` (`systemctl --user`, no sudo). It never deletes
-backups or old versions; prune those by hand (section 5 retention).
+unit `straincompass` (`systemctl --user`, no sudo). After a deploy that
+passed its health check it keeps the newest 3 backups and the newest 3
+rollback copies (`versions/prev-*`) and deletes older ones; a failed
+deploy deletes nothing. The disk is small (38 GB, shared), so this
+replaces the "last 10" of section 5.
 
 After it finishes: smoke test in the browser and watch the log a while:
 
