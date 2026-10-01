@@ -3,6 +3,7 @@
 //! (compare_genome_vs_reference.R) to Rust.
 
 pub mod blast;
+pub mod catalog;
 pub mod coverage;
 pub mod delta;
 pub mod element;

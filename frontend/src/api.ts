@@ -296,14 +296,14 @@ export const api = {
   uploadPanelIds: (projectId: number, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return request<{ file: ProjectFile; found: string[]; from_ncbi: string[]; missing: string[] }>(
+    return request<{ file: ProjectFile; found: string[]; from_ncbi: string[]; from_catalog?: string[]; hints?: string[]; missing: string[] }>(
       `/projects/${projectId}/panel/from_ids`,
       { method: "POST", body: form },
     );
   },
   /** `append` adds the genes to the current panel instead of replacing it. */
   buildPanelFromText: (projectId: number, text: string, append = false) =>
-    request<{ file: ProjectFile; found: string[]; from_ncbi: string[]; missing: string[] }>(
+    request<{ file: ProjectFile; found: string[]; from_ncbi: string[]; from_catalog?: string[]; hints?: string[]; missing: string[] }>(
       `/projects/${projectId}/panel/from_text${append ? "?append=true" : ""}`,
       {
         method: "POST",

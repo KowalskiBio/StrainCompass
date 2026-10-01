@@ -40,7 +40,7 @@ export function InputWizard({
 }) {
   const [step, setStep] = useState(1);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<PanelNotice | null>(null);
   const [geneList, setGeneList] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [accession, setAccession] = useState("");
@@ -127,12 +127,12 @@ export function InputWizard({
     setError(null);
     setNotice(null);
     try {
-      let r: { found: string[]; from_ncbi: string[]; missing: string[] };
+      let r: PanelResult;
       if (/\.(csv|tsv|txt)$/i.test(f.name)) {
         r = await api.uploadPanelIds(projectId, f);
       } else {
         await api.uploadPanel(projectId, f);
-        r = { found: [], from_ncbi: [], missing: [] };
+        r = { found: [], from_ncbi: [], from_catalog: [], missing: [] };
       }
       onFilesChanged();
       showPanelNotice(r);
@@ -164,27 +164,22 @@ export function InputWizard({
     }
   }
 
-  function showPanelNotice(
-    r: {
-      found: string[];
-      from_ncbi: string[];
-      missing: string[];
-    },
-    append = false,
-  ) {
-    if (r.found.length === 0 && r.from_ncbi.length === 0) return;
+  function showPanelNotice(r: PanelResult, append = false) {
+    const catalog = r.from_catalog ?? [];
+    const n = r.found.length + r.from_ncbi.length + catalog.length;
+    if (n === 0) return;
     const parts = [`${r.found.length} from the reference`];
-    if (r.from_ncbi.length > 0)
-      parts.push(`${r.from_ncbi.length} from NCBI`);
-    const n = r.found.length + r.from_ncbi.length;
-    let msg = append
-      ? `Added ${n} gene${n === 1 ? "" : "s"} to the panel: ${parts.join(", ")}.`
-      : `The panel was built with ${n} genes: ${parts.join(", ")}.`;
-    if (r.from_ncbi.length > 0)
-      msg += ` Fetched: ${r.from_ncbi.join(", ")}.`;
-    if (r.missing.length > 0)
-      msg += ` Not found anywhere: ${r.missing.join(", ")} (add these via a FASTA file if you need them).`;
-    setNotice(msg);
+    if (catalog.length > 0) parts.push(`${catalog.length} from the curated databases`);
+    if (r.from_ncbi.length > 0) parts.push(`${r.from_ncbi.length} from NCBI`);
+    setNotice({
+      summary: append
+        ? `Added ${n} gene${n === 1 ? "" : "s"} to the panel: ${parts.join(", ")}.`
+        : `The panel was built with ${n} genes: ${parts.join(", ")}.`,
+      catalog,
+      hints: r.hints ?? [],
+      fetched: r.from_ncbi,
+      missing: r.missing,
+    });
   }
 
   const steps = [
@@ -426,7 +421,30 @@ export function InputWizard({
               </div>
               {notice && (
                 <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-[15px] text-zinc-700 dark:border-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-300">
-                  {notice}
+                  <p>{notice.summary}</p>
+                  {notice.hints.length > 0 && (
+                    <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                      {notice.hints.map((h) => (
+                        <p key={h}>{h}</p>
+                      ))}
+                    </div>
+                  )}
+                  {notice.catalog.length > 0 && (
+                    <NoticeList
+                      title="From the curated databases (AMRFinderPlus, VFDB), as entry: product. Check that each is the gene you meant:"
+                      items={notice.catalog}
+                    />
+                  )}
+                  {notice.fetched.length > 0 && (
+                    <NoticeList title="Fetched from NCBI:" items={notice.fetched} />
+                  )}
+                  {notice.missing.length > 0 && (
+                    <p className="mt-2">
+                      Not found anywhere: {notice.missing.join(", ")}. Pin a GenBank record, e.g.{" "}
+                      <span className="font-mono">gene (ACCESSION:start-end rev)</span>, or add a
+                      FASTA file.
+                    </p>
+                  )}
                 </div>
               )}
               {panel ? (
@@ -520,6 +538,35 @@ export function InputWizard({
           {nav(true)}
         </div>
       </div>
+    </div>
+  );
+}
+
+interface PanelResult {
+  found: string[];
+  from_ncbi: string[];
+  from_catalog?: string[];
+  hints?: string[];
+  missing: string[];
+}
+
+interface PanelNotice {
+  summary: string;
+  hints: string[];
+  catalog: string[];
+  fetched: string[];
+  missing: string[];
+}
+
+function NoticeList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="mt-2">
+      <p className="text-sm text-zinc-500 dark:text-zinc-400">{title}</p>
+      <ul className="mt-1 space-y-0.5 text-sm">
+        {items.map((i) => (
+          <li key={i}>{i}</li>
+        ))}
+      </ul>
     </div>
   );
 }

@@ -288,6 +288,14 @@ pub struct PanelFromIdsDto {
     pub found: Vec<String>,
     /// Genes fetched from NCBI because the reference lacks them.
     pub from_ncbi: Vec<String>,
+    /// Genes taken from the curated catalogs (AMRFinderPlus, VFDB), with
+    /// the entry and product they were taken from.
+    #[serde(default)]
+    pub from_catalog: Vec<String>,
+    /// Genes taken from the reference for which the curated catalogs hold
+    /// a different, organism-specific gene of the same name.
+    #[serde(default)]
+    pub hints: Vec<String>,
     pub missing: Vec<String>,
 }
 
@@ -370,10 +378,39 @@ async fn build_panel(
     .await
     .map_err(|e| ApiError::Internal(format!("The panel could not be built. ({e})")))??;
 
-    // Genes the reference does not carry: fetch them from NCBI by name.
+    // Genes the reference does not carry: first the curated catalogs the
+    // resistance/virulence screen uses (sequence-curated, organism-aware
+    // names), then NCBI by name.
     let mut fasta = panel.fasta;
     let mut from_ncbi = Vec::new();
     let mut missing = panel.missing.clone();
+    let mut from_catalog = Vec::new();
+    let organism: String = {
+            let conn = state.db.lock().unwrap();
+            conn.query_row(
+                "SELECT organism FROM projects WHERE id = ?1",
+                [project_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+    };
+    let vfdb_default = state.data_dir.join("db").join("VFDB_setA_nt.fas");
+    let wanted = missing.clone();
+    let ref_panel = fasta.clone();
+    let found = panel.found.clone();
+    let organism2 = organism.clone();
+    let (resolved, unresolved, hints) = tokio::task::spawn_blocking(move || {
+        catalog_lookup(&wanted, &found, &ref_panel, &organism2, vfdb_default)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("The gene catalogs could not be read. ({e})")))?;
+    for (record, note) in resolved {
+        fasta.push_str(&record);
+        from_catalog.push(note);
+    }
+    missing = unresolved;
     if !missing.is_empty() {
         let (organism, api_key) = {
             let conn = state.db.lock().unwrap();
@@ -459,7 +496,7 @@ async fn build_panel(
         }
     }
 
-    if panel.found.is_empty() && from_ncbi.is_empty() {
+    if panel.found.is_empty() && from_ncbi.is_empty() && from_catalog.is_empty() {
         let hints: Vec<String> = missing.iter().filter_map(|l| accession_hint(l)).collect();
         let mut msg = format!(
             "None of the entries in \u{201c}{source_name}\u{201d} match a gene in the reference annotation, and none could be fetched from NCBI. Check the spelling of the gene names."
@@ -476,6 +513,8 @@ async fn build_panel(
         file: dto,
         found: panel.found,
         from_ncbi,
+        from_catalog,
+        hints,
         missing,
     }))
 }
@@ -658,4 +697,80 @@ fn accession_hint(line: &str) -> Option<String> {
         "In \u{201c}{}\u{201d}, \u{201c}{acc}\u{201d} is not a GenBank accession: write the record's real accession, e.g. emrC (CP038643.1:1496-1882 rev).",
         line.trim()
     ))
+}
+
+/// Resolve plain gene names (no pinned accession) from the curated
+/// catalogs: (FASTA record, note) for each one found, and the entries
+/// still unresolved.
+fn catalog_lookup(
+    wanted: &[String],
+    found: &[String],
+    ref_panel: &str,
+    organism: &str,
+    vfdb_default: std::path::PathBuf,
+) -> (Vec<(String, String)>, Vec<String>, Vec<String>) {
+    use straincompass_engine::catalog::{lookup, Catalog};
+    let cfg = straincompass_engine::screen::ScreenConfig::discover(Some(vfdb_default));
+    let mut catalogs = Vec::new();
+    if let Some(c) = cfg
+        .amr_db
+        .as_ref()
+        .and_then(|d| Catalog::from_file(&d.join("AMR_CDS.fa"), false))
+    {
+        catalogs.push(c);
+    }
+    if let Some(c) = cfg.vfdb.as_ref().and_then(|p| Catalog::from_file(p, true)) {
+        catalogs.push(c);
+    }
+    let organism = (!organism.trim().is_empty()).then_some(organism);
+    let mut resolved = Vec::new();
+    let mut unresolved = Vec::new();
+    for line in wanted {
+        // a pinned accession is the user's explicit choice: leave it to NCBI
+        let plain = crate::routes::ncbi::parse_accession_spec(line).is_none();
+        let name = line
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_matches(|c| c == '(' || c == ')' || c == '[' || c == ']');
+        match plain.then(|| lookup(name, organism, &catalogs)).flatten() {
+            Some(g) => {
+                let mut rec = format!(
+                    ">{name} {} {}: {} [{}]\n",
+                    g.source, g.symbol, g.product, g.origin
+                );
+                for chunk in g.seq.chunks(60) {
+                    rec.push_str(&String::from_utf8_lossy(chunk));
+                    rec.push('\n');
+                }
+                let note = format!(
+                    "{name} \u{2190} {} {}: {}{}",
+                    g.source,
+                    g.symbol,
+                    g.product,
+                    if g.origin.is_empty() { String::new() } else { format!(" ({})", g.origin) }
+                );
+                resolved.push((rec, note));
+            }
+            None => unresolved.push(line.clone()),
+        }
+    }
+    // reference genes whose name means something else in the catalogs
+    let mut hints = Vec::new();
+    if let Ok(recs) = straincompass_engine::fasta::parse_fasta_str(ref_panel) {
+        for name in found {
+            let Some(rec) = recs.iter().find(|r| &r.id == name) else {
+                continue;
+            };
+            if let Some(v) = straincompass_engine::catalog::organism_variant(
+                name, organism, &rec.seq, &catalogs,
+            ) {
+                hints.push(format!(
+                    "{name}: taken from your reference genome. {} also has {}, a different gene of that name ({}). To use that one instead, write {}.",
+                    v.source, v.symbol, v.product, v.symbol
+                ));
+            }
+        }
+    }
+    (resolved, unresolved, hints)
 }
