@@ -100,6 +100,35 @@ pub fn is_mobile_name(label: &str) -> bool {
     })
 }
 
+/// Where a panel gene's sequence came from, read from its record in the
+/// panel FASTA as the panel builder writes it: "AMRFinderPlus emrC_Lis:
+/// product [origin]", "VFDB ...", "NCBI <accession>", "reference
+/// <locus>". A record without such a note is matched against the
+/// reference's genes by name, else it is the user's own sequence.
+pub fn panel_gene_source(id: &str, desc: &str, ref_genes: &[WgaGene]) -> String {
+    let mut words = desc.split_whitespace();
+    let first = words.next().unwrap_or("");
+    let entry = words.next().unwrap_or("").trim_end_matches(':');
+    let with = |db: &str| {
+        if entry.is_empty() {
+            db.to_string()
+        } else {
+            format!("{db} ({entry})")
+        }
+    };
+    match first {
+        "AMRFinderPlus" | "VFDB" => with(first),
+        "NCBI" => with("NCBI Nucleotide"),
+        "reference" => with("reference genome"),
+        _ => match ref_genes.iter().find(|g| {
+            g.locus_tag == id || (!g.symbol.is_empty() && g.symbol.eq_ignore_ascii_case(id))
+        }) {
+            Some(g) => format!("reference genome ({})", g.locus_tag),
+            None => "your panel FASTA".into(),
+        },
+    }
+}
+
 /// Share of both the predicted gene and the hit that must overlap for the
 /// gene to count as the panel gene itself, percent.
 const SAME_LOCUS_MIN_OVERLAP: f64 = 80.0;
@@ -694,6 +723,32 @@ mod tests {
                 ..Default::default()
             }),
         }
+    }
+
+    #[test]
+    fn names_the_database_a_panel_gene_came_from() {
+        let refs = vec![WgaGene {
+            locus_tag: "lmo0200".into(),
+            symbol: "prfA".into(),
+            ..Default::default()
+        }];
+        let src = |id, desc| panel_gene_source(id, desc, &refs);
+        assert_eq!(
+            src("emrC", "AMRFinderPlus emrC_Lis: EmrC [EAC4468893.1]"),
+            "AMRFinderPlus (emrC_Lis)"
+        );
+        assert_eq!(src("llsA", "VFDB VFG045 : LLS"), "VFDB (VFG045)");
+        assert_eq!(
+            src("qacH", "NCBI HF565366.1:1-381"),
+            "NCBI Nucleotide (HF565366.1:1-381)"
+        );
+        assert_eq!(
+            src("lmo0200", "reference lmo0200"),
+            "reference genome (lmo0200)"
+        );
+        // panels built before the note was written
+        assert_eq!(src("prfA", ""), "reference genome (lmo0200)");
+        assert_eq!(src("myGene", "whatever"), "your panel FASTA");
     }
 
     #[test]

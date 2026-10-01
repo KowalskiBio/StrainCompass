@@ -429,6 +429,11 @@ pub struct PanelContext {
     pub query_id: i64,
     pub query_name: String,
     pub gene_id: String,
+    /// Where the panel's sequence for the gene came from: "AMRFinderPlus
+    /// (emrC_Lis)", "VFDB (...)", "NCBI Nucleotide (...)", "reference
+    /// genome (lmo0200)" or "your panel FASTA"; empty when unknown.
+    #[serde(default)]
+    pub panel_source: String,
     pub call: Call,
     pub cov_pct: f64,
     pub identity: f64,
@@ -607,7 +612,7 @@ pub struct WgaBlock {
 }
 
 /// Reference gene for the genome viewer track.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WgaGene {
     pub locus_tag: String,
     pub symbol: String,

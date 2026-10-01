@@ -269,7 +269,7 @@ function AlignedBar({ pct }: { pct: number }) {
 
 const SOURCE_LABEL: Record<string, string> = {
   annotation: "reference annotation",
-  panel: "predicted, found by the panel search",
+  panel: "panel gene",
   reference: "predicted, like a reference gene",
   ncbi: "predicted, named by NCBI",
   "": "predicted, unnamed",
@@ -344,8 +344,17 @@ function ContextGenes({ ctx }: { ctx: PanelContext }) {
                   </div>
                 )}
               </td>
-              <td className="px-3 py-1.5 text-xs text-zinc-500 whitespace-nowrap dark:text-zinc-400">
-                {SOURCE_LABEL[g.source] ?? g.source}
+              <td
+                className="px-3 py-1.5 text-xs text-zinc-500 whitespace-nowrap dark:text-zinc-400"
+                title={
+                  g.source === "panel"
+                    ? "Identified by matching the panel's curated sequence; the gene's start and end come from gene prediction (Prodigal)."
+                    : undefined
+                }
+              >
+                {g.source === "panel" && ctx.panel_source
+                  ? ctx.panel_source
+                  : (SOURCE_LABEL[g.source] ?? g.source)}
               </td>
               <td className="px-3 py-1.5 text-right tabular-nums text-zinc-500 dark:text-zinc-400">
                 {g.is_hit ? "" : fmtBp(g.distance)}

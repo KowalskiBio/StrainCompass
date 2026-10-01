@@ -111,6 +111,9 @@ pub fn panel_from_ids(ref_fasta: &Path, ref_gff: &Path, ids_text: &str) -> Resul
                     let seq = gene_sequence(ref_fasta, gene)?;
                     fasta.push('>');
                     fasta.push_str(&header);
+                    // where the sequence came from, for the run to show
+                    fasta.push_str(" reference ");
+                    fasta.push_str(&gene.locus_tag);
                     fasta.push('\n');
                     for chunk in seq.chunks(60) {
                         fasta.push_str(std::str::from_utf8(chunk).unwrap_or(""));

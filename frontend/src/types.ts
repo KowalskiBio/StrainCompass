@@ -298,6 +298,9 @@ export interface PanelContext {
   query_id: number;
   query_name: string;
   gene_id: string;
+  /** Where the panel's sequence for the gene came from, e.g.
+   * "AMRFinderPlus (emrC_Lis)"; empty when unknown. */
+  panel_source: string;
   call: Call;
   cov_pct: number;
   identity: number;

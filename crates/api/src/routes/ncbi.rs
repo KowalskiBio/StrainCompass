@@ -321,7 +321,8 @@ pub async fn fetch_gene(
     if seq.len() < 30 {
         return None;
     }
-    let record = format!(">{gene}\n{}", wrap(&seq));
+    // the note tells the run where the sequence came from
+    let record = format!(">{gene} NCBI {acc}:{start}-{stop}\n{}", wrap(&seq));
     Some(NcbiGene {
         record,
         source: format!("{acc} ({sci})"),
@@ -505,7 +506,7 @@ pub async fn fetch_gene_by_accession(
         _ => format!("{} (whole record, {} bp)", spec.accession, seq.len()),
     };
     Some(NcbiGene {
-        record: format!(">{name}\n{}", wrap(&seq)),
+        record: format!(">{name} NCBI {}\n{}", spec.accession, wrap(&seq)),
         source,
     })
 }

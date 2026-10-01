@@ -12,6 +12,48 @@ use straincompass_engine::pipeline::{
 use straincompass_engine::tools::ToolPaths;
 use straincompass_types::{MatrixRow, RunParams, ScreenHit, ScreenStatus};
 
+/// The run's copy of the panel FASTA as uploaded, descriptions included.
+pub const PANEL_SOURCE_FA: &str = "panel_source.fa";
+
+/// A panel gene's record as the panel builder wrote it, header note
+/// included. Runs made before the original was kept fall back to the
+/// project's current panel, trusted only when it still holds the same
+/// sequence.
+pub fn panel_record(
+    state: &SharedState,
+    project_id: i64,
+    run_id: i64,
+    gene_id: &str,
+) -> Option<straincompass_engine::fasta::FastaRecord> {
+    use straincompass_engine::fasta::parse_fasta;
+    let pdir = state.run_dir(project_id, run_id).join("panel");
+    let seq = parse_fasta(pdir.join("panel.fa"))
+        .ok()?
+        .into_iter()
+        .find(|r| r.id == gene_id)?
+        .seq;
+    let current = || -> Option<PathBuf> {
+        let conn = state.db.lock().unwrap();
+        conn.query_row(
+            "SELECT stored_name FROM files WHERE project_id = ?1 AND role = 'panel'",
+            [project_id],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+        .map(|s| state.uploads_dir(project_id).join(s))
+    };
+    let original = pdir.join(PANEL_SOURCE_FA);
+    let path = if original.exists() {
+        original
+    } else {
+        current()?
+    };
+    parse_fasta(path)
+        .ok()?
+        .into_iter()
+        .find(|r| r.seq.eq_ignore_ascii_case(&seq))
+}
+
 pub fn spawn_run(state: SharedState, run_id: i64) {
     tokio::spawn(async move {
         let result = execute_run(&state, run_id).await;
@@ -204,6 +246,9 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
         let pdir = run_dir.join("panel");
         std::fs::create_dir_all(&pdir)?;
         pipeline::sanitize_into(ppath, &pdir.join("panel.fa"))?;
+        // the original keeps each record's note on where it came from
+        // (AMRFinderPlus, VFDB, NCBI, reference), which sanitizing drops
+        std::fs::copy(ppath, pdir.join(PANEL_SOURCE_FA))?;
         ctx.log(&format!("Prepared gene panel \u{201c}{pname}\u{201d}."));
     }
 

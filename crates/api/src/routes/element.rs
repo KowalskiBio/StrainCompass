@@ -115,6 +115,7 @@ pub async fn panel_context(
     let mut gained = res.gained.unwrap_or_default();
     crate::routes::nblast::merge_ncbi_names(&qdir, &mut gained);
     let query_name = res.query_name;
+    let panel_record = jobs::panel_record(&state, project_id, run_id, &row.gene_id);
     // the reference's own genes, to list neighbours in shared stretches;
     // a run without them still answers, with predicted genes only
     let ref_genes: Vec<straincompass_types::WgaGene> =
@@ -138,6 +139,9 @@ pub async fn panel_context(
             query_id: qid,
             query_name,
             gene_id: row.gene_id.clone(),
+            panel_source: panel_record
+                .map(|r| element::panel_gene_source(&row.gene_id, &r.desc, &ref_genes))
+                .unwrap_or_default(),
             call: row.call,
             cov_pct: row.cov_pct,
             identity: row.identity,
