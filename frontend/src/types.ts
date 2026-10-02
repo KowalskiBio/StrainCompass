@@ -382,6 +382,8 @@ export interface OriginRecord {
 /** Where a panel gene usually occurs, from an NCBI BLAST search. */
 export interface GeneOrigin {
   gene_id: string;
+  /** The panel sequence searched, by source, e.g. "NCBI Nucleotide (L28104.1:158-2293)". */
+  searched_with?: string;
   state: "running" | "done" | "error";
   scope: string;
   scope_note: string;

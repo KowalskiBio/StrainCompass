@@ -697,6 +697,12 @@ function GeneOriginSection({
           You can close the dialog; reopen it and look the gene up again to pick up the same search.
         </p>
       )}
+      {origin?.searched_with && (
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          Searched with the {geneId} sequence the strains matched best:{" "}
+          <span className="font-medium text-zinc-800 dark:text-zinc-200">{origin.searched_with}</span>.
+        </p>
+      )}
       {done && origin && (
         <>
           {origin.n_matches === 0 ? (
@@ -774,6 +780,20 @@ function OriginRecords({
   return (
     <div className="border border-zinc-200 rounded-lg overflow-x-auto dark:border-zinc-800">
       <table className="w-full text-sm">
+        <thead className="bg-zinc-50 text-zinc-500 text-xs dark:bg-zinc-800/60 dark:text-zinc-400">
+          <tr>
+            <th className="text-left font-medium px-3 py-2">Accession</th>
+            <th className="text-left font-medium px-3 py-2">Description</th>
+            <th className="text-right font-medium px-3 py-2">Length</th>
+            <th
+              className="text-right font-medium px-3 py-2 whitespace-nowrap"
+              title="DNA identity of the best match to the searched sequence; listed records match at least 90 % of it at 90 % identity or more"
+            >
+              DNA identity
+            </th>
+            {onCompare && <th />}
+          </tr>
+        </thead>
         <tbody>
           {records.map((r) => (
             <tr key={r.accession} className="border-t first:border-t-0 border-zinc-100 dark:border-zinc-800">

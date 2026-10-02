@@ -585,6 +585,11 @@ pub struct OriginRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GeneOrigin {
     pub gene_id: String,
+    /// The panel sequence searched, by where it came from ("NCBI
+    /// Nucleotide (L28104.1:158-2293)"): the gene's variant that matched
+    /// most often in the run, so the answer is about the strains' copy.
+    #[serde(default)]
+    pub searched_with: String,
     /// "running", "done" or "error".
     pub state: String,
     /// What was searched: a genus ("Listeria") or "all bacteria".

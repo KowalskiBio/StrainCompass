@@ -86,13 +86,28 @@ pub async fn panel_origin(
     Path(run_id): Path<i64>,
     Query(q): Query<OriginQuery>,
 ) -> ApiResult<Json<GeneOrigin>> {
-    let (project_id, _, status) = jobs::run_meta(&state, run_id)?;
+    let (project_id, query_ids, status) = jobs::run_meta(&state, run_id)?;
     if status != "succeeded" {
         return Err(ApiError::BadRequest(
             "This run has not finished yet. Please wait for it to complete.".into(),
         ));
     }
-    let seq = panel_gene_seq(&state, project_id, run_id, &q.gene_id)?;
+    // a gene can hold several sequences; search with the one the strains
+    // carry, not merely the first (for cadA that was an Enterococcus one)
+    let variant = run_variant(&state, project_id, run_id, &query_ids, &q.gene_id);
+    let seq = panel_gene_seq(&state, project_id, run_id, &variant)?;
+    let searched_with = {
+        let ref_genes: Vec<straincompass_types::WgaGene> =
+            jobs::load_reference_json(&state, project_id, run_id)
+                .ok()
+                .and_then(|v| serde_json::from_value(v["genes"].clone()).ok())
+                .unwrap_or_default();
+        jobs::panel_record(&state, project_id, run_id, &variant)
+            .map(|r| {
+                straincompass_engine::element::panel_gene_source(&q.gene_id, &r.desc, &ref_genes)
+            })
+            .unwrap_or_default()
+    };
     let genus = project_genus(&state, project_id);
     let (scope, scope_note) = match (&genus, q.wide) {
         (Some(g), false) => (
@@ -128,12 +143,14 @@ pub async fn panel_origin(
     };
     if let Some(mut r) = st.result.clone() {
         r.gene_id = q.gene_id.clone();
+        r.searched_with = searched_with;
         return Ok(Json(r));
     }
     let c = client();
     let url = blast_url();
     let running = |st: &Stored, msg: &str| GeneOrigin {
         gene_id: q.gene_id.clone(),
+        searched_with: searched_with.clone(),
         state: "running".into(),
         scope: st.scope.clone(),
         scope_note: st.scope_note.clone(),
@@ -182,6 +199,7 @@ pub async fn panel_origin(
     let summaries = summarize(&c, matches.keys().cloned().collect()).await?;
     let mut result = classify(&matches, &summaries);
     result.gene_id = q.gene_id.clone();
+    result.searched_with = searched_with.clone();
     result.state = "done".into();
     result.scope = st.scope.clone();
     result.scope_note = st.scope_note.clone();
@@ -198,6 +216,46 @@ pub async fn panel_origin(
     st.result = Some(result.clone());
     save(&st);
     Ok(Json(result))
+}
+
+/// The panel record of `gene_id` that matched most often across the run:
+/// full matches first, else any match; the gene's own id when nothing
+/// matched or the run predates variants.
+fn run_variant(
+    state: &SharedState,
+    project_id: i64,
+    run_id: i64,
+    query_ids: &[i64],
+    gene_id: &str,
+) -> String {
+    use straincompass_types::Call;
+    let mut present: HashMap<String, usize> = HashMap::new();
+    let mut any: HashMap<String, usize> = HashMap::new();
+    for qid in query_ids {
+        let Ok(res) = jobs::load_query_result(state, project_id, run_id, *qid) else {
+            continue;
+        };
+        let Some(r) = res
+            .panel
+            .unwrap_or_default()
+            .into_iter()
+            .find(|r| r.gene_id == gene_id && !r.variant.is_empty())
+        else {
+            continue;
+        };
+        if r.call == Call::Present {
+            *present.entry(r.variant.clone()).or_default() += 1;
+        }
+        *any.entry(r.variant).or_default() += 1;
+    }
+    let pick = |m: HashMap<String, usize>| {
+        m.into_iter()
+            .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
+            .map(|(v, _)| v)
+    };
+    pick(present)
+        .or_else(|| pick(any))
+        .unwrap_or_else(|| gene_id.to_string())
 }
 
 /// The gene's sequence from the run's own panel copy.
