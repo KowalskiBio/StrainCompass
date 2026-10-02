@@ -5,6 +5,30 @@
 //! like inlA, or "symbol (locus_tag)" pairs), and each gene's sequence is
 //! extracted from the reference genome in the gene's own orientation.
 
+/// Marks the extra variants of a panel gene in its FASTA ids: "cadA" is
+/// the first sequence for cadA, "cadA__v2" the second. The search counts
+/// them as one gene and reports which one matched.
+pub const VARIANT_MARK: &str = "__v";
+
+/// The gene a panel record belongs to: "cadA__v2" -> "cadA".
+pub fn variant_gene(id: &str) -> &str {
+    match id.rsplit_once(VARIANT_MARK) {
+        Some((g, n)) if !g.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => {
+            g
+        }
+        _ => id,
+    }
+}
+
+/// The FASTA id of the `n`th (1-based) sequence of `gene`.
+pub fn variant_id(gene: &str, n: usize) -> String {
+    if n <= 1 {
+        gene.to_string()
+    } else {
+        format!("{gene}{VARIANT_MARK}{n}")
+    }
+}
+
 use crate::fasta::{parse_fasta, revcomp};
 use crate::gff::{parse_gff, Gene};
 use crate::Result;
@@ -191,5 +215,20 @@ fn gene_sequence(ref_fasta: &Path, gene: &Gene) -> Result<Vec<u8>> {
         Ok(revcomp(seq))
     } else {
         Ok(seq.to_vec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn variant_ids_name_their_gene() {
+        assert_eq!(variant_gene("cadA"), "cadA");
+        assert_eq!(variant_gene("cadA__v2"), "cadA");
+        assert_eq!(variant_gene("cadA__vx"), "cadA__vx");
+        assert_eq!(variant_gene("__v2"), "__v2");
+        assert_eq!(variant_id("cadA", 1), "cadA");
+        assert_eq!(variant_id("cadA", 3), "cadA__v3");
     }
 }

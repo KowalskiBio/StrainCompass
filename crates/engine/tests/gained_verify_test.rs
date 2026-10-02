@@ -66,6 +66,7 @@ fn check(dir: &Path, nuc_hits: &str, tx_hits: &str) -> straincompass_types::Gain
         blastn: stub_hits_script(dir, "blastn", nuc_hits, 8),
         tblastx: stub_hits_script(dir, "tblastx", tx_hits, 8),
         blastx: stub_hits_script(dir, "blastx", "", 5),
+        tblastn: None,
         prodigal: None,
     };
     gained_verify(
@@ -199,6 +200,7 @@ fn an_overlong_region_skips_the_translated_search_with_a_note() {
         blastn: stub_hits_script(&d, "blastn", "", 8),
         tblastx: stub_hits_script(&d, "tblastx", "chr1\t5\t50\t45.0\t15\t1\t45\t1e-9\t60\n", 8),
         blastx: stub_hits_script(&d, "blastx", "", 5),
+        tblastn: None,
         prodigal: None,
     };
     let v = gained_verify(
@@ -252,6 +254,7 @@ fn an_unknown_contig_is_a_friendly_error() {
         blastn: stub_hits_script(&d, "blastn", "", 8),
         tblastx: stub_hits_script(&d, "tblastx", "", 8),
         blastx: stub_hits_script(&d, "blastx", "", 5),
+        tblastn: None,
         prodigal: None,
     };
     let err = gained_verify(
@@ -312,6 +315,7 @@ fn identify(
         blastn: stub_hits_script(dir, "blastn", "", 8),
         tblastx: stub_hits_script(dir, "tblastx", "", 8),
         blastx: stub_hits_script(dir, "blastx", blastx_hits, 5),
+        tblastn: None,
         prodigal: None,
     };
     straincompass_engine::blast::gained_identify(

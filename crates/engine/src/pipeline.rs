@@ -347,19 +347,32 @@ pub fn write_panel_tsv(rows: &[PanelRow], out: &Path) -> std::io::Result<()> {
     let mut w = std::io::BufWriter::new(std::fs::File::create(out)?);
     writeln!(
         w,
-        "gene_id\tqlen\tcov_pct\tidentity\tbest_evalue\tcall\tqry_locus"
+        "gene_id\tqlen\tcov_pct\tidentity\tbest_evalue\tcall\tqry_locus\tvariant\tprotein_identity\tprotein_coverage\tprotein_locus\tpossible_other_variant"
     )?;
     for r in rows {
+        let (pi, pc, pl) = match &r.protein {
+            Some(p) => (
+                format!("{:.2}", p.identity),
+                format!("{:.2}", p.coverage),
+                p.locus.clone(),
+            ),
+            None => (String::new(), String::new(), String::new()),
+        };
         writeln!(
             w,
-            "{}\t{}\t{:.2}\t{:.2}\t{}\t{}\t{}",
+            "{}\t{}\t{:.2}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             r.gene_id,
             r.qlen,
             r.cov_pct,
             r.identity,
             r.best_evalue,
             r.call.as_str(),
-            r.qry_locus
+            r.qry_locus,
+            r.variant,
+            pi,
+            pc,
+            pl,
+            if r.variant_warning { "yes" } else { "" }
         )?;
     }
     Ok(())

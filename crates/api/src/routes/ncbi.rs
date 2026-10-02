@@ -671,6 +671,150 @@ pub async fn fetch_record(accession: &str, api_key: Option<&str>) -> ApiResult<(
     Ok((title, seq))
 }
 
+/// A record title short enough for a note: "Listeria monocytogenes
+/// transposon Tn5422 ATPase (cadA), accessory protein ..." keeps its
+/// first 60 characters, cut at a word.
+fn short_title(t: &str) -> String {
+    if t.chars().count() <= 60 {
+        return t.to_string();
+    }
+    let cut: String = t.chars().take(60).collect();
+    let cut = cut.rsplit_once(' ').map(|(a, _)| a).unwrap_or(&cut);
+    format!("{}\u{2026}", cut.trim_end_matches([',', ';']))
+}
+
+/// How far around a panel record's origin to look for its operon
+/// partners, bp each side: cadA and cadC of Tn5422 sit side by side, and
+/// an operon rarely spans more than a few kb.
+const PARTNER_WINDOW: u64 = 8_000;
+/// At most this many records are scanned for partners per panel build,
+/// to keep the NCBI traffic of one build small.
+const MAX_PARTNER_RECORDS: usize = 15;
+
+/// Variant sets for a freshly built panel: the genes beside each panel
+/// record's origin that the panel holds under another source (the cadA
+/// beside cadC in Tn5422), added as further variants, and a note for
+/// every variant whose record is not from the project's genus. Returns
+/// the records to append and the notes for the user. NCBI unreachable
+/// means no additions, never a failed build.
+pub async fn panel_variant_sets(
+    fasta: &str,
+    genus: &str,
+    api_key: Option<&str>,
+) -> (String, Vec<String>) {
+    use straincompass_engine::panel::variant_gene;
+    use straincompass_engine::panel_variants::{
+        parse_cds_fasta, partner_variants, record_origin, variant_summary, Neighbourhood,
+    };
+    let Ok(recs) = straincompass_engine::fasta::parse_fasta_str(fasta) else {
+        return (String::new(), Vec::new());
+    };
+    let base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
+    let delay = std::time::Duration::from_millis(if api_key.is_some() { 110 } else { 380 });
+    let key = api_key.map(|k| format!("&api_key={k}")).unwrap_or_default();
+    let c = client();
+    let get = |url: String| {
+        let c = c.clone();
+        async move {
+            tokio::time::sleep(delay).await;
+            c.get(&url).send().await.ok()?.text().await.ok()
+        }
+    };
+
+    let origins: Vec<(String, straincompass_engine::panel_variants::Origin)> = recs
+        .iter()
+        .filter_map(|r| record_origin(&r.desc).map(|o| (variant_gene(&r.id).to_string(), o)))
+        .collect();
+    let mut accessions: Vec<&str> = origins.iter().map(|(_, o)| o.accession.as_str()).collect();
+    accessions.sort();
+    accessions.dedup();
+
+    // record titles: what each origin is (organism, element)
+    let mut titles: std::collections::HashMap<String, String> = Default::default();
+    if !accessions.is_empty() {
+        let url = format!(
+            "{base}/esummary.fcgi?db=nuccore&id={}&retmode=json{key}",
+            accessions.join(",")
+        );
+        if let Some(v) = get(url)
+            .await
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        {
+            if let Some(uids) = v["result"]["uids"].as_array() {
+                for u in uids.iter().filter_map(|u| u.as_str()) {
+                    let r = &v["result"][u];
+                    if let (Some(acc), Some(t)) =
+                        (r["accessionversion"].as_str(), r["title"].as_str())
+                    {
+                        titles.insert(acc.to_string(), short_title(t));
+                    }
+                }
+            }
+        }
+    }
+
+    let mut hoods: Vec<Neighbourhood> = Vec::new();
+    let mut seen: Vec<straincompass_engine::panel_variants::Origin> = Vec::new();
+    for (gene, o) in origins.iter().take(MAX_PARTNER_RECORDS) {
+        if seen.contains(o) {
+            continue;
+        }
+        seen.push(o.clone());
+        let url = format!(
+            "{base}/efetch.fcgi?db=nuccore&id={}&seq_start={}&seq_stop={}&rettype=fasta_cds_na&retmode=text{key}",
+            o.accession,
+            o.lo.saturating_sub(PARTNER_WINDOW).max(1),
+            o.hi + PARTNER_WINDOW
+        );
+        let Some(text) = get(url).await else {
+            continue;
+        };
+        hoods.push(Neighbourhood {
+            source_gene: gene.clone(),
+            origin: o.clone(),
+            title: titles
+                .get(&o.accession)
+                .cloned()
+                .unwrap_or_else(|| o.accession.clone()),
+            cds: parse_cds_fasta(&text, &o.accession),
+        });
+    }
+
+    let additions = partner_variants(&recs, &hoods);
+    let mut records = String::new();
+    let mut notes: Vec<String> = Vec::new();
+    for a in &additions {
+        records.push_str(&a.record);
+        notes.push(a.note.clone());
+    }
+    // a sequence from another genus may be the gene in another form
+    if !genus.is_empty() {
+        let mut flagged: Vec<(String, String)> = Vec::new();
+        for (gene, o) in &origins {
+            let Some(t) = titles.get(&o.accession) else {
+                continue;
+            };
+            let organism: String = t.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+            let first = t.split_whitespace().next().unwrap_or("");
+            if !first.eq_ignore_ascii_case(genus)
+                && !flagged.contains(&(gene.clone(), o.accession.clone()))
+            {
+                flagged.push((gene.clone(), o.accession.clone()));
+                notes.push(format!(
+                    "{gene}: the sequence from {} comes from {organism}, not {genus}. A gene of the same name can differ a lot between genera; check the results say which variant matched.",
+                    o.accession
+                ));
+            }
+        }
+    }
+    let mut all = recs;
+    if let Ok(more) = straincompass_engine::fasta::parse_fasta_str(&records) {
+        all.extend(more);
+    }
+    notes.extend(variant_summary(&all));
+    (records, notes)
+}
+
 #[cfg(test)]
 mod accession_tests {
     use super::looks_like_accession;
@@ -706,5 +850,47 @@ mod accession_tests {
         ] {
             assert!(!looks_like_accession(a), "{a}");
         }
+    }
+}
+
+#[cfg(test)]
+mod variant_set_tests {
+    use super::panel_variant_sets;
+
+    /// Live NCBI: the catalog's cadA_Lm (Enterococcus) and cadC_Lm
+    /// (Tn5422) as a panel; the Tn5422 cadA beside cadC must be added.
+    /// Run with CAD_CATALOG=<the cad entries of AMR_CDS.fa>
+    /// `cargo test -p straincompass-api -- --ignored live_`.
+    #[tokio::test]
+    #[ignore]
+    async fn live_adds_the_tn5422_cada_beside_cadc() {
+        let cat = std::fs::read(std::env::var("CAD_CATALOG").unwrap()).unwrap();
+        let c = vec![straincompass_engine::catalog::Catalog::amrfinder(&cat)];
+        let org = Some("Listeria monocytogenes");
+        let mut fasta = String::new();
+        for name in ["cadA", "cadC"] {
+            for (i, g) in straincompass_engine::catalog::lookup_all(name, org, &c)
+                .iter()
+                .enumerate()
+            {
+                fasta.push_str(&format!(
+                    ">{} {} {}: {} [{}]\n{}\n",
+                    straincompass_engine::panel::variant_id(name, i + 1),
+                    g.source,
+                    g.symbol,
+                    g.product,
+                    g.origin,
+                    String::from_utf8_lossy(&g.seq)
+                ));
+            }
+        }
+        let (extra, notes) = panel_variant_sets(&fasta, "Listeria", None).await;
+        for n in &notes {
+            eprintln!("NOTE {n}");
+        }
+        for l in extra.lines().filter(|l| l.starts_with('>')) {
+            eprintln!("{l}");
+        }
+        assert!(extra.contains("L28104.1:158-2293"), "{extra}");
     }
 }

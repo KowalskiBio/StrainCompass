@@ -2,6 +2,7 @@
 //! the reference back-check of gained regions.
 
 use crate::gff::Gene;
+use crate::panel::variant_gene;
 use crate::tools::ToolPaths;
 use crate::{friendly, Result};
 use std::collections::HashMap;
@@ -10,7 +11,7 @@ use std::path::Path;
 use std::process::Command;
 use straincompass_types::{
     Call, GainedBlastHit, GainedIdentify, GainedOrf, GainedRow, GainedVerify, IdentifiedOrf,
-    OrfMatch, PanelRow,
+    OrfMatch, PanelRow, ProteinHit,
 };
 
 /// Run the panel recheck for one query. `workdir` receives the blast
@@ -47,9 +48,15 @@ pub fn panel_recheck(
     // Parse hits. R parity: the best hit per panel gene is the single
     // row with the highest bitscore; identity and coverage are that
     // row's pident and qcovs, not a merge over all HSPs.
+    //
+    // `-task blastn` seeds on 11-mers. The default megablast needs 28
+    // identical bases in a row, which a ~70 %-identical variant of a gene
+    // rarely has, so it came back as no hit at all: the cadA of Tn5422
+    // against the panel's cadA_Lm. Seen at all, it is at least a partial
+    // match with a place.
     let out = workdir.join("hits.tsv");
     let blast = Command::new(&tools.blastn)
-        .args(["-query"])
+        .args(["-task", "blastn", "-query"])
         .arg(panel_fasta)
         .args(["-db"])
         .arg(&db)
@@ -70,53 +77,19 @@ pub fn panel_recheck(
             String::from_utf8_lossy(&blast.stderr).trim()
         )));
     }
-
-    struct Best {
-        qlen: u64,
-        qcovs: f64,
-        pident: f64,
-        evalue: f64,
-        bitscore: f64,
-        locus: String,
-    }
-    let mut hits: HashMap<String, Best> = HashMap::new();
     let mut text = String::new();
     std::fs::File::open(&out)?.read_to_string(&mut text)?;
-    for line in text.lines() {
-        let f: Vec<&str> = line.split('\t').collect();
-        if f.len() < 8 {
-            continue;
-        }
-        let gene_id = f[0].to_string();
-        let pident: f64 = f[2].parse().unwrap_or(0.0);
-        let qlen: u64 = f[4].parse().unwrap_or(0);
-        let qcovs: f64 = f[5].parse().unwrap_or(0.0);
-        let evalue: f64 = f[6].parse().unwrap_or(f64::INFINITY);
-        let bitscore: f64 = f[7].parse().unwrap_or(0.0);
-        let locus = hit_locus(&f);
-        match hits.get_mut(&gene_id) {
-            Some(b) if b.bitscore >= bitscore => {}
-            _ => {
-                hits.insert(
-                    gene_id,
-                    Best {
-                        qlen,
-                        qcovs,
-                        pident,
-                        evalue,
-                        bitscore,
-                        locus,
-                    },
-                );
-            }
-        }
-    }
+    // a gene's variants compete: the best hit over all of them is the
+    // gene's, and the row says which variant it was
+    let hits = best_hits_per_gene(&text);
 
+    let panel_recs = crate::fasta::parse_fasta(panel_fasta)?;
+    let mut n_variants: HashMap<&str, usize> = HashMap::new();
+    for r in &panel_recs {
+        *n_variants.entry(variant_gene(&r.id)).or_default() += 1;
+    }
     let mut rows = Vec::new();
-    let mut ids: Vec<String> = hits.keys().cloned().collect();
-    ids.sort();
-    for id in ids {
-        let h = &hits[&id];
+    for (gene, h) in &hits {
         // R: qcovs >= blast_cov AND pident >= blast_pid -> Present,
         // any other hit -> Fragment/low identity (PARTIAL here)
         let call = if h.qcovs >= blast_cov && h.pident >= blast_pid {
@@ -125,33 +98,169 @@ pub fn panel_recheck(
             Call::Partial
         };
         rows.push(PanelRow {
-            gene_id: id,
+            gene_id: gene.clone(),
             qlen: h.qlen,
             cov_pct: h.qcovs,
             identity: h.pident,
             best_evalue: format_evalue(h.evalue),
             call,
             qry_locus: h.locus.clone(),
+            variant: h.variant.clone(),
+            n_variants: n_variants.get(gene.as_str()).copied().unwrap_or(1),
+            ..Default::default()
         });
     }
     // Panel genes without any hit: read the panel fasta for the id list
-    // (and their real lengths).
-    let panel_recs = crate::fasta::parse_fasta(panel_fasta)?;
-    for rec in panel_recs {
-        if !hits.contains_key(&rec.id) {
+    // (and their real lengths, the first variant's).
+    for rec in &panel_recs {
+        let gene = variant_gene(&rec.id);
+        if !hits.contains_key(gene) && rows.iter().all(|r| r.gene_id != gene) {
             rows.push(PanelRow {
-                gene_id: rec.id,
+                gene_id: gene.to_string(),
                 qlen: rec.seq.len() as u64,
                 cov_pct: 0.0,
                 identity: 0.0,
                 best_evalue: "-".into(),
                 call: Call::Absent,
                 qry_locus: String::new(),
+                n_variants: n_variants.get(gene).copied().unwrap_or(1),
+                ..Default::default()
             });
+        }
+    }
+
+    // Second look, at protein level, for every gene not found in full:
+    // protein sequence drifts less than DNA, so another variant of the
+    // gene still shows up here.
+    let missing: Vec<&str> = rows
+        .iter()
+        .filter(|r| r.call != Call::Present)
+        .map(|r| r.gene_id.as_str())
+        .collect();
+    if let (Some(tblastn), false) = (&tools.tblastn, missing.is_empty()) {
+        let prot_fa = workdir.join("panel_proteins.fa");
+        let n = write_panel_proteins(&panel_recs, &missing, &prot_fa)?;
+        if n > 0 {
+            let prot_out = workdir.join("protein_hits.tsv");
+            let run = Command::new(tblastn)
+                .args(["-query"])
+                .arg(&prot_fa)
+                .args(["-db"])
+                .arg(&db)
+                .args([
+                    "-outfmt",
+                    "6 qseqid sseqid pident length qlen qcovs evalue bitscore sstart send",
+                    "-evalue",
+                    "1e-10",
+                    "-out",
+                ])
+                .arg(&prot_out)
+                .output()
+                .map_err(|e| crate::EngineError::ToolMissing(format!("tblastn: {e}")))?;
+            if !run.status.success() {
+                return Err(friendly(format!(
+                    "The protein-level panel search failed for {}. {}",
+                    query_name,
+                    String::from_utf8_lossy(&run.stderr).trim()
+                )));
+            }
+            let mut ptext = String::new();
+            std::fs::File::open(&prot_out)?.read_to_string(&mut ptext)?;
+            let phits = best_hits_per_gene(&ptext);
+            for r in rows.iter_mut().filter(|r| r.call != Call::Present) {
+                if let Some(h) = phits.get(&r.gene_id) {
+                    let p = ProteinHit {
+                        variant: h.variant.clone(),
+                        identity: h.pident,
+                        coverage: h.qcovs,
+                        locus: h.locus.clone(),
+                    };
+                    r.variant_warning = p.suggests_variant();
+                    r.protein = Some(p);
+                }
+            }
         }
     }
     rows.sort_by(|a, b| a.gene_id.cmp(&b.gene_id));
     Ok(rows)
+}
+
+/// The best (highest bitscore) row per panel gene of a BLAST table in
+/// the panel layout, `qseqid sseqid pident length qlen qcovs evalue
+/// bitscore sstart send`, a gene's variants pooled.
+struct GeneHit {
+    variant: String,
+    qlen: u64,
+    qcovs: f64,
+    pident: f64,
+    evalue: f64,
+    bitscore: f64,
+    locus: String,
+}
+
+fn best_hits_per_gene(text: &str) -> HashMap<String, GeneHit> {
+    let mut hits: HashMap<String, GeneHit> = HashMap::new();
+    for line in text.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() < 8 {
+            continue;
+        }
+        let bitscore: f64 = f[7].parse().unwrap_or(0.0);
+        let gene = variant_gene(f[0]).to_string();
+        if hits.get(&gene).is_some_and(|b| b.bitscore >= bitscore) {
+            continue;
+        }
+        hits.insert(
+            gene,
+            GeneHit {
+                variant: f[0].to_string(),
+                pident: f[2].parse().unwrap_or(0.0),
+                qlen: f[4].parse().unwrap_or(0),
+                qcovs: f[5].parse().unwrap_or(0.0),
+                evalue: f[6].parse().unwrap_or(f64::INFINITY),
+                bitscore,
+                locus: hit_locus(&f),
+            },
+        );
+    }
+    hits
+}
+
+/// The translations of the panel records of `genes` that read as one
+/// protein (frame 1, at most a terminal stop), for the protein search.
+/// Returns how many were written; a non-coding panel entry has none.
+fn write_panel_proteins(
+    recs: &[crate::fasta::FastaRecord],
+    genes: &[&str],
+    out: &Path,
+) -> Result<usize> {
+    use std::io::Write;
+    let mut w = std::io::BufWriter::new(std::fs::File::create(out)?);
+    let mut n = 0;
+    for r in recs.iter().filter(|r| genes.contains(&variant_gene(&r.id))) {
+        let Some(p) = coding_translation(&r.seq) else {
+            continue;
+        };
+        writeln!(w, ">{}", r.id)?;
+        for chunk in p.as_bytes().chunks(60) {
+            w.write_all(chunk)?;
+            w.write_all(b"\n")?;
+        }
+        n += 1;
+    }
+    w.flush()?;
+    Ok(n)
+}
+
+/// The protein a panel sequence codes for, when it reads as a gene: a
+/// whole number of codons, at least 30 of them, no stop before the end.
+fn coding_translation(seq: &[u8]) -> Option<String> {
+    if !seq.len().is_multiple_of(3) || seq.len() < 90 {
+        return None;
+    }
+    let p = translate(seq);
+    let p = p.strip_suffix('*').unwrap_or(&p);
+    (!p.contains('*')).then(|| p.to_string())
 }
 
 /// The query place of one panel hit line, "contig:start-end(+|-)", or
@@ -844,5 +953,33 @@ fn gene_label(g: &Gene) -> String {
         g.symbol.clone()
     } else {
         g.product.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn variants_of_one_gene_compete_for_its_row() {
+        let t = "cadA\tc46\t75.1\t607\t2118\t28\t1e-70\t276\t1000\t1607\n\
+                 cadA__v2\tc46\t100.0\t2136\t2136\t100\t0.0\t3946\t2463\t328\n\
+                 cadC\tc46\t100.0\t360\t360\t100\t0.0\t665\t2822\t2463\n";
+        let h = best_hits_per_gene(t);
+        assert_eq!(h.len(), 2);
+        let a = &h["cadA"];
+        assert_eq!(a.variant, "cadA__v2");
+        assert_eq!((a.pident, a.qcovs), (100.0, 100.0));
+        assert_eq!(a.locus, "c46:328-2463(-)");
+    }
+
+    #[test]
+    fn only_coding_panel_entries_get_a_protein() {
+        // ATG AAA ... TAA: 30 codons and a stop
+        let gene = format!("ATG{}TAA", "AAA".repeat(29));
+        assert_eq!(coding_translation(gene.as_bytes()).unwrap().len(), 30);
+        let early_stop = format!("ATGTAA{}", "AAA".repeat(29));
+        assert_eq!(coding_translation(early_stop.as_bytes()), None);
+        assert_eq!(coding_translation(b"ATGAAAA"), None);
     }
 }

@@ -250,6 +250,25 @@ export interface PanelRow {
   /** The best hit's place in the query, "contig:start-end(+|-)"; only
    * the contig for older runs, "" when not found. */
   qry_locus: string;
+  /** The panel record behind the best hit ("cadA" or "cadA__v2"). */
+  variant?: string;
+  /** How many sequences the panel holds for this gene; 0 for older runs. */
+  n_variants?: number;
+  /** Where the matching variant came from, e.g. "AMRFinderPlus (cadA_Lm)". */
+  variant_source?: string;
+  /** Protein-level search for a gene not found in full at DNA level. */
+  protein?: ProteinHit | null;
+  /** Possibly present as a variant the panel does not hold. */
+  variant_warning?: boolean;
+}
+
+export interface ProteinHit {
+  variant: string;
+  /** Amino-acid identity, %. */
+  identity: number;
+  /** Share of the panel protein covered, %. */
+  coverage: number;
+  locus: string;
 }
 
 /** One panel gene across all queries of a run. */
@@ -261,6 +280,8 @@ export interface PanelMatrixRow {
   cov_pcts: number[];
   identities: number[];
   loci: string[];
+  /** Per query: possibly present as another variant. */
+  variant_warnings?: boolean[];
 }
 
 export interface ContigStat {
@@ -301,6 +322,8 @@ export interface PanelContext {
   /** Where the panel's sequence for the gene came from, e.g.
    * "AMRFinderPlus (emrC_Lis)"; empty when unknown. */
   panel_source: string;
+  /** What the hit is when not a full match (partial, protein relative). */
+  match_note: string;
   call: Call;
   cov_pct: number;
   identity: number;

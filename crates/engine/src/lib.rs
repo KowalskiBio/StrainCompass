@@ -14,6 +14,7 @@ pub mod gff;
 pub mod longest_match;
 pub mod msa;
 pub mod panel;
+pub mod panel_variants;
 pub mod pipeline;
 pub mod screen;
 pub mod tools;

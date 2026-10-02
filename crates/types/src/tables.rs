@@ -345,6 +345,55 @@ pub struct PanelRow {
     /// the gene was not found.
     #[serde(default)]
     pub qry_locus: String,
+    /// The panel record behind the best hit: the gene's own id, or one of
+    /// its other variants ("cadA__v2"); empty when nothing hit.
+    #[serde(default)]
+    pub variant: String,
+    /// How many sequences (variants) the panel holds for this gene.
+    #[serde(default)]
+    pub n_variants: usize,
+    /// Where the matching variant's sequence came from ("AMRFinderPlus
+    /// (cadA_Lm)", "NCBI Nucleotide (L28104.1:158-2293)"), filled when
+    /// the table is read; empty when nothing hit.
+    #[serde(default)]
+    pub variant_source: String,
+    /// The protein-level search, run for a gene not found in full at DNA
+    /// level: a different variant of the gene shows up here when its DNA
+    /// has drifted too far for the nucleotide search.
+    #[serde(default)]
+    pub protein: Option<ProteinHit>,
+    /// Not found in full at DNA level, yet the protein search found a
+    /// close relative over most of its length: possibly a variant of the
+    /// gene the panel does not hold.
+    #[serde(default)]
+    pub variant_warning: bool,
+}
+
+/// A panel gene's best protein-level (tblastn) match in one query.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ProteinHit {
+    /// The panel record whose translation matched.
+    pub variant: String,
+    /// Amino-acid identity over the aligned part, percent.
+    pub identity: f64,
+    /// Share of the panel protein covered, percent.
+    pub coverage: f64,
+    /// "contig:start-end(+|-)" in the query.
+    pub locus: String,
+}
+
+/// Protein identity and coverage at which a gene missing at DNA level is
+/// flagged as possibly present in another variant. Family relatives (SMR
+/// pumps such as emrC and sugE) sit near 40 %, other variants of one gene
+/// (the cadA of Tn5422 against cadA_Lm) near 70 %.
+pub const VARIANT_MIN_PROTEIN_IDENTITY: f64 = 60.0;
+pub const VARIANT_MIN_PROTEIN_COVERAGE: f64 = 80.0;
+
+impl ProteinHit {
+    pub fn suggests_variant(&self) -> bool {
+        self.identity >= VARIANT_MIN_PROTEIN_IDENTITY
+            && self.coverage >= VARIANT_MIN_PROTEIN_COVERAGE
+    }
 }
 
 /// Presence/absence across all queries of a run.
@@ -371,6 +420,9 @@ pub struct PanelMatrixRow {
     pub cov_pcts: Vec<f64>,
     pub identities: Vec<f64>,
     pub loci: Vec<String>,
+    /// Per query: possibly present as a variant the panel lacks.
+    #[serde(default)]
+    pub variant_warnings: Vec<bool>,
 }
 
 /// One query contig and how much of it aligns to the reference.
@@ -434,6 +486,11 @@ pub struct PanelContext {
     /// genome (lmo0200)" or "your panel FASTA"; empty when unknown.
     #[serde(default)]
     pub panel_source: String,
+    /// What the hit is when it is not a full match: a partial DNA match,
+    /// or only a protein-level relative (a possible other variant).
+    /// Empty for a gene found in full.
+    #[serde(default)]
+    pub match_note: String,
     pub call: Call,
     pub cov_pct: f64,
     pub identity: f64,

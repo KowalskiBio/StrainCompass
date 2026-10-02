@@ -108,9 +108,26 @@ const PANEL_COLUMNS: Column[] = [
   { key: "cov_pct", label: "Coverage %", numeric: true, width: 110 },
   { key: "identity", label: "Identity %", numeric: true, width: 110 },
   { key: "best_evalue", label: "Best match significance", numeric: true, width: 140 },
-  { key: "call", label: "Call", width: 120 },
+  { key: "call", label: "Call", width: 170 },
   { key: "qry_locus", label: "Query contig", width: 230 },
+  { key: "variant_source", label: "Matched variant", width: 230 },
+  { key: "protein", label: "Protein check", width: 210 },
 ];
+
+/** Amber flag: the gene may be present as a variant the panel lacks. */
+function VariantFlag({ title }: { title: string }) {
+  return (
+    <span
+      className="inline-block px-1.5 rounded text-xs bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+      title={title}
+    >
+      other variant?
+    </span>
+  );
+}
+
+const VARIANT_FLAG_TITLE =
+  "Not found in full at DNA level, but a protein-level search found a close relative over most of its length: possibly a variant of this gene that the panel does not hold.";
 
 // The backend caps page_size at 1000 per request; to show the whole table
 // (no pagination UI) we fetch every page at this size and concatenate them.
@@ -923,7 +940,31 @@ function Cell({
 }) {
   const v = row[col];
   const [copied, setCopied] = useState(false);
-  if (col === "call") return <CallBadge call={v as Call} />;
+  if (col === "call") {
+    if (table === "panel_recheck" && row["variant_warning"])
+      return (
+        <span className="inline-flex items-center gap-1.5">
+          <CallBadge call={v as Call} />
+          <VariantFlag title={VARIANT_FLAG_TITLE} />
+        </span>
+      );
+    return <CallBadge call={v as Call} />;
+  }
+  if (col === "protein" && table === "panel_recheck") {
+    const p = v as PanelRow["protein"];
+    const r = row as unknown as PanelRow;
+    if (!p)
+      return (
+        <span className="text-zinc-400 text-sm dark:text-zinc-500">
+          {r.call === "PRESENT" ? "" : r.n_variants ? "no relative" : "not checked"}
+        </span>
+      );
+    return (
+      <span className="tabular-nums" title={`Protein-level match at ${p.locus}`}>
+        {p.identity.toFixed(0)} % aa over {p.coverage.toFixed(0)} %
+      </span>
+    );
+  }
   if (table === "gained") {
     if (col === "anchor") return <AnchorBadge row={row as unknown as GainedRow} />;
     if (col === "gc_pct")
@@ -1106,7 +1147,10 @@ function Cell({
         <span
           title={`Coverage ${r.cov_pcts[idx]?.toFixed(1) ?? 0}%, identity ${r.identities[idx]?.toFixed(1) ?? 0}%${r.loci[idx] ? `, ${r.loci[idx]}` : ""}`}
         >
-          <CallBadge call={r.calls[idx]} />
+          <span className="inline-flex items-center gap-1.5">
+            <CallBadge call={r.calls[idx]} />
+            {r.variant_warnings?.[idx] && <VariantFlag title={VARIANT_FLAG_TITLE} />}
+          </span>
         </span>
       );
     }

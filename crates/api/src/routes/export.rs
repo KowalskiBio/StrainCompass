@@ -314,10 +314,16 @@ pub async fn export_table(
                     "best_evalue".into(),
                     "call".into(),
                     "qry_locus".into(),
+                    "variant".into(),
+                    "protein_identity".into(),
+                    "protein_coverage".into(),
+                    "protein_locus".into(),
+                    "possible_other_variant".into(),
                 ],
                 sep,
             )];
             for r in &rows {
+                let p = r.protein.as_ref();
                 lines.push(join(
                     &[
                         r.gene_id.clone(),
@@ -327,6 +333,11 @@ pub async fn export_table(
                         r.best_evalue.clone(),
                         r.call.as_str().to_string(),
                         r.qry_locus.clone(),
+                        r.variant.clone(),
+                        p.map(|p| fmt_num(p.identity)).unwrap_or_default(),
+                        p.map(|p| fmt_num(p.coverage)).unwrap_or_default(),
+                        p.map(|p| p.locus.clone()).unwrap_or_default(),
+                        if r.variant_warning { "yes".into() } else { String::new() },
                     ],
                     sep,
                 ));

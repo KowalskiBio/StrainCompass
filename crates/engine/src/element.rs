@@ -24,7 +24,9 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use straincompass_types::{ContextGene, ContigStat, ElementHit, GainedAnchor, GainedRow, WgaGene};
+use straincompass_types::{
+    Call, ContextGene, ContigStat, ElementHit, GainedAnchor, GainedRow, PanelRow, WgaGene,
+};
 
 /// Genes this far either side of the hit are listed as its context.
 pub const CONTEXT_WINDOW: u64 = 10_000;
@@ -127,6 +129,56 @@ pub fn panel_gene_source(id: &str, desc: &str, ref_genes: &[WgaGene]) -> String 
             None => "your panel FASTA".into(),
         },
     }
+}
+
+/// Where to show a panel gene in a query: its DNA hit, else the place of
+/// its protein-level relative; empty when neither exists.
+pub fn panel_locus(row: &PanelRow) -> &str {
+    if !row.qry_locus.is_empty() {
+        &row.qry_locus
+    } else {
+        row.protein.as_ref().map(|p| p.locus.as_str()).unwrap_or("")
+    }
+}
+
+/// What a panel hit is when it is not a full match, in words: a partial
+/// DNA match, or only a protein-level relative, and whether that relative
+/// is close enough to be another variant of the gene. Empty for a gene
+/// found in full, or not found at all by a run that checked proteins.
+pub fn panel_match_note(row: &PanelRow) -> String {
+    let g = &row.gene_id;
+    let mut s = match row.call {
+        Call::Present => return String::new(),
+        Call::Partial => format!(
+            "Only part of {g} matches at DNA level: {:.0} % identity over {:.0} % of the gene.",
+            row.identity, row.cov_pct
+        ),
+        Call::Absent => match &row.protein {
+            Some(p) => format!("No DNA match for {g}. A protein-level search found a related gene at {}.", p.locus),
+            None if row.n_variants == 0 => {
+                return format!(
+                    "This run predates the protein-level check; run the comparison again to look for other variants of {g}."
+                )
+            }
+            None => return String::new(),
+        },
+    };
+    if let Some(p) = &row.protein {
+        s.push_str(&format!(
+            " At protein level it is {:.0} % identical over {:.0} % of the protein.",
+            p.identity, p.coverage
+        ));
+        if row.variant_warning {
+            s.push_str(&format!(
+                " That is close enough to be another variant of {g}, one the panel does not hold: check it before calling {g} absent."
+            ));
+        } else if row.call == Call::Absent {
+            s.push_str(&format!(
+                " That is too distant to be {g} itself; most likely a relative from the same gene family."
+            ));
+        }
+    }
+    s
 }
 
 /// Share of both the predicted gene and the hit that must overlap for the
@@ -723,6 +775,47 @@ mod tests {
                 ..Default::default()
             }),
         }
+    }
+
+    #[test]
+    fn explains_a_gene_not_found_in_full() {
+        use straincompass_types::ProteinHit;
+        let tn5422 = ProteinHit {
+            variant: "cadA".into(),
+            identity: 70.2,
+            coverage: 98.0,
+            locus: "c46:328-2463(-)".into(),
+        };
+        let mut row = PanelRow {
+            gene_id: "cadA".into(),
+            call: Call::Absent,
+            n_variants: 1,
+            protein: Some(tn5422.clone()),
+            variant_warning: tn5422.suggests_variant(),
+            ..Default::default()
+        };
+        assert_eq!(panel_locus(&row), "c46:328-2463(-)");
+        let n = panel_match_note(&row);
+        assert!(
+            n.contains("No DNA match") && n.contains("70 %") && n.contains("another variant"),
+            "{n}"
+        );
+
+        // a family relative, not the gene
+        row.protein = Some(ProteinHit {
+            identity: 41.0,
+            ..tn5422
+        });
+        row.variant_warning = false;
+        assert!(panel_match_note(&row).contains("same gene family"));
+
+        row.protein = None;
+        assert_eq!(panel_match_note(&row), "");
+        row.n_variants = 0;
+        assert!(panel_match_note(&row).contains("predates"));
+
+        row.call = Call::Present;
+        assert_eq!(panel_match_note(&row), "");
     }
 
     #[test]

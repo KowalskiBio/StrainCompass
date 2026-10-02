@@ -53,7 +53,13 @@ async fn store_panel(
             if let Ok(old_recs) = fasta::parse_fasta_str(&old) {
                 for r in old_recs
                     .iter()
-                    .filter(|r| new_recs.iter().all(|n| n.id != r.id))
+                    // a gene added again replaces all its old variants
+                    .filter(|r| {
+                        let gene = straincompass_engine::panel::variant_gene(&r.id);
+                        new_recs
+                            .iter()
+                            .all(|n| straincompass_engine::panel::variant_gene(&n.id) != gene)
+                    })
                 {
                     push_record(&mut merged, r);
                 }
@@ -408,7 +414,9 @@ async fn build_panel(
     .map_err(|e| ApiError::Internal(format!("The gene catalogs could not be read. ({e})")))?;
     for (record, note) in resolved {
         fasta.push_str(&record);
-        from_catalog.push(note);
+        if !note.is_empty() {
+            from_catalog.push(note);
+        }
     }
     missing = unresolved;
     if !missing.is_empty() {
@@ -507,6 +515,19 @@ async fn build_panel(
         }
         return Err(ApiError::BadRequest(msg));
     }
+
+    // variant sets: operon partners from the records the panel's genes
+    // came from, and a word on sequences from another genus
+    let api_key = {
+        let conn = state.db.lock().unwrap();
+        crate::db::get_setting(&conn, "ncbi_api_key")?
+    };
+    let genus = organism.split_whitespace().next().unwrap_or("");
+    let (extra, notes) =
+        crate::routes::ncbi::panel_variant_sets(&fasta, genus, api_key.as_deref()).await;
+    fasta.push_str(&extra);
+    let mut hints = hints;
+    hints.extend(notes);
 
     let dto = store_panel(&state, project_id, append, "genes_of_interest.fasta", fasta).await?;
     Ok(Json(PanelFromIdsDto {
@@ -709,7 +730,8 @@ fn catalog_lookup(
     organism: &str,
     vfdb_default: std::path::PathBuf,
 ) -> (Vec<(String, String)>, Vec<String>, Vec<String>) {
-    use straincompass_engine::catalog::{lookup, Catalog};
+    use straincompass_engine::catalog::{lookup_all, Catalog};
+    use straincompass_engine::panel::variant_id;
     let cfg = straincompass_engine::screen::ScreenConfig::discover(Some(vfdb_default));
     let mut catalogs = Vec::new();
     if let Some(c) = cfg
@@ -733,15 +755,17 @@ fn catalog_lookup(
             .next()
             .unwrap_or("")
             .trim_matches(|c| c == '(' || c == ')' || c == '[' || c == ']');
-        match plain.then(|| lookup(name, organism, &catalogs)).flatten() {
+        let all = if plain {
+            lookup_all(name, organism, &catalogs)
+        } else {
+            Vec::new()
+        };
+        match all.first().cloned() {
             Some(g) => {
-                let mut rec = format!(
-                    ">{name} {} {}: {} [{}]\n",
-                    g.source, g.symbol, g.product, g.origin
-                );
-                for chunk in g.seq.chunks(60) {
-                    rec.push_str(&String::from_utf8_lossy(chunk));
-                    rec.push('\n');
+                // every sequence filed under the entry, as variants
+                let mut rec = String::new();
+                for (i, v) in all.iter().enumerate() {
+                    rec.push_str(&catalog_record(&variant_id(name, i + 1), v));
                 }
                 let note = format!(
                     "{name} \u{2190} {} {}: {}{}",
@@ -759,7 +783,8 @@ fn catalog_lookup(
             None => unresolved.push(line.clone()),
         }
     }
-    // reference genes whose name means something else in the catalogs
+    // reference genes the catalogs know in another version: searched
+    // beside the reference's own copy, which stays the first variant
     let mut hints = Vec::new();
     if let Ok(recs) = straincompass_engine::fasta::parse_fasta_str(ref_panel) {
         for name in found {
@@ -769,12 +794,36 @@ fn catalog_lookup(
             if let Some(v) =
                 straincompass_engine::catalog::organism_variant(name, organism, &rec.seq, &catalogs)
             {
+                let mut extra = String::new();
+                let others = lookup_all(name, organism, &catalogs);
+                let others: Vec<_> = others
+                    .iter()
+                    .filter(|g| !g.seq.eq_ignore_ascii_case(&rec.seq))
+                    .collect();
+                for (i, g) in others.iter().enumerate() {
+                    extra.push_str(&catalog_record(&variant_id(name, i + 2), g));
+                }
+                resolved.push((extra, String::new()));
                 hints.push(format!(
-                    "{name}: taken from your reference genome. {} also has {}, a different gene of that name ({}). To use that one instead, write {}.",
-                    v.source, v.symbol, v.product, v.symbol
+                    "{name}: taken from your reference genome. {} files a different sequence under {} ({}); it is searched too, as another variant of {name}.",
+                    v.source, v.symbol, v.product
                 ));
             }
         }
     }
     (resolved, unresolved, hints)
+}
+
+/// A catalog gene as a panel record, its header note naming where it is
+/// from: "cadA__v2 AMRFinderPlus cadA_Lm: product [AP022822.1:2608314-2610431]".
+fn catalog_record(id: &str, g: &straincompass_engine::catalog::CatalogGene) -> String {
+    let mut rec = format!(
+        ">{id} {} {}: {} [{}]\n",
+        g.source, g.symbol, g.product, g.origin
+    );
+    for chunk in g.seq.chunks(60) {
+        rec.push_str(&String::from_utf8_lossy(chunk));
+        rec.push('\n');
+    }
+    rec
 }

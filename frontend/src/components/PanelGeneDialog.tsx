@@ -176,6 +176,15 @@ function WhereItSits({
             <p className="mt-1">{ctx.verdict_text}</p>
           </div>
 
+          {ctx.match_note && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[15px] text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+              <p className="font-semibold">
+                {ctx.call === "PARTIAL" ? "Partial match" : "Closest match"}
+              </p>
+              <p className="mt-1">{ctx.match_note}</p>
+            </div>
+          )}
+
           {ctx.contig && (
             <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-3 text-sm">
               <Fact label="Call">
@@ -188,7 +197,7 @@ function WhereItSits({
                 <span className="font-mono">{ctx.contig.seqid}</span>
                 <span className="ml-1 text-zinc-500 dark:text-zinc-400">({fmtBp(ctx.contig.length)})</span>
               </Fact>
-              <Fact label="Hit">
+              <Fact label={ctx.call === "PRESENT" ? "Hit" : "Closest match"}>
                 <span className="font-mono tabular-nums">
                   {ctx.hit_start.toLocaleString("en-US")}-{ctx.hit_end.toLocaleString("en-US")} (
                   {ctx.hit_strand < 0 ? "-" : "+"})

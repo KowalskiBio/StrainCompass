@@ -25,13 +25,30 @@ pub fn panel_record(
     run_id: i64,
     gene_id: &str,
 ) -> Option<straincompass_engine::fasta::FastaRecord> {
+    panel_records(state, project_id, run_id)
+        .into_iter()
+        .find(|(id, _)| id == gene_id)
+        .map(|(_, r)| r)
+}
+
+/// Every record of the run's panel as the panel builder wrote it, keyed
+/// by its id in the run's own (sanitized) copy; see `panel_record`.
+pub fn panel_records(
+    state: &SharedState,
+    project_id: i64,
+    run_id: i64,
+) -> Vec<(String, straincompass_engine::fasta::FastaRecord)> {
+    panel_records_inner(state, project_id, run_id).unwrap_or_default()
+}
+
+fn panel_records_inner(
+    state: &SharedState,
+    project_id: i64,
+    run_id: i64,
+) -> Option<Vec<(String, straincompass_engine::fasta::FastaRecord)>> {
     use straincompass_engine::fasta::parse_fasta;
     let pdir = state.run_dir(project_id, run_id).join("panel");
-    let seq = parse_fasta(pdir.join("panel.fa"))
-        .ok()?
-        .into_iter()
-        .find(|r| r.id == gene_id)?
-        .seq;
+    let run_copy = parse_fasta(pdir.join("panel.fa")).ok()?;
     let current = || -> Option<PathBuf> {
         let conn = state.db.lock().unwrap();
         conn.query_row(
@@ -48,10 +65,18 @@ pub fn panel_record(
     } else {
         current()?
     };
-    parse_fasta(path)
-        .ok()?
-        .into_iter()
-        .find(|r| r.seq.eq_ignore_ascii_case(&seq))
+    let originals = parse_fasta(path).ok()?;
+    Some(
+        run_copy
+            .into_iter()
+            .filter_map(|r| {
+                originals
+                    .iter()
+                    .find(|o| o.seq.eq_ignore_ascii_case(&r.seq))
+                    .map(|o| (r.id, o.clone()))
+            })
+            .collect(),
+    )
 }
 
 pub fn spawn_run(state: SharedState, run_id: i64) {

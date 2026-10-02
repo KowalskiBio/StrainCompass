@@ -63,6 +63,7 @@ fn no_tools() -> ToolPaths {
         blastn: p.clone(),
         tblastx: p.clone(),
         blastx: p,
+        tblastn: None,
         prodigal: None,
     }
 }

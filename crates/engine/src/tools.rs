@@ -21,6 +21,11 @@ pub struct ToolPaths {
     /// predicted genes inside a gained region after the reference's own
     /// proteins. Same package again.
     pub blastx: PathBuf,
+    /// Translated protein-vs-nucleotide search: the panel's second look,
+    /// at protein level, for genes the nucleotide search did not find in
+    /// full. Optional, like prodigal, so a deployment without it still
+    /// runs; the panel then simply has no protein check.
+    pub tblastn: Option<PathBuf>,
     /// The gene finder, used only to predict the genes inside gained
     /// regions. Optional on purpose: `discover` is all-or-nothing, and
     /// every deployment made before gained regions existed lacks this
@@ -94,6 +99,7 @@ impl ToolPaths {
             blastn: find_tool("blastn", &extra)?,
             tblastx: find_tool("tblastx", &extra)?,
             blastx: find_tool("blastx", &extra)?,
+            tblastn: find_tool("tblastn", &extra).ok(),
             prodigal: find_tool("prodigal", &extra).ok(),
         })
     }

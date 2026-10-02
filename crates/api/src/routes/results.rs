@@ -498,9 +498,24 @@ pub async fn panel_recheck(
     let mut rows = res.panel.ok_or_else(|| {
         ApiError::BadRequest("This run has no gene panel results (no panel was provided).".into())
     })?;
+    // which variant matched, named by where its sequence came from
+    let records = jobs::panel_records(&state, project_id, run_id);
+    let ref_genes: Vec<straincompass_types::WgaGene> =
+        jobs::load_reference_json(&state, project_id, run_id)
+            .ok()
+            .and_then(|v| serde_json::from_value(v["genes"].clone()).ok())
+            .unwrap_or_default();
+    for r in rows.iter_mut().filter(|r| !r.variant.is_empty()) {
+        if let Some((_, rec)) = records.iter().find(|(id, _)| *id == r.variant) {
+            r.variant_source =
+                straincompass_engine::element::panel_gene_source(&r.gene_id, &rec.desc, &ref_genes);
+        }
+    }
     rows.retain(|r| {
-        matches_search(&format!("{} {}", r.gene_id, r.qry_locus), &q.search)
-            && call_filter_ok(r.call, &q.call)
+        matches_search(
+            &format!("{} {} {}", r.gene_id, r.qry_locus, r.variant_source),
+            &q.search,
+        ) && call_filter_ok(r.call, &q.call)
     });
     let asc = q.sort_dir.as_deref() != Some("desc");
     let by = q.sort_by.clone().unwrap_or_default();

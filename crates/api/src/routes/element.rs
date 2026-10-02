@@ -59,6 +59,8 @@ pub async fn panel_matrix(
                 row.identities.push(hit.map(|h| h.identity).unwrap_or(0.0));
                 row.loci
                     .push(hit.map(|h| h.qry_locus.clone()).unwrap_or_default());
+                row.variant_warnings
+                    .push(hit.is_some_and(|h| h.variant_warning));
             }
             rows.push(row);
         }
@@ -115,7 +117,12 @@ pub async fn panel_context(
     let mut gained = res.gained.unwrap_or_default();
     crate::routes::nblast::merge_ncbi_names(&qdir, &mut gained);
     let query_name = res.query_name;
-    let panel_record = jobs::panel_record(&state, project_id, run_id, &row.gene_id);
+    let variant = if row.variant.is_empty() {
+        row.gene_id.clone()
+    } else {
+        row.variant.clone()
+    };
+    let panel_record = jobs::panel_record(&state, project_id, run_id, &variant);
     // the reference's own genes, to list neighbours in shared stretches;
     // a run without them still answers, with predicted genes only
     let ref_genes: Vec<straincompass_types::WgaGene> =
@@ -142,6 +149,7 @@ pub async fn panel_context(
             panel_source: panel_record
                 .map(|r| element::panel_gene_source(&row.gene_id, &r.desc, &ref_genes))
                 .unwrap_or_default(),
+            match_note: element::panel_match_note(&row),
             call: row.call,
             cov_pct: row.cov_pct,
             identity: row.identity,
@@ -150,7 +158,9 @@ pub async fn panel_context(
             window: element::CONTEXT_WINDOW,
             ..Default::default()
         };
-        let Some((contig, start, end, strand)) = element::parse_locus(&row.qry_locus) else {
+        // a gene not found in full is shown where its closest match sits
+        let Some((contig, start, end, strand)) = element::parse_locus(element::panel_locus(&row))
+        else {
             ctx.verdict = "not_found".into();
             ctx.verdict_text = if row.call == Call::Absent {
                 format!("{} was not found in this genome.", row.gene_id)
@@ -173,7 +183,13 @@ pub async fn panel_context(
             &contig,
             (start, end),
             element::CONTEXT_WINDOW,
-            &row.gene_id,
+            // only a full match names the predicted gene after the panel
+            // gene; a partial one may be a relative
+            if row.call == Call::Present {
+                &row.gene_id
+            } else {
+                ""
+            },
         );
         genes.extend(element::annotation_context_genes(
             &delta.alignments,

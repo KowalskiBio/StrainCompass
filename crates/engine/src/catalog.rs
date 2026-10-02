@@ -216,10 +216,39 @@ pub fn lookup(name: &str, organism: Option<&str>, catalogs: &[Catalog]) -> Optio
     })
 }
 
+/// Every sequence the catalogs hold under the entry `lookup` picks for
+/// `name`, that entry's first. One catalog name can cover quite different
+/// genes: AMRFinderPlus cadA_Lm is an Enterococcus saigonensis ATPase and
+/// a Listeria Scott A one, 36 % identical to each other, and the cadA of
+/// Tn5422 is neither. A panel searches them all as variants of the gene.
+pub fn lookup_all(name: &str, organism: Option<&str>, catalogs: &[Catalog]) -> Vec<CatalogGene> {
+    let Some(best) = lookup(name, organism, catalogs) else {
+        return Vec::new();
+    };
+    let mut out = vec![best.clone()];
+    for c in catalogs.iter().filter(|c| c.source == best.source) {
+        for e in &c.entries {
+            if e.symbol == best.symbol
+                && e.seq.len() >= 50
+                && out.iter().all(|g| !g.seq.eq_ignore_ascii_case(&e.seq))
+            {
+                out.push(CatalogGene {
+                    source: c.source.to_string(),
+                    symbol: e.symbol.clone(),
+                    product: e.product.clone(),
+                    origin: e.origin.clone(),
+                    seq: e.seq.clone(),
+                });
+            }
+        }
+    }
+    out
+}
+
 /// An organism-specific catalog variant of a gene the reference already
-/// has under the same name, when its sequence differs: cadA from an EGD-e
-/// reference vs AMRFinderPlus cadA_Lm (the Tn5422 cadA, ~70 % identical).
-/// The reference copy stays the answer; this lets the user see the other.
+/// has under the same name, when its sequence differs: cadA from a
+/// reference that has one vs AMRFinderPlus cadA_Lm. The reference copy
+/// stays the first variant; the catalog's are searched beside it.
 pub fn organism_variant(
     name: &str,
     organism: Option<&str>,
@@ -259,6 +288,24 @@ mod tests {
             Catalog::amrfinder(AMR.as_bytes()),
             Catalog::vfdb(VF.as_bytes()),
         ]
+    }
+
+    #[test]
+    fn lists_every_sequence_under_the_chosen_entry() {
+        let two = format!(
+            "{AMR}>BCA86951.1|AP022822.1|1|1|cadC_Lm|cadC_Lm|CadC AP022822.1:2607958-2608317\n\
+             TTTTTCGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT\n"
+        );
+        let c = vec![Catalog::amrfinder(two.as_bytes())];
+        let all = lookup_all("cadC", Some("Listeria monocytogenes"), &c);
+        let origins: Vec<&str> = all.iter().map(|g| g.origin.as_str()).collect();
+        assert_eq!(
+            origins,
+            ["L28104.1:2652-2293", "AP022822.1:2607958-2608317"]
+        );
+        // the other organism's cadC_Sa is a different entry, not a variant
+        assert!(all.iter().all(|g| g.symbol == "cadC_Lm"));
+        assert!(lookup_all("nope", None, &c).is_empty());
     }
 
     #[test]
