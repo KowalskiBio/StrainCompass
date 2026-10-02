@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type { ContextGene, ElementReport, GeneOrigin, OriginRecord, PanelContext, Run } from "../types";
 import { CallBadge, ErrorBox, Modal, Spinner } from "./ui";
+import { PanelAlignmentDialog } from "./PanelAlignmentDialog";
 
 /**
  * A panel gene beyond its call: where it sits in one strain (plasmid,
@@ -24,6 +25,9 @@ export function PanelGeneDialog({
   // a plasmid picked in the NCBI section, handed to the comparison
   const [preset, setPreset] = useState<{ acc: string; n: number } | null>(null);
   useEffect(() => setPreset(null), [geneId]);
+  // the strain whose alignment the Investigate dialog shows
+  const [investigate, setInvestigate] = useState<number | null>(null);
+  useEffect(() => setInvestigate(null), [geneId]);
 
   return (
     <Modal
@@ -43,6 +47,7 @@ export function PanelGeneDialog({
             geneId={geneId}
             queryId={queryId ?? run.queries[0]?.file_id}
             onQuery={setQueryId}
+            onInvestigate={setInvestigate}
           />
           <GeneOriginSection
             run={run}
@@ -56,6 +61,14 @@ export function PanelGeneDialog({
             preset={preset}
           />
         </div>
+      )}
+      {geneId && (
+        <PanelAlignmentDialog
+          run={run}
+          geneId={geneId}
+          queryId={investigate}
+          onClose={() => setInvestigate(null)}
+        />
       )}
     </Modal>
   );
@@ -128,11 +141,13 @@ function WhereItSits({
   geneId,
   queryId,
   onQuery,
+  onInvestigate,
 }: {
   run: Run;
   geneId: string;
   queryId: number | undefined;
   onQuery: (id: number) => void;
+  onInvestigate: (queryId: number) => void;
 }) {
   const [ctx, setCtx] = useState<PanelContext | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -183,6 +198,16 @@ function WhereItSits({
               </p>
               <p className="mt-1">{ctx.match_note}</p>
             </div>
+          )}
+
+          {ctx.contig && queryId !== undefined && (
+            <button
+              onClick={() => onInvestigate(queryId)}
+              className="h-10 px-4 rounded-lg border border-zinc-300 bg-white text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+              title="Align the panel gene base by base to this strain, next to another strain"
+            >
+              Investigate alignment
+            </button>
           )}
 
           {ctx.contig && (

@@ -227,7 +227,16 @@ type Tile =
  * `reference_seq`: a minus-strand gene's sequence is the reverse complement,
  * so its tiles also run in descending reference order to read 5' -> 3'.
  */
-export function GeneAlignmentTiles({ q, gene }: { q: GeneQueryAlignment; gene: TileGene }) {
+export function GeneAlignmentTiles({
+  q,
+  gene,
+  refName = "the reference",
+}: {
+  q: GeneQueryAlignment;
+  gene: TileGene;
+  /** What the top row is, for the block captions. */
+  refName?: string;
+}) {
   const tiles: Tile[] = q.blocks.map((b) => ({ kind: "block" as const, block: b }));
   for (const [s, e] of q.unaligned) {
     const from = gene.strand < 0 ? gene.end - e : s - gene.start;
@@ -247,9 +256,9 @@ export function GeneAlignmentTiles({ q, gene }: { q: GeneQueryAlignment; gene: T
     <>
       {ordered.map((t, i) =>
         t.kind === "block" ? (
-          <AlignmentBlock key={i} block={t.block} />
+          <AlignmentBlock key={i} block={t.block} refName={refName} />
         ) : (
-          <UnalignedBlock key={i} start={t.start} end={t.end} seq={t.seq} />
+          <UnalignedBlock key={i} start={t.start} end={t.end} seq={t.seq} refName={refName} />
         ),
       )}
     </>
@@ -262,15 +271,17 @@ function UnalignedBlock({
   start,
   end,
   seq,
+  refName = "the reference",
 }: {
   start: number;
   end: number;
   seq: string;
+  refName?: string;
 }) {
   return (
     <div>
       <p className="text-xs text-zinc-400 mb-1 font-mono dark:text-zinc-500">
-        unaligned reference {start.toLocaleString("en-US")} -{" "}
+        unaligned part of {refName} {start.toLocaleString("en-US")} -{" "}
         {end.toLocaleString("en-US")} ({(end - start + 1).toLocaleString("en-US")} bp),
         no alignment to this query
       </p>
@@ -300,8 +311,10 @@ function UnalignedBlock({
 /** One aligned block: the shared rendering the gene dialog also uses. */
 export function AlignmentBlock({
   block,
+  refName = "the reference",
 }: {
   block: GeneQueryAlignment["blocks"][number];
+  refName?: string;
 }) {
   const ref = block.ref_seq;
   const qry = block.qry_seq;
@@ -310,7 +323,7 @@ export function AlignmentBlock({
     <div>
       <p className="text-xs text-zinc-500 mb-1 font-mono dark:text-zinc-400">
         block {block.ref_start.toLocaleString("en-US")} -{" "}
-        {block.ref_end.toLocaleString("en-US")} in the reference
+        {block.ref_end.toLocaleString("en-US")} in {refName}
         {block.qry_rev ? ", query aligned on the reverse strand" : ""}, identity{" "}
         {block.identity.toFixed(1)}%
       </p>

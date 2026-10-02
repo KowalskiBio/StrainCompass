@@ -107,6 +107,10 @@ fn routes() -> Router<SharedState> {
             get(routes::element::panel_context),
         )
         .route(
+            "/runs/{id}/panel_alignment",
+            get(routes::element::panel_alignment),
+        )
+        .route(
             "/runs/{id}/panel_element",
             post(routes::element::panel_element),
         )

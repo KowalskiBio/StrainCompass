@@ -14,6 +14,7 @@ import type {
   Page,
   PanelContext,
   PanelMatrixRow,
+  PanelAlignmentView,
   PanelRow,
   Project,
   ProjectFile,
@@ -360,6 +361,12 @@ export const api = {
     request<Page<ScreenMatrixRow>>(`/runs/${runId}/screen_matrix${qs(q)}`),
   screenStatus: (runId: number) =>
     request<{ query_id: number; status: ScreenStatus }[]>(`/runs/${runId}/screen_status`),
+  panelAlignment: (runId: number, queryId: number, geneId: string, variant?: string) =>
+    request<PanelAlignmentView>(
+      `/runs/${runId}/panel_alignment?query_id=${queryId}&gene_id=${encodeURIComponent(geneId)}${
+        variant ? `&variant=${encodeURIComponent(variant)}` : ""
+      }`,
+    ),
   panelMatrix: (runId: number, q: TableQuery) =>
     request<Page<PanelMatrixRow>>(`/runs/${runId}/panel_matrix${qs(q)}`),
   panelContext: (runId: number, queryId: number, geneId: string) =>

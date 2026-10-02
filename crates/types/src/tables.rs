@@ -531,6 +531,40 @@ pub struct PanelContext {
     pub genes_note: String,
 }
 
+/// A panel gene aligned base by base to where it was found in one strain,
+/// for comparing a Present strain with a Partial one side by side.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PanelAlignmentView {
+    pub query_id: i64,
+    pub query_name: String,
+    pub gene_id: String,
+    pub call: Call,
+    /// The panel record aligned, and where its sequence came from.
+    pub variant: String,
+    pub variant_source: String,
+    pub panel_len: u64,
+    pub panel_seq: String,
+    /// Where in the strain: the DNA hit, or the protein-level relative.
+    pub contig: String,
+    pub strand: i8,
+    /// 1-based inclusive range of the panel gene that aligned.
+    pub panel_start: u64,
+    pub panel_end: u64,
+    /// The aligned stretch on the contig, 1-based inclusive.
+    pub contig_start: u64,
+    pub contig_end: u64,
+    pub identity: f64,
+    /// Share of the panel gene inside the aligned stretch, percent.
+    pub panel_coverage: f64,
+    pub mismatches: u64,
+    pub gap_bases: u64,
+    /// Aligned rows, '-' for gaps; panel gene on top.
+    pub panel_row: String,
+    pub strain_row: String,
+    /// The dialog's note on a match that is not a full one.
+    pub match_note: String,
+}
+
 /// How much of an element one query genome holds.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ElementHit {

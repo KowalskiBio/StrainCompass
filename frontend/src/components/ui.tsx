@@ -52,26 +52,38 @@ export function CallBadge({ call }: { call: Call }) {
   );
 }
 
+/** Open modals, innermost last: Escape closes only the top one, so a
+ * dialog opened from another dialog does not take its parent with it. */
+const openModals: symbol[] = [];
+
 export function Modal({
   open,
   onClose,
   title,
   children,
   wide,
+  extraWide,
 }: {
   open: boolean;
   onClose: () => void;
   title: ReactNode;
   children: ReactNode;
   wide?: boolean;
+  /** Nearly the whole window, for side-by-side content. */
+  extraWide?: boolean;
 }) {
   useEffect(() => {
     if (!open) return;
+    const me = Symbol("modal");
+    openModals.push(me);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && openModals[openModals.length - 1] === me) onClose();
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      openModals.splice(openModals.indexOf(me), 1);
+    };
   }, [open, onClose]);
   if (!open) return null;
   return (
@@ -82,7 +94,7 @@ export function Modal({
       }}
     >
       <div
-        className={`bg-white rounded-xl shadow-xl border border-zinc-200 w-full dark:bg-zinc-900 dark:border-zinc-800 ${wide ? "max-w-5xl" : "max-w-2xl"} my-auto`}
+        className={`bg-white rounded-xl shadow-xl border border-zinc-200 w-full dark:bg-zinc-900 dark:border-zinc-800 ${extraWide ? "max-w-[min(96vw,1440px)]" : wide ? "max-w-5xl" : "max-w-2xl"} my-auto`}
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-800">
           <h2 className="text-lg font-semibold">{title}</h2>

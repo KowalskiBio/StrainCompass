@@ -13,7 +13,8 @@ use straincompass_engine::delta::DeltaFile;
 use straincompass_engine::element::{self, ElementTarget};
 use straincompass_engine::fasta;
 use straincompass_types::{
-    Call, ElementReport, Page, PanelContext, PanelMatrixRow, PanelRow, TableQuery,
+    Call, ElementReport, Page, PanelAlignmentView, PanelContext, PanelMatrixRow, PanelRow,
+    TableQuery,
 };
 
 fn succeeded_queries(state: &SharedState, run_id: i64) -> ApiResult<(i64, Vec<i64>)> {
@@ -377,4 +378,111 @@ pub async fn panel_element(
         element_len,
         hits,
     }))
+}
+
+#[derive(serde::Deserialize)]
+pub struct PanelAlignmentQuery {
+    pub query_id: Option<i64>,
+    pub gene_id: String,
+    /// The panel record to align; the strain's own best variant when
+    /// absent. Passed so two strains are aligned to the same sequence.
+    pub variant: Option<String>,
+}
+
+/// GET /runs/{id}/panel_alignment?query_id&gene_id[&variant] : the panel
+/// gene aligned base by base to its hit (or closest relative) in one
+/// strain.
+pub async fn panel_alignment(
+    State(state): State<SharedState>,
+    Path(run_id): Path<i64>,
+    Query(q): Query<PanelAlignmentQuery>,
+) -> ApiResult<Json<PanelAlignmentView>> {
+    let (project_id, run_id, qid) = resolve_query_id(&state, run_id, q.query_id)?;
+    let res = jobs::load_query_result(&state, project_id, run_id, qid)?;
+    let row = res
+        .panel
+        .ok_or_else(no_panel)?
+        .into_iter()
+        .find(|r| r.gene_id == q.gene_id)
+        .ok_or_else(|| ApiError::NotFound(format!("{} is not in this run's panel.", q.gene_id)))?;
+    let locus = element::panel_locus(&row).to_string();
+    let Some((contig, start, end, strand)) = element::parse_locus(&locus) else {
+        return Err(ApiError::NotFound(format!(
+            "Nothing in {} resembles {}, at DNA or protein level, so there is no alignment to show.",
+            res.query_name, q.gene_id
+        )));
+    };
+    let variant = q
+        .variant
+        .clone()
+        .filter(|v| !v.is_empty())
+        .or_else(|| (!row.variant.is_empty()).then(|| row.variant.clone()))
+        .or_else(|| row.protein.as_ref().map(|p| p.variant.clone()))
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| row.gene_id.clone());
+    let run_dir = state.run_dir(project_id, run_id);
+    let panel_seq = fasta::parse_fasta(run_dir.join("panel").join("panel.fa"))
+        .ok()
+        .and_then(|recs| recs.into_iter().find(|r| r.id == variant))
+        .map(|r| r.seq.to_ascii_uppercase())
+        .ok_or_else(|| {
+            ApiError::NotFound("This run's gene panel file is no longer on the server.".into())
+        })?;
+    let ref_genes: Vec<straincompass_types::WgaGene> =
+        jobs::load_reference_json(&state, project_id, run_id)
+            .ok()
+            .and_then(|v| serde_json::from_value(v["genes"].clone()).ok())
+            .unwrap_or_default();
+    let variant_source = jobs::panel_record(&state, project_id, run_id, &variant)
+        .map(|r| element::panel_gene_source(&row.gene_id, &r.desc, &ref_genes))
+        .unwrap_or_default();
+    let qry_fa = run_dir
+        .join("queries")
+        .join(qid.to_string())
+        .join("query.fa");
+    let query_name = res.query_name.clone();
+    let view = tokio::task::spawn_blocking(move || -> ApiResult<PanelAlignmentView> {
+        use straincompass_engine::panel_align::{align, hit_window, window_to_contig};
+        let records = fasta::parse_fasta(&qry_fa).map_err(|_| {
+            ApiError::NotFound("This run's genome files are no longer on the server.".into())
+        })?;
+        let rec = records
+            .into_iter()
+            .find(|r| r.id == contig)
+            .ok_or_else(|| ApiError::NotFound(format!("Contig {contig} is not in this genome.")))?;
+        let (window, lo) = hit_window(&rec.seq, start, end, strand, panel_seq.len());
+        let a = align(&panel_seq, &window).ok_or_else(|| {
+            ApiError::NotFound("The gene and this stretch share nothing to align.".into())
+        })?;
+        let (c1, c2) = (
+            window_to_contig(a.window_start, lo, window.len(), strand),
+            window_to_contig(a.window_end, lo, window.len(), strand),
+        );
+        Ok(PanelAlignmentView {
+            query_id: qid,
+            query_name,
+            gene_id: row.gene_id.clone(),
+            call: row.call,
+            variant,
+            variant_source,
+            panel_len: panel_seq.len() as u64,
+            panel_seq: String::from_utf8_lossy(&panel_seq).into_owned(),
+            contig,
+            strand,
+            panel_start: a.panel_start,
+            panel_end: a.panel_end,
+            contig_start: c1.min(c2),
+            contig_end: c1.max(c2),
+            identity: a.identity,
+            panel_coverage: a.panel_coverage(panel_seq.len()),
+            mismatches: a.mismatches,
+            gap_bases: a.gap_bases,
+            panel_row: String::from_utf8_lossy(&a.panel_row).into_owned(),
+            strain_row: String::from_utf8_lossy(&a.strain_row).into_owned(),
+            match_note: element::panel_match_note(&row),
+        })
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("The alignment could not be made. ({e})")))??;
+    Ok(Json(view))
 }

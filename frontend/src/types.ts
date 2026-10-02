@@ -273,6 +273,31 @@ export interface ProteinHit {
   explained_by?: string;
 }
 
+/** A panel gene aligned base by base to its hit in one strain. */
+export interface PanelAlignmentView {
+  query_id: number;
+  query_name: string;
+  gene_id: string;
+  call: Call;
+  variant: string;
+  variant_source: string;
+  panel_len: number;
+  panel_seq: string;
+  contig: string;
+  strand: number;
+  panel_start: number;
+  panel_end: number;
+  contig_start: number;
+  contig_end: number;
+  identity: number;
+  panel_coverage: number;
+  mismatches: number;
+  gap_bases: number;
+  panel_row: string;
+  strain_row: string;
+  match_note: string;
+}
+
 /** One panel gene across all queries of a run. */
 export interface PanelMatrixRow {
   gene_id: string;
