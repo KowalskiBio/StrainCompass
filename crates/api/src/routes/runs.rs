@@ -209,14 +209,13 @@ pub async fn list_for_project(
     Ok(Json(out))
 }
 
-/// DELETE /runs/{id}
+/// PUT /runs/{id}/name : label a run so results are identifiable later.
+/// An empty name clears the label and the run goes back to "Run #<id>".
 #[derive(Deserialize)]
 pub struct RenameRun {
     pub name: String,
 }
 
-/// PUT /runs/{id}/name : label a run so results are identifiable later.
-/// An empty name clears the label and the run goes back to "Run #<id>".
 pub async fn rename(
     State(state): State<SharedState>,
     Path(run_id): Path<i64>,
@@ -249,6 +248,7 @@ pub async fn rename(
         .ok_or_else(|| ApiError::NotFound("This run does not exist (anymore).".into()))
 }
 
+/// DELETE /runs/{id}
 pub async fn delete(
     State(state): State<SharedState>,
     Path(run_id): Path<i64>,
@@ -302,4 +302,76 @@ pub async fn params(
         "schema": straincompass_types::param_schema(),
         "presets": ["default", "strict", "loose"],
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn rename_labels_and_trims() {
+        let (state, _dir) = crate::routes::results::tests::seeded_state();
+        let res = rename(
+            State(state),
+            Path(1),
+            Json(RenameRun {
+                name: "  My run  ".into(),
+            }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(res.name.as_deref(), Some("My run"));
+    }
+
+    #[tokio::test]
+    async fn rename_empty_clears_the_label() {
+        let (state, _dir) = crate::routes::results::tests::seeded_state();
+        let first = rename(
+            State(state.clone()),
+            Path(1),
+            Json(RenameRun { name: "x".into() }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(first.name.as_deref(), Some("x"));
+        let res = rename(
+            State(state),
+            Path(1),
+            Json(RenameRun { name: "   ".into() }),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(res.name, None);
+    }
+
+    #[tokio::test]
+    async fn rename_rejects_too_long_names() {
+        let (state, _dir) = crate::routes::results::tests::seeded_state();
+        let err = rename(
+            State(state),
+            Path(1),
+            Json(RenameRun {
+                name: "x".repeat(121),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)));
+    }
+
+    #[tokio::test]
+    async fn rename_of_missing_run_is_404() {
+        let (state, _dir) = crate::routes::results::tests::seeded_state();
+        let err = rename(
+            State(state),
+            Path(99),
+            Json(RenameRun { name: "nope".into() }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ApiError::NotFound(_)));
+    }
 }
