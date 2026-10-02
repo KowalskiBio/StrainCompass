@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { Call, PanelAlignmentView, Run } from "../types";
+import type { Call, PanelAlignmentView, PanelContext, Run } from "../types";
 import { GeneAlignmentTiles } from "./GeneAlignmentPanel";
 import { CallBadge, ErrorBox, Modal, Spinner } from "./ui";
 
@@ -26,6 +26,14 @@ export function PanelAlignmentDialog({
   const [leftError, setLeftError] = useState<string | null>(null);
   const [calls, setCalls] = useState<Map<number, Call> | null>(null);
   const [rightId, setRightId] = useState<number | undefined>(undefined);
+  // the run's presence thresholds, for "Present means ..." on each side
+  const [limits, setLimits] = useState<{ pid: number; cov: number }>({ pid: 90, cov: 90 });
+  useEffect(() => {
+    api
+      .getRunParams(run.id)
+      .then((p) => setLimits({ pid: p.params.blast_pid, cov: p.params.blast_cov }))
+      .catch(() => {});
+  }, [run.id]);
 
   useEffect(() => {
     if (queryId === null) return;
@@ -102,6 +110,9 @@ export function PanelAlignmentDialog({
         </p>
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           <Side
+            run={run}
+            geneId={geneId}
+            limits={limits}
             title={run.queries.find((q) => q.file_id === queryId)?.name ?? ""}
             view={left}
             error={leftError}
@@ -115,6 +126,7 @@ export function PanelAlignmentDialog({
             onRight={setRightId}
             calls={calls}
             variant={left?.variant}
+            limits={limits}
           />
         </div>
       </div>
@@ -130,6 +142,7 @@ function RightSide({
   onRight,
   calls,
   variant,
+  limits,
 }: {
   run: Run;
   geneId: string;
@@ -139,6 +152,7 @@ function RightSide({
   calls: Map<number, Call> | null;
   /** Align to the same panel sequence as the left side. */
   variant: string | undefined;
+  limits: { pid: number; cov: number };
 }) {
   const [view, setView] = useState<PanelAlignmentView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -162,6 +176,9 @@ function RightSide({
 
   return (
     <Side
+      run={run}
+      geneId={geneId}
+      limits={limits}
       title={
         <label className="flex items-center gap-2">
           <span className="sr-only">Compare with</span>
@@ -189,16 +206,38 @@ function RightSide({
 }
 
 function Side({
+  run,
+  geneId,
+  limits,
   title,
   view,
   error,
   loading,
 }: {
+  run: Run;
+  geneId: string;
+  limits: { pid: number; cov: number };
   title: React.ReactNode;
   view: PanelAlignmentView | null;
   error: string | null;
   loading: boolean;
 }) {
+  // the strain's gene context names the related gene of a missing gene
+  const [ctx, setCtx] = useState<PanelContext | null>(null);
+  useEffect(() => {
+    if (!view) return;
+    let cancelled = false;
+    setCtx(null);
+    api
+      .panelContext(run.id, view.query_id, geneId)
+      .then((c) => !cancelled && setCtx(c))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [run.id, view, geneId]);
+  const strain = view?.query_name.replace(/\.(fasta|fa|fna)$/i, "") ?? "";
+  const related = view && view.call !== "PRESENT";
   return (
     <div className="border border-zinc-200 rounded-lg overflow-hidden min-w-0 dark:border-zinc-800">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 bg-zinc-50 border-b border-zinc-200 dark:bg-zinc-800/60 dark:border-zinc-800">
@@ -214,12 +253,22 @@ function Side({
         )}
         {view && (
           <>
+            <Verdict view={view} geneId={geneId} ctx={ctx} />
+            {related && (
+              <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                How the related gene compares with {geneId}:
+              </p>
+            )}
             <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-sm">
-              <Stat label="Gene covered">{view.panel_coverage.toFixed(0)} %</Stat>
-              <Stat label="Identity">{view.identity.toFixed(1)} %</Stat>
+              <Stat label={`Share of ${geneId} matched`}>{view.panel_coverage.toFixed(0)} %</Stat>
+              <Stat label="DNA identity">{view.identity.toFixed(1)} %</Stat>
               <Stat label="Mismatches">{view.mismatches.toLocaleString("en-US")}</Stat>
               <Stat label="Gap bases">{view.gap_bases.toLocaleString("en-US")}</Stat>
             </dl>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              Present means at least {limits.pid} % identity over at least {limits.cov} % of the
+              gene.
+            </p>
             <p className="text-xs text-zinc-500 font-mono dark:text-zinc-400">
               {view.contig}:{view.contig_start.toLocaleString("en-US")}-
               {view.contig_end.toLocaleString("en-US")} ({view.strand < 0 ? "-" : "+"} strand)
@@ -236,9 +285,14 @@ function Side({
                 {view.match_note}
               </p>
             )}
+            <p className="text-xs text-zinc-600 dark:text-zinc-400">
+              Top row: <b>{geneId}</b> ({view.variant_source || "panel sequence"}). Bottom row:{" "}
+              <b>{strain}</b>
+              {related ? `, the related gene${ctx?.related_gene ? ` ${ctx.related_gene}` : ""}` : ""}.
+            </p>
             <div className="space-y-4 thin-scroll max-h-[60vh] overflow-y-auto">
               <GeneAlignmentTiles
-                refName="the panel gene"
+                refName={geneId}
                 gene={{ reference_seq: view.panel_seq, start: 1, end: view.panel_len, strand: 1 }}
                 q={{
                   query_id: view.query_id,
@@ -274,6 +328,42 @@ function Side({
         )}
       </div>
     </div>
+  );
+}
+
+/** One plain sentence: is the gene of interest in this strain? */
+function Verdict({
+  view,
+  geneId,
+  ctx,
+}: {
+  view: PanelAlignmentView;
+  geneId: string;
+  ctx: PanelContext | null;
+}) {
+  const cov = view.panel_coverage.toFixed(0);
+  const id = view.identity.toFixed(0);
+  if (view.call === "PRESENT")
+    return (
+      <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+        <b>{geneId} is present</b>: {cov} % of the gene, {id} % identical.
+      </p>
+    );
+  if (view.call === "PARTIAL")
+    return (
+      <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+        <b>{geneId} is partly present</b>: {cov} % of the gene matches, {id} % identical.
+      </p>
+    );
+  const name = ctx?.related_gene;
+  const prot = ctx?.related_identity;
+  return (
+    <p className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-800 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-200">
+      <b>{geneId} is absent.</b> Shown below is the closest related gene
+      {name ? <>, <i>{name}</i></> : ""}
+      {prot != null ? `, ${prot.toFixed(0)} % identical to ${geneId} as protein` : ""}. It is a
+      different gene, not a copy of {geneId}.
+    </p>
   );
 }
 
