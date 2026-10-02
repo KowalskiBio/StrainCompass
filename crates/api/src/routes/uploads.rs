@@ -384,8 +384,35 @@ async fn build_panel(
         ));
     };
     let ids_text = ids_text.to_string();
+    let chooser_lib = crate::routes::library::for_project(&state, project_id);
+    let chooser_organism: String = {
+        let conn = state.db.lock().unwrap();
+        conn.query_row(
+            "SELECT organism FROM projects WHERE id = ?1",
+            [project_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+    };
+    let chooser_vfdb = state.data_dir.join("db").join("VFDB_setA_nt.fas");
+    let chooser_work = state.cache_dir(project_id).join("library");
     let panel = tokio::task::spawn_blocking(move || {
-        straincompass_engine::panel::panel_from_ids(&ref_fasta, &ref_gff, &ids_text)
+        let catalogs = load_catalogs(chooser_vfdb);
+        let blastn = straincompass_engine::tools::find_optional("blastn");
+        let choose = |name: &str, cands: &[straincompass_engine::panel::Candidate]| {
+            choose_gene(
+                name,
+                cands,
+                chooser_lib.as_ref(),
+                blastn.as_deref(),
+                &catalogs,
+                &chooser_organism,
+                &chooser_work,
+            )
+        };
+        straincompass_engine::panel::panel_from_ids_with(&ref_fasta, &ref_gff, &ids_text, &choose)
     })
     .await
     .map_err(|e| ApiError::Internal(format!("The panel could not be built. ({e})")))??;
@@ -407,15 +434,19 @@ async fn build_panel(
         let wanted = missing.clone();
         let found = panel.found.clone();
         let ref_panel = fasta.clone();
+        let ref_genome = reference_paths(&state, project_id)?.map(|(f, _)| f);
         let work = state.cache_dir(project_id).join("library");
         let looked = tokio::task::spawn_blocking(move || {
             let blastn = straincompass_engine::tools::find_optional("blastn");
+            let blastx = straincompass_engine::tools::find_optional("blastx");
             crate::routes::library::panel_lookup(
                 &lib,
                 blastn.as_deref(),
+                blastx.as_deref(),
                 &wanted,
                 &found,
                 &ref_panel,
+                ref_genome.as_deref(),
                 &work,
             )
         })
@@ -426,6 +457,7 @@ async fn build_panel(
         fasta.push_str(&looked.records);
         from_library = looked.notes;
         library_hints = looked.hints;
+        library_hints.splice(0..0, panel.ambiguous.iter().cloned());
         missing = looked.unresolved;
     }
     let organism: String = {
@@ -456,6 +488,10 @@ async fn build_panel(
         }
     }
     missing = unresolved;
+    if library_title.is_none() {
+        // without a library the ambiguity notes still need saying
+        library_hints.splice(0..0, panel.ambiguous.iter().cloned());
+    }
     hints.splice(0..0, library_hints);
     if !missing.is_empty() {
         let (organism, api_key) = {
@@ -774,15 +810,10 @@ fn accession_hint(line: &str) -> Option<String> {
 /// Resolve plain gene names (no pinned accession) from the curated
 /// catalogs: (FASTA record, note) for each one found, and the entries
 /// still unresolved.
-fn catalog_lookup(
-    wanted: &[String],
-    found: &[String],
-    ref_panel: &str,
-    organism: &str,
-    vfdb_default: std::path::PathBuf,
-) -> (Vec<(String, String)>, Vec<String>, Vec<String>) {
-    use straincompass_engine::catalog::{lookup_all, Catalog};
-    use straincompass_engine::panel::variant_id;
+/// The curated catalogs the screen uses (AMRFinderPlus CDS, VFDB), as far
+/// as this server has them.
+fn load_catalogs(vfdb_default: std::path::PathBuf) -> Vec<straincompass_engine::catalog::Catalog> {
+    use straincompass_engine::catalog::Catalog;
     let cfg = straincompass_engine::screen::ScreenConfig::discover(Some(vfdb_default));
     let mut catalogs = Vec::new();
     if let Some(c) = cfg
@@ -795,6 +826,73 @@ fn catalog_lookup(
     if let Some(c) = cfg.vfdb.as_ref().and_then(|p| Catalog::from_file(p, true)) {
         catalogs.push(c);
     }
+    catalogs
+}
+
+/// Which of the reference's genes of one name the user means: the one a
+/// curated entry of that name is. The library knows which variant group
+/// each entry matches (by protein); without it, the catalogs' own DNA is
+/// compared. None leaves the first in genome order.
+fn choose_gene(
+    name: &str,
+    cands: &[straincompass_engine::panel::Candidate],
+    lib: Option<&straincompass_engine::library::Library>,
+    blastn: Option<&std::path::Path>,
+    catalogs: &[straincompass_engine::catalog::Catalog],
+    organism: &str,
+    work: &std::path::Path,
+) -> Option<(usize, String)> {
+    if let (Some(lib), Some(blastn)) = (lib, blastn) {
+        let curated = lib.curated_groups(name).unwrap_or_default();
+        if !curated.is_empty() {
+            let seqs: Vec<(String, Vec<u8>)> = cands
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (format!("c{i}"), c.seq.clone()))
+                .collect();
+            if let Ok(groups) = lib.groups_of(blastn, &seqs, work) {
+                for (group, entry) in &curated {
+                    if let Some(i) = (0..cands.len()).find(|i| {
+                        groups
+                            .get(&format!("c{i}"))
+                            .is_some_and(|g| g.contains(group))
+                    }) {
+                        return Some((i, format!("it is what {entry} means")));
+                    }
+                }
+            }
+        }
+    }
+    // the catalogs' own sequences: the candidate sharing the most 21-mers
+    // with an entry of that name, if it shares a fair part (another
+    // strain's allele shares most; an unrelated gene none)
+    let organism = (!organism.trim().is_empty()).then_some(organism);
+    let mut best: Option<(f64, usize, String)> = None;
+    for g in straincompass_engine::catalog::lookup_all(name, organism, catalogs) {
+        for (i, c) in cands.iter().enumerate() {
+            let share = straincompass_engine::panel_variants::kmer_share(&c.seq, &g.seq);
+            if share >= 0.3 && best.as_ref().is_none_or(|b| share > b.0) {
+                best = Some((
+                    share,
+                    i,
+                    format!("it is what {} {} means", g.source, g.symbol),
+                ));
+            }
+        }
+    }
+    best.map(|(_, i, why)| (i, why))
+}
+
+fn catalog_lookup(
+    wanted: &[String],
+    found: &[String],
+    ref_panel: &str,
+    organism: &str,
+    vfdb_default: std::path::PathBuf,
+) -> (Vec<(String, String)>, Vec<String>, Vec<String>) {
+    use straincompass_engine::catalog::lookup_all;
+    use straincompass_engine::panel::variant_id;
+    let catalogs = load_catalogs(vfdb_default);
     let organism = (!organism.trim().is_empty()).then_some(organism);
     let mut resolved = Vec::new();
     let mut unresolved = Vec::new();

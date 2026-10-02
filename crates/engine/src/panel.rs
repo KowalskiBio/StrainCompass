@@ -30,7 +30,8 @@ pub fn variant_id(gene: &str, n: usize) -> String {
 }
 
 use crate::fasta::{parse_fasta, revcomp};
-use crate::gff::{parse_gff, Gene};
+use crate::gff::parse_gff;
+pub use crate::gff::Gene;
 use crate::Result;
 use std::collections::HashMap;
 use std::path::Path;
@@ -42,7 +43,22 @@ pub struct PanelFromIds {
     pub missing: Vec<String>,
     /// Identifiers that were resolved, with the panel header used.
     pub found: Vec<String>,
+    /// Names the reference gives to more than one gene, in words: which
+    /// gene was taken, why, and how to ask for the other.
+    pub ambiguous: Vec<String>,
 }
+
+/// One reference gene a name could mean, for [`panel_from_ids_with`]'s
+/// chooser.
+pub struct Candidate<'a> {
+    pub gene: &'a Gene,
+    /// DNA in the gene's own orientation.
+    pub seq: Vec<u8>,
+}
+
+/// Picks among the genes of one name: (index, why), or None to take the
+/// first in genome order.
+pub type Chooser<'c> = dyn Fn(&str, &[Candidate]) -> Option<(usize, String)> + 'c;
 
 /// Extract gene sequences from the reference.
 ///
@@ -51,6 +67,20 @@ pub struct PanelFromIds {
 /// parenthesized locus tag in entries like "pva (lmo0446)" wins over the
 /// symbol).
 pub fn panel_from_ids(ref_fasta: &Path, ref_gff: &Path, ids_text: &str) -> Result<PanelFromIds> {
+    panel_from_ids_with(ref_fasta, ref_gff, ids_text, &|_, _| None)
+}
+
+/// [`panel_from_ids`] with a say in which gene an ambiguous name means.
+/// A name can belong to unrelated genes of one genome: EGD-e calls both
+/// the virulence regulator PrfA (lmo0200) and peptide chain release
+/// factor 1 (lmo2543) "prfA". `choose` picks one; without an answer the
+/// first in genome order is taken. Either way the note says so.
+pub fn panel_from_ids_with(
+    ref_fasta: &Path,
+    ref_gff: &Path,
+    ids_text: &str,
+    choose: &Chooser,
+) -> Result<PanelFromIds> {
     // tolerate a UTF-8 BOM (Excel-style CSVs)
     let ids_text = ids_text.trim_start_matches('\u{feff}');
     let genes = parse_gff(ref_gff)?;
@@ -61,16 +91,22 @@ pub fn panel_from_ids(ref_fasta: &Path, ref_gff: &Path, ids_text: &str) -> Resul
     }
     let mut by_locus: HashMap<&str, &Gene> = HashMap::new();
     let mut by_old_locus: HashMap<&str, &Gene> = HashMap::new();
-    let mut by_symbol: HashMap<String, &Gene> = HashMap::new();
+    // every gene of a name, in genome order (a HashMap of one gene per
+    // name silently kept the last: "prfA" meant RF1, not PrfA)
+    let mut by_symbol: HashMap<String, Vec<&Gene>> = HashMap::new();
     for g in &genes {
         by_locus.insert(g.locus_tag.as_str(), g);
         if !g.old_locus_tag.is_empty() {
             by_old_locus.insert(g.old_locus_tag.as_str(), g);
         }
         if !g.symbol.is_empty() {
-            by_symbol.insert(g.symbol.to_lowercase(), g);
+            by_symbol
+                .entry(g.symbol.to_lowercase())
+                .or_default()
+                .push(g);
         }
     }
+    let mut ambiguous = Vec::new();
 
     let mut fasta = String::new();
     let mut missing = Vec::new();
@@ -118,7 +154,25 @@ pub fn panel_from_ids(ref_fasta: &Path, ref_gff: &Path, ids_text: &str) -> Resul
                         resolved = Some((g, bare.to_string()));
                         break;
                     }
-                    if let Some(g) = by_symbol.get(&bare.to_lowercase()) {
+                    if let Some(gs) = by_symbol.get(&bare.to_lowercase()) {
+                        let g = if gs.len() == 1 {
+                            gs[0]
+                        } else {
+                            let cands = gs
+                                .iter()
+                                .map(|g| {
+                                    Ok(Candidate {
+                                        gene: g,
+                                        seq: gene_sequence(ref_fasta, g)?,
+                                    })
+                                })
+                                .collect::<Result<Vec<_>>>()?;
+                            let (i, why) = choose(bare, &cands)
+                                .filter(|(i, _)| *i < gs.len())
+                                .unwrap_or((0, "the first in the genome".into()));
+                            ambiguous.push(ambiguity_note(bare, gs, i, &why));
+                            gs[i]
+                        };
                         // keep the user's spelling as the FASTA header
                         resolved = Some((g, bare.to_string()));
                         break;
@@ -153,7 +207,39 @@ pub fn panel_from_ids(ref_fasta: &Path, ref_gff: &Path, ids_text: &str) -> Resul
         fasta,
         missing,
         found,
+        ambiguous,
     })
+}
+
+/// "prfA names 2 genes in your reference: lmo0200 (listeriolysin positive
+/// regulatory protein), taken (VFDB files it as prfA), and lmo2543
+/// (peptide chain release factor 1). Write lmo2543 to search that one."
+fn ambiguity_note(name: &str, genes: &[&Gene], chosen: usize, why: &str) -> String {
+    let words = |g: &Gene| {
+        if g.product.is_empty() {
+            g.locus_tag.clone()
+        } else {
+            format!("{} ({})", g.locus_tag, g.product)
+        }
+    };
+    let others: Vec<&&Gene> = genes
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != chosen)
+        .map(|(_, g)| g)
+        .collect();
+    format!(
+        "{name} names {} genes in your reference: {}, taken ({why}), and {}. Write {} to search {}.",
+        genes.len(),
+        words(genes[chosen]),
+        others.iter().map(|g| words(g)).collect::<Vec<_>>().join(" and "),
+        others
+            .iter()
+            .map(|g| g.locus_tag.as_str())
+            .collect::<Vec<_>>()
+            .join(" or "),
+        if others.len() == 1 { "that one" } else { "one of those" },
+    )
 }
 
 fn is_header_line(line: &str) -> bool {
@@ -257,6 +343,64 @@ pub fn renumber_variants(records: &[crate::fasta::FastaRecord]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// EGD-e's two "prfA": PrfA (lmo0200) first in the genome, RF1
+    /// (lmo2543) later.
+    fn two_prfa(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let d = std::env::temp_dir().join(format!("sc-panel-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("r.fa"), ">c\nAAAACCCCGGGGTTTTAAAACCCCGGGGTTTT\n").unwrap();
+        std::fs::write(
+            d.join("r.gff"),
+            "##gff-version 3\n\
+             c\tR\tgene\t1\t8\t.\t+\t.\tID=a;gene=prfA;locus_tag=lmo0200;gene_biotype=protein_coding\n\
+             c\tR\tCDS\t1\t8\t.\t+\t0\tParent=a;locus_tag=lmo0200;product=listeriolysin positive regulatory protein\n\
+             c\tR\tgene\t17\t24\t.\t+\t.\tID=b;gene=prfA;locus_tag=lmo2543;gene_biotype=protein_coding\n\
+             c\tR\tCDS\t17\t24\t.\t+\t0\tParent=b;locus_tag=lmo2543;product=peptide chain release factor 1\n",
+        )
+        .unwrap();
+        (d.join("r.fa"), d.join("r.gff"))
+    }
+
+    #[test]
+    fn a_name_of_two_genes_takes_the_first_and_says_so() {
+        let (fa, gff) = two_prfa("first");
+        let p = panel_from_ids(&fa, &gff, "prfA").unwrap();
+        // the first in genome order, not the last (which was RF1)
+        assert!(
+            p.fasta.starts_with(">prfA reference lmo0200\nAAAACCCC"),
+            "{}",
+            p.fasta
+        );
+        assert_eq!(p.ambiguous.len(), 1);
+        let note = &p.ambiguous[0];
+        assert!(note.contains("prfA names 2 genes"), "{note}");
+        assert!(note.contains("lmo0200 (listeriolysin positive regulatory protein), taken (the first in the genome)"), "{note}");
+        assert!(note.contains("Write lmo2543 to search that one."), "{note}");
+        // asking by locus tag is never ambiguous
+        let p = panel_from_ids(&fa, &gff, "lmo2543").unwrap();
+        assert!(p.ambiguous.is_empty());
+    }
+
+    #[test]
+    fn a_chooser_picks_among_genes_of_one_name() {
+        let (fa, gff) = two_prfa("choose");
+        let pick_rf1 = |name: &str, c: &[Candidate]| {
+            assert_eq!(name, "prfA");
+            assert_eq!(c[1].seq, b"AAAACCCC");
+            c.iter()
+                .position(|c| c.gene.product.contains("release factor"))
+                .map(|i| (i, "a test said so".to_string()))
+        };
+        let p = panel_from_ids_with(&fa, &gff, "prfA", &pick_rf1).unwrap();
+        assert!(
+            p.fasta.starts_with(">prfA reference lmo2543"),
+            "{}",
+            p.fasta
+        );
+        assert!(p.ambiguous[0]
+            .contains("lmo2543 (peptide chain release factor 1), taken (a test said so)"));
+    }
 
     #[test]
     fn renumbers_variants_from_several_sources() {

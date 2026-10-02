@@ -130,9 +130,20 @@ fn kmers(s: &[u8]) -> HashSet<Vec<u8>> {
 /// its 21-mers with the other, in either orientation: a few scattered
 /// SNPs, not a different gene.
 pub fn near_identical(a: &[u8], b: &[u8]) -> bool {
+    kmer_share(a, b) >= 0.9
+}
+
+/// The share of the shorter sequence's 21-mers found in the other, in
+/// either orientation: 1 for identical, ~0.8 for 99 % identity, 0 for
+/// unrelated genes.
+pub fn kmer_share(a: &[u8], b: &[u8]) -> f64 {
     let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
     if short.len() < K {
-        return short.eq_ignore_ascii_case(long);
+        return if short.eq_ignore_ascii_case(long) {
+            1.0
+        } else {
+            0.0
+        };
     }
     let lk = kmers(long);
     let windows: Vec<&[u8]> = short.windows(K).collect();
@@ -140,7 +151,7 @@ pub fn near_identical(a: &[u8], b: &[u8]) -> bool {
         .iter()
         .filter(|w| lk.contains(&w.to_ascii_uppercase()))
         .count();
-    shared * 10 >= windows.len() * 9
+    shared as f64 / windows.len() as f64
 }
 
 /// The CDS around one panel record's origin: the record it came from and

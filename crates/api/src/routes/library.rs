@@ -153,12 +153,18 @@ pub struct PanelLookup {
 ///
 /// `blastn` is needed only to tell a reference gene's own group from its
 /// other variants; without it reference genes get no extra variants.
+/// `blastx` keeps the variants to genes related to the one meant (a name
+/// can belong to unrelated genes: prfA is the PrfA regulator and release
+/// factor 1); without it every gene of the name is searched.
+#[allow(clippy::too_many_arguments)]
 pub fn panel_lookup(
     lib: &Library,
     blastn: Option<&Path>,
+    blastx: Option<&Path>,
     wanted: &[String],
     found: &[String],
     ref_panel: &str,
+    ref_fasta: Option<&Path>,
     work: &Path,
 ) -> PanelLookup {
     let mut out = PanelLookup::default();
@@ -189,6 +195,15 @@ pub fn panel_lookup(
             out.unresolved.push(line.clone());
             continue;
         };
+        // the first variant is the one a curated entry names, or else the
+        // most common: the others must be related to it
+        let anchor = variants[0].seq.clone();
+        let products = vec![variants[0].product.clone()];
+        let (variants, unrelated) =
+            split_family(lib, blastx, &anchor, &products, variants, Some(0), work);
+        if !unrelated.is_empty() {
+            out.hints.push(unrelated_note(&id, &unrelated));
+        }
         for (i, v) in variants.iter().enumerate() {
             out.records
                 .push_str(&record(&variant_id(&id, i + 1), v, &title));
@@ -230,6 +245,43 @@ pub fn panel_lookup(
             .into_iter()
             .filter(|v| !mine.contains(&v.group) && !v.seq.eq_ignore_ascii_case(seq))
             .collect();
+        // what the reference copy is, by its own groups' products
+        let products: Vec<String> = mine
+            .iter()
+            .filter_map(|g| lib.group_brief(*g).ok().flatten().map(|b| b.2))
+            .collect();
+        let (others, unrelated) = split_family(lib, blastx, seq, &products, others, None, work);
+        if !unrelated.is_empty() {
+            out.hints.push(unrelated_note(name, &unrelated));
+        }
+        // a variant the reference itself carries elsewhere is a paralog
+        // of the reference gene (EGD-e's lmo1490 beside its aroE, lmo0490)
+        let seqs: Vec<Vec<u8>> = others.iter().map(|v| v.seq.clone()).collect();
+        let carried = match ref_fasta.map(|f| lib.carried_by(blastn, &seqs, f, work)) {
+            Some(Ok(c)) => c,
+            Some(Err(e)) => {
+                tracing::warn!("reference library: {e}");
+                vec![false; others.len()]
+            }
+            None => vec![false; others.len()],
+        };
+        let (others, paralogs): (Vec<_>, Vec<_>) =
+            others.into_iter().zip(carried).partition(|(_, c)| !c);
+        let others: Vec<LibraryVariant> = others.into_iter().map(|(v, _)| v).collect();
+        if !paralogs.is_empty() {
+            out.hints.push(format!(
+                "{name}: your reference also carries {} other gene{} the library files under {name} ({}): {}, not other versions of it, so {} not searched as {name}.",
+                paralogs.len(),
+                if paralogs.len() == 1 { "" } else { "s" },
+                paralogs
+                    .iter()
+                    .map(|(v, _)| if v.product.is_empty() { v.label.clone() } else { v.product.clone() })
+                    .collect::<Vec<_>>()
+                    .join("; "),
+                if paralogs.len() == 1 { "a paralog" } else { "paralogs" },
+                if paralogs.len() == 1 { "it is" } else { "they are" },
+            ));
+        }
         if others.is_empty() {
             continue;
         }
@@ -318,6 +370,73 @@ fn pinned(lib: &Library, spec: &crate::routes::ncbi::AccessionSpec) -> Option<(S
     ))
 }
 
+/// `variants` split into those related to `anchor` (a gene's DNA) and
+/// those sharing only the name. `keep` is always related (the anchor's
+/// own variant). Without blastx, or when the search fails, all count as
+/// related, as before.
+fn split_family(
+    lib: &Library,
+    blastx: Option<&Path>,
+    anchor: &[u8],
+    products: &[String],
+    variants: Vec<LibraryVariant>,
+    keep: Option<usize>,
+    work: &Path,
+) -> (Vec<LibraryVariant>, Vec<LibraryVariant>) {
+    // the same product is the same gene even past what blastx links (the
+    // ActA of L. ivanovii and of L. monocytogenes)
+    let same_product = |v: &LibraryVariant| {
+        let p = v.product.trim().to_ascii_lowercase();
+        !p.is_empty()
+            && p != "hypothetical protein"
+            && products.iter().any(|q| q.trim().eq_ignore_ascii_case(&p))
+    };
+    let family = match blastx.map(|b| lib.family(b, anchor, work)) {
+        Some(Ok(f)) => f,
+        Some(Err(e)) => {
+            tracing::warn!("reference library: {e}");
+            return (variants, Vec::new());
+        }
+        None => return (variants, Vec::new()),
+    };
+    let (mut related, mut unrelated) = (Vec::new(), Vec::new());
+    for (i, v) in variants.into_iter().enumerate() {
+        if Some(i) == keep || family.contains(&v.group) || same_product(&v) {
+            related.push(v);
+        } else {
+            unrelated.push(v);
+        }
+    }
+    (related, unrelated)
+}
+
+/// "prfA: the Listeria library also files 1 unrelated gene under prfA
+/// (peptide chain release factor 1 on chromosome (...), 832 genomes); it
+/// is not searched as prfA. To search it, add it under a name of its own,
+/// e.g. prfA_2 (NZ_CP...:1-1077 rev)."
+fn unrelated_note(name: &str, unrelated: &[LibraryVariant]) -> String {
+    let first = &unrelated[0];
+    format!(
+        "{name}: the reference library also files {} unrelated gene{} under {name} ({}); {} not searched as {name}. To search one, add it under a name of its own, e.g. {name}_2 ({}{}).",
+        unrelated.len(),
+        if unrelated.len() == 1 { "" } else { "s" },
+        unrelated
+            .iter()
+            .map(|v| format!(
+                "{} on {}, {} genome{}",
+                if v.product.is_empty() { &v.label } else { &v.product },
+                v.place,
+                v.n_genomes,
+                if v.n_genomes == 1 { "" } else { "s" }
+            ))
+            .collect::<Vec<_>>()
+            .join("; "),
+        if unrelated.len() == 1 { "it is" } else { "they are" },
+        first.locus,
+        if first.minus { " rev" } else { "" },
+    )
+}
+
 /// The names to try for one line of a gene list, the parenthesized locus
 /// tag first: "pva (lmo0446)" -> ["lmo0446", "pva"].
 fn lookup_tokens(line: &str) -> Vec<String> {
@@ -404,6 +523,7 @@ mod tests {
             n_genomes: 6,
             n_plasmid: 4,
             n_chromosome: 2,
+            minus: true,
         };
         let rec = record("cadA__v2", &v, "Listeria library t");
         let recs = straincompass_engine::fasta::parse_fasta_str(&rec).unwrap();

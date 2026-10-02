@@ -85,6 +85,8 @@ pub struct LibraryVariant {
     pub n_genomes: u64,
     pub n_plasmid: u64,
     pub n_chromosome: u64,
+    /// The representative sits on the minus strand of `locus`.
+    pub minus: bool,
 }
 
 /// A replicon matching a sequence.
@@ -257,9 +259,9 @@ impl Library {
                 },
             )
             .map_err(sql)?;
-        let (locus, place) = conn
+        let (locus, place, minus) = conn
             .query_row(
-                "SELECT g.replicon, g.start, g.end, r.kind, r.name, a.organism, a.strain
+                "SELECT g.replicon, g.start, g.end, r.kind, r.name, a.organism, a.strain, g.strand
                  FROM genes g JOIN replicons r ON r.accession = g.replicon
                  LEFT JOIN assemblies a ON a.accession = r.assembly
                  WHERE g.id = ?1",
@@ -271,9 +273,11 @@ impl Library {
                     let pname: String = r.get(4)?;
                     let org: Option<String> = r.get(5)?;
                     let strain: Option<String> = r.get(6)?;
+                    let strand: String = r.get(7)?;
                     Ok((
                         format!("{acc}:{s}-{e}"),
                         replicon_words(&kind, &pname, &with_strain(org, strain)),
+                        strand == "-",
                     ))
                 },
             )
@@ -331,6 +335,7 @@ impl Library {
             n_genomes,
             n_plasmid,
             n_chromosome,
+            minus,
         })
     }
 
@@ -501,6 +506,138 @@ impl Library {
             let held = out.entry(name.clone()).or_default();
             if !held.contains(&group) {
                 held.push(group);
+            }
+        }
+        Ok(out)
+    }
+
+    /// The groups a curated entry or seed record files under `name`, with
+    /// the entry: [(group, "VFDB prfA")].
+    pub fn curated_groups(&self, name: &str) -> Result<Vec<(i64, String)>> {
+        let conn = self.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT n.group_id, h.source || ' ' || h.symbol
+                 FROM names n JOIN catalog_hits h ON h.group_id = n.group_id
+                 WHERE n.name = ?1 COLLATE NOCASE AND n.kind = 'catalog'
+                 ORDER BY h.identity DESC, n.group_id",
+            )
+            .map_err(sql)?;
+        let rows = stmt
+            .query_map([name.trim()], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(sql)?;
+        let mut out: Vec<(i64, String)> = Vec::new();
+        for r in rows {
+            let (g, e) = r.map_err(sql)?;
+            if out.iter().all(|(h, _)| *h != g) {
+                out.push((g, e));
+            }
+        }
+        Ok(out)
+    }
+
+    /// The groups whose protein a gene (DNA) is related to: blastx hits
+    /// at E <= 1e-10. Two variants of one gene are related even at 35 %
+    /// (the cadA genes); two genes sharing only a name are not.
+    pub fn family(&self, blastx: &Path, seq: &[u8], work: &Path) -> Result<Vec<i64>> {
+        std::fs::create_dir_all(work)?;
+        let query = work.join("library_family_query.fasta");
+        let mut fasta = b">q\n".to_vec();
+        fasta.extend_from_slice(seq);
+        fasta.push(b'\n');
+        std::fs::write(&query, fasta)?;
+        let out = Command::new(blastx)
+            .arg("-query")
+            .arg(&query)
+            .arg("-db")
+            .arg(self.groups_protein_db())
+            .args([
+                "-outfmt",
+                "6 sseqid",
+                "-evalue",
+                "1e-10",
+                "-max_target_seqs",
+                "2000",
+                "-num_threads",
+                "2",
+            ])
+            .output()
+            .map_err(|e| crate::EngineError::ToolMissing(format!("blastx: {e}")))?;
+        if !out.status.success() {
+            return Err(friendly(format!(
+                "The reference library search failed. {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        let mut groups: Vec<i64> = Vec::new();
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            if let Some(g) = group_id(line.trim()) {
+                if !groups.contains(&g) {
+                    groups.push(g);
+                }
+            }
+        }
+        Ok(groups)
+    }
+
+    /// Which of `seqs` the genome in `fasta` carries (a DNA match over
+    /// most of the gene at a variant group's identity): a library variant
+    /// the reference itself carries elsewhere is a paralog of the
+    /// reference gene, not another version of it.
+    pub fn carried_by(
+        &self,
+        blastn: &Path,
+        seqs: &[Vec<u8>],
+        fasta: &Path,
+        work: &Path,
+    ) -> Result<Vec<bool>> {
+        let mut out = vec![false; seqs.len()];
+        if seqs.is_empty() {
+            return Ok(out);
+        }
+        std::fs::create_dir_all(work)?;
+        let query = work.join("library_carried_query.fasta");
+        let mut fa = Vec::new();
+        for (i, s) in seqs.iter().enumerate() {
+            fa.extend_from_slice(format!(">q{i}\n").as_bytes());
+            fa.extend_from_slice(s);
+            fa.push(b'\n');
+        }
+        std::fs::write(&query, fa)?;
+        let res = Command::new(blastn)
+            .arg("-query")
+            .arg(&query)
+            .arg("-subject")
+            .arg(fasta)
+            .args([
+                "-task",
+                "dc-megablast",
+                "-outfmt",
+                "6 qseqid pident length qlen",
+                "-evalue",
+                "1e-20",
+            ])
+            .output()
+            .map_err(|e| crate::EngineError::ToolMissing(format!("blastn: {e}")))?;
+        if !res.status.success() {
+            return Err(friendly(format!(
+                "The reference library search failed. {}",
+                String::from_utf8_lossy(&res.stderr).trim()
+            )));
+        }
+        for line in String::from_utf8_lossy(&res.stdout).lines() {
+            let f: Vec<&str> = line.split('\t').collect();
+            if f.len() < 4 {
+                continue;
+            }
+            let num = |i: usize| f[i].parse::<f64>().unwrap_or(0.0);
+            let cov = 100.0 * num(2) / num(3).max(1.0);
+            if num(1) >= GROUP_DNA_IDENTITY && cov >= GROUP_DNA_COVERAGE {
+                if let Some(i) = f[0].strip_prefix('q').and_then(|n| n.parse::<usize>().ok()) {
+                    if let Some(o) = out.get_mut(i) {
+                        *o = true;
+                    }
+                }
             }
         }
         Ok(out)
@@ -707,11 +844,15 @@ pub fn group_id(sseqid: &str) -> Option<i64> {
         .ok()
 }
 
-/// Named matches before resembling ones.
+/// A curated entry's match first: the catalogs name a gene by what it
+/// does, the annotation only by its symbol, and a symbol can belong to
+/// unrelated genes (prfA is the PrfA regulator and release factor 1).
+/// Then annotated names, then resembling unnamed groups.
 fn kind_rank(kind: &str) -> u8 {
     match kind {
-        "gene" | "catalog" | "locus" => 0,
-        _ => 1,
+        "catalog" => 0,
+        "gene" | "locus" => 1,
+        _ => 2,
     }
 }
 
@@ -826,7 +967,13 @@ pub(crate) mod tests {
         assert_eq!(v[0].label, "cadA");
         assert_eq!(v[0].place, "plasmid pLmN1546 (Listeria monocytogenes X)");
         assert_eq!(v[0].locus, "NZ_CP2.1:47228-49363");
-        assert_eq!(v[1].matched_by, "gene");
+        // annotated cadA and AMRFinderPlus cadA_Lm: the curated match counts
+        assert_eq!(v[1].matched_by, "catalog");
+        assert!(
+            v[1].evidence.contains("AMRFinderPlus cadA_Lm"),
+            "{}",
+            v[1].evidence
+        );
         assert_eq!(v[1].place, "chromosome (Listeria monocytogenes Scott A)");
         assert_eq!(v[2].matched_by, "homolog");
         assert_eq!(v[2].identity, 75.7);
@@ -849,6 +996,14 @@ pub(crate) mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!((v[0].group, v[0].matched_by.as_str()), (12, "locus"));
         assert!(lib.variants("nope").unwrap().is_empty());
+        assert_eq!(
+            lib.curated_groups("cadA").unwrap(),
+            [
+                (10, "AMRFinderPlus cadA_Lm".to_string()),
+                (11, "GenBank L28104.1 cadA".to_string())
+            ]
+        );
+        assert!(lib.curated_groups("lmo9999").unwrap().is_empty());
         assert!(lib.variants("  ").unwrap().is_empty());
     }
 
@@ -997,6 +1152,77 @@ pub(crate) mod tests {
             .groups_of(&blastn, &[("cadA".into(), gene.clone())], &tmp.join("work"))
             .unwrap();
         assert_eq!(groups.get("cadA"), Some(&vec![11]));
+    }
+
+    /// With BLAST+ installed: a gene's family is the groups whose protein
+    /// it encodes or resembles, not a protein that merely shares a name.
+    #[test]
+    fn a_family_is_related_proteins_only() {
+        let (Some(makeblastdb), Some(blastx)) = (
+            crate::tools::find_optional("makeblastdb"),
+            crate::tools::find_optional("blastx"),
+        ) else {
+            eprintln!("BLAST+ not installed; skipped");
+            return;
+        };
+        let tmp = tempdir("family");
+        let lib = fixture(&tmp);
+        let aa = b"ACDEFGHIKLMNPQRSTVWY";
+        let mut x: u32 = 7;
+        let mut protein = |n: usize| -> Vec<u8> {
+            (0..n)
+                .map(|_| {
+                    x = x.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                    aa[(x >> 16) as usize % 20]
+                })
+                .collect()
+        };
+        let p1 = protein(300);
+        let p2 = protein(300);
+        // one codon per amino acid
+        let codon = |a: u8| -> &'static [u8] {
+            match a {
+                b'A' => b"GCT",
+                b'C' => b"TGT",
+                b'D' => b"GAT",
+                b'E' => b"GAA",
+                b'F' => b"TTT",
+                b'G' => b"GGT",
+                b'H' => b"CAT",
+                b'I' => b"ATT",
+                b'K' => b"AAA",
+                b'L' => b"CTG",
+                b'M' => b"ATG",
+                b'N' => b"AAT",
+                b'P' => b"CCG",
+                b'Q' => b"CAG",
+                b'R' => b"CGT",
+                b'S' => b"TCT",
+                b'T' => b"ACC",
+                b'V' => b"GTT",
+                b'W' => b"TGG",
+                _ => b"TAT",
+            }
+        };
+        let gene: Vec<u8> = p1.iter().flat_map(|a| codon(*a).to_vec()).collect();
+        let fa = tmp.join("p.faa");
+        let mut t = b">g11\n".to_vec();
+        t.extend_from_slice(&p1);
+        t.extend_from_slice(b"\n>g12\n");
+        t.extend_from_slice(&p2);
+        t.push(b'\n');
+        std::fs::write(&fa, t).unwrap();
+        let ok = Command::new(&makeblastdb)
+            .arg("-in")
+            .arg(&fa)
+            .args(["-dbtype", "prot", "-parse_seqids", "-out"])
+            .arg(lib.groups_protein_db())
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok);
+        assert_eq!(lib.family(&blastx, &gene, &tmp.join("work")).unwrap(), [11]);
     }
 
     pub fn tempdir(tag: &str) -> PathBuf {
