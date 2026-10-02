@@ -1,0 +1,9 @@
+# GenBank records whose genes carry the names RefSeq's annotation leaves out.
+# The build fetches each record's proteins and names the variant groups they
+# match (>= catalog identity and coverage), like a curated catalog entry.
+# Only the genes listed are taken from a record.
+#
+# gene	accession	why
+cadA	L28104.1	Tn5422 cadA; RefSeq annotates it only "heavy metal translocating P-type ATPase"
+cadC	L28104.1	Tn5422 cadC, the regulator beside it
+qacH	HF565366.1	Tn6188 qacH

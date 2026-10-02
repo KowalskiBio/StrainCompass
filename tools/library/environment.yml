@@ -1,0 +1,14 @@
+# Build tools for tools/library/build_library.py (workstation only; the
+# server needs nothing beyond the BLAST+ it already has).
+# Versions used for the 2026-10-02 Listeria build: datasets 18.38.0,
+# skani 0.3.2, MMseqs2 18-8cc5c, BLAST+ 2.17.0.
+name: sclib
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python>=3.10
+  - ncbi-datasets-cli
+  - skani
+  - mmseqs2
+  - blast
