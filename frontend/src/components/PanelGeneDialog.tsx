@@ -228,7 +228,7 @@ function WhereItSits({
           {ctx.contig && (
             <div>
               <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                Genes within {fmtBp(ctx.window)} of the hit
+                Genes within {fmtBp(ctx.window)} of the {ctx.call === "PRESENT" ? "hit" : "closest match"}
               </p>
               <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-2">
                 Where this strain matches the reference, the reference{"\u2019"}s own genes are

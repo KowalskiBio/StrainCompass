@@ -250,6 +250,23 @@ pub fn panel_match_note(row: &PanelRow) -> String {
     s
 }
 
+/// The verdict box of a gene absent from the strain but shown at its
+/// closest related gene: the box says the gene is not found, and where
+/// the related gene sits joins the note about that match, so "plasmid"
+/// or "chromosome" is never read as the place of the missing gene.
+/// Returns (verdict, verdict text, sentence for the match note).
+pub fn absent_gene_verdict(gene: &str, related_place: &str) -> (String, String, String) {
+    let mut place = related_place.trim().to_string();
+    if let Some(c) = place.chars().next() {
+        place.replace_range(..c.len_utf8(), &c.to_lowercase().to_string());
+    }
+    (
+        "not_found".into(),
+        format!("{gene} was not found in this strain."),
+        format!(" Where that related gene sits: {place}"),
+    )
+}
+
 /// Share of both the predicted gene and the hit that must overlap for the
 /// gene to count as the panel gene itself, percent.
 const SAME_LOCUS_MIN_OVERLAP: f64 = 80.0;
@@ -844,6 +861,20 @@ mod tests {
                 ..Default::default()
             }),
         }
+    }
+
+    #[test]
+    fn an_absent_gene_is_not_placed_at_its_relative() {
+        let (v, t, n) = absent_gene_verdict(
+            "cadA",
+            "In the chromosome, in a part shared with the reference (c12 is 90 % aligned to the reference).",
+        );
+        assert_eq!(v, "not_found");
+        assert_eq!(t, "cadA was not found in this strain.");
+        assert_eq!(
+            n,
+            " Where that related gene sits: in the chromosome, in a part shared with the reference (c12 is 90 % aligned to the reference)."
+        );
     }
 
     #[test]

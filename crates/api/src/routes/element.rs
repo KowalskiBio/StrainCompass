@@ -205,7 +205,14 @@ pub async fn panel_context(
                 markers.push(g.label.clone());
             }
         }
-        let (verdict, text) = element::verdict(&stat, region.as_ref(), &markers);
+        let (mut verdict, mut text) = element::verdict(&stat, region.as_ref(), &markers);
+        if row.call == Call::Absent {
+            // shown at a related gene: its place is not the gene's
+            let (v, t, note) = element::absent_gene_verdict(&row.gene_id, &text);
+            verdict = v;
+            text = t;
+            ctx.match_note.push_str(&note);
+        }
         ctx.contig = Some(stat);
         ctx.hit_start = start;
         ctx.hit_end = end;
