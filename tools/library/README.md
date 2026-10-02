@@ -56,7 +56,10 @@ half-copied folder) and falls back to NCBI; Settings shows why.
 3. **Plasmids** are clustered the same way, but must also align over >= 95 %
    of both: plasmids sharing a backbone with other cargo stay apart.
 4. **Genes.** Every CDS and pseudogene of the kept replicons goes into the
-   gene table, with its old locus tag (lmo0444). A pseudogene is tied to
+   gene table, with its old locus tag (lmo0444). The locus tags of the
+   merged genomes are indexed too (lm4b_02324 of CLIP 80459), each tied to
+   its gene's group through the protein accession RefSeq gives identical
+   copies. A pseudogene is tied to
    the protein it once was through its `inference` (groundwork for telling
    relics apart).
 5. **Variant groups.** The proteins are clustered with MMseqs2 at 90 %
@@ -79,7 +82,7 @@ half-copied folder) and falls back to NCBI; Settings shows why.
 
 On a workstation (not the VM). The build runs at the lowest CPU priority
 and by default on half the cores; Listeria (835 genomes) takes about
-thirteen minutes and makes a ~1.2 GB folder (about 1 GB of it the stored
+fifteen minutes and makes a ~1.4 GB folder (about 1 GB of it the stored
 genomes).
 
 ```sh
@@ -117,3 +120,18 @@ ssh proxmox1 'ln -sfn 2026-10-02 straincompass/library/listeria/current'
 The app reads the library per request, so no restart is needed. Keep the
 previous version until the new one has been checked; switching back is the
 same `ln -sfn`.
+
+## One name, several genes
+
+A gene name is not an identity. EGD-e calls both the virulence regulator
+PrfA (lmo0200) and peptide chain release factor 1 (lmo2543) "prfA"; other
+genomes call several shikimate dehydrogenases "aroE". The panel therefore:
+
+- takes, among the reference's genes of a name, the one a curated entry of
+  that name is (VFDB's prfA is lmo0200), else the first in the genome, and
+  says which it took and how to ask for the other (its locus tag);
+- adds as variants only library groups related to the gene taken (a blastx
+  match, or the same product); unrelated groups sharing the name are listed,
+  with a pinned entry to search them under a name of their own;
+- leaves out groups the reference genome itself also carries: paralogs of
+  the gene, not other versions of it.

@@ -352,6 +352,33 @@ def parse_genes(a, kept, genome):
 # --- 5. catalogs ---------------------------------------------------------
 
 
+def merged_locus_tags(a, skip):
+    """(tag, protein id) of every CDS on the assembly's replicons not in
+    `skip` (the kept ones, whose genes are in the gene table): locus tags
+    and old locus tags (lm4b_02324) of merged genomes still find their
+    gene's group, through the protein RefSeq gives identical copies."""
+    _, gff, _ = a.files()
+    old_tag, out = {}, []
+    with open(gff) as f:
+        for line in f:
+            if line.startswith("#"):
+                continue
+            p = line.rstrip("\n").split("\t")
+            if len(p) < 9 or p[0] in skip:
+                continue
+            if p[2] in ("gene", "pseudogene"):
+                at = gff_attrs(p[8])
+                if "old_locus_tag" in at and "locus_tag" in at:
+                    old_tag[at["locus_tag"]] = at["old_locus_tag"].split(",")[0]
+            elif p[2] == "CDS":
+                at = gff_attrs(p[8])
+                pid = at.get("protein_id", "")
+                tag = at.get("locus_tag", "")
+                if pid and tag:
+                    out.append((tag, pid))
+    return [(t, pid) for tag, pid in out for t in (tag, old_tag.get(tag, "")) if t]
+
+
 def catalog_records(cat_dir):
     """[(source, symbol, product, id, seq)] of the curated protein sets."""
     out = []
@@ -713,6 +740,18 @@ def main():
             hits.append((gid, src, sym, prod, round(pid, 1), round(cov, 1)))
         log(f"{len(hits)} catalog matches on {len({h[0] for h in hits})} groups")
 
+    # locus tags of the merged genomes, through their proteins
+    merged_tags = collections.Counter()
+    for a in assemblies:
+        skip = {r["accession"] for r in a.replicons if r["kept"]}
+        if len(skip) == len(a.replicons):
+            continue
+        for tag, pid in merged_locus_tags(a, skip):
+            gid = group_of_prot.get(pid)
+            if gid:
+                merged_tags[(tag, gid)] += 1
+    log(f"{len(merged_tags)} locus tags of merged genomes indexed")
+
     # unnamed groups take the names of the named groups they resemble
     named = {g["id"]: set(g["names"]) for g in groups if g["names"]}
     for gid, _, sym, _, _, _ in hits:
@@ -780,6 +819,7 @@ def main():
     for g in groups:
         name_rows += [(n, g["id"], "gene", c, 100.0, None) for n, c in g["names"].items()]
         name_rows += [(t, g["id"], "locus", c, 100.0, None) for t, c in g["tags"].items()]
+    name_rows += [(t, gid, "locus", c, 100.0, None) for (t, gid), c in merged_tags.items()]
     for gid, src, sym, _, ident, _ in hits:
         name_rows += [(n, gid, "catalog", 1, ident, None) for n in catalog_names(sym)]
     name_rows += homologs
