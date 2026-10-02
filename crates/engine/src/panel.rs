@@ -218,9 +218,64 @@ fn gene_sequence(ref_fasta: &Path, gene: &Gene) -> Result<Vec<u8>> {
     }
 }
 
+/// A panel assembled from several sources, numbered again: each gene's
+/// sequences become `gene`, `gene__v2`, ... in the order they came, and a
+/// sequence a gene already holds is dropped. The reference copy, added
+/// first, stays the first variant.
+pub fn renumber_variants(records: &[crate::fasta::FastaRecord]) -> String {
+    let mut genes: Vec<(&str, Vec<&crate::fasta::FastaRecord>)> = Vec::new();
+    for r in records {
+        let g = variant_gene(&r.id);
+        match genes.iter_mut().find(|(name, _)| *name == g) {
+            Some((_, held)) => {
+                if held.iter().all(|h| !h.seq.eq_ignore_ascii_case(&r.seq)) {
+                    held.push(r);
+                }
+            }
+            None => genes.push((g, vec![r])),
+        }
+    }
+    let mut out = String::new();
+    for (g, held) in genes {
+        for (i, r) in held.iter().enumerate() {
+            out.push('>');
+            out.push_str(&variant_id(g, i + 1));
+            if !r.desc.is_empty() {
+                out.push(' ');
+                out.push_str(&r.desc);
+            }
+            out.push('\n');
+            for chunk in r.seq.chunks(60) {
+                out.push_str(&String::from_utf8_lossy(chunk));
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renumbers_variants_from_several_sources() {
+        let recs = crate::fasta::parse_fasta_str(
+            ">cadA reference lmo0001\nAAAA\n>inlA reference lmo0433\nCCCC\n\
+             >cadA__v2 AMRFinderPlus cadA_Lm: CadA [X.1:1-4]\nGGGG\n\
+             >cadA__v2 Library g11 cadA: ATPase [Listeria library t]\nTTTT\n\
+             >cadA__v3 Library g10 cadA: same as the reference\naaaa\n",
+        )
+        .unwrap();
+        let out = renumber_variants(&recs);
+        let ids: Vec<&str> = out
+            .lines()
+            .filter_map(|l| l.strip_prefix('>'))
+            .map(|l| l.split_whitespace().next().unwrap())
+            .collect();
+        assert_eq!(ids, ["cadA", "cadA__v2", "cadA__v3", "inlA"]);
+        assert!(out.contains(">cadA__v3 Library g11 cadA: ATPase [Listeria library t]\nTTTT\n"));
+    }
 
     #[test]
     fn variant_ids_name_their_gene() {

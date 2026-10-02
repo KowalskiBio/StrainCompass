@@ -44,6 +44,8 @@ export function InputWizard({
   const [geneList, setGeneList] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [accession, setAccession] = useState("");
+  /** Where the last reference fetched by accession came from. */
+  const [refSource, setRefSource] = useState<string | null>(null);
   const [schema, setSchema] = useState<ParamSpecLike[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [params, setParams] = useState<RunParams>(DEFAULT_PARAMS);
@@ -97,11 +99,19 @@ export function InputWizard({
       setError("Please type an NCBI assembly accession, for example GCF_000196035.1.");
       return;
     }
-    setBusy("Downloading the reference from NCBI (this can take a minute)...");
+    setBusy(
+      "Fetching the reference (from the reference library when it holds the genome, else from NCBI, which can take a minute)...",
+    );
     setError(null);
+    setRefSource(null);
     try {
-      await api.fetchReferenceFromNcbi(projectId, accession.trim());
+      const r = await api.fetchReferenceFromNcbi(projectId, accession.trim());
       onFilesChanged();
+      setRefSource(
+        r.source
+          ? `${accession.trim()} was taken from the ${r.source}.`
+          : `${accession.trim()} was downloaded from NCBI.`,
+      );
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -132,7 +142,7 @@ export function InputWizard({
         r = await api.uploadPanelIds(projectId, f);
       } else {
         await api.uploadPanel(projectId, f);
-        r = { found: [], from_ncbi: [], from_catalog: [], missing: [] };
+        r = { found: [], from_ncbi: [], from_catalog: [], from_library: [], missing: [] };
       }
       onFilesChanged();
       showPanelNotice(r);
@@ -149,7 +159,7 @@ export function InputWizard({
       return;
     }
     setBusy(
-      `${append ? "Adding to" : "Building"} the gene panel (genes not in the reference are taken from the curated AMRFinderPlus and VFDB databases, or else fetched from NCBI)...`,
+      `${append ? "Adding to" : "Building"} the gene panel (genes not in the reference are taken from the genus' reference library, the curated AMRFinderPlus and VFDB databases, or else fetched from NCBI)...`,
     );
     setError(null);
     setNotice(null);
@@ -166,9 +176,11 @@ export function InputWizard({
 
   function showPanelNotice(r: PanelResult, append = false) {
     const catalog = r.from_catalog ?? [];
-    const n = r.found.length + r.from_ncbi.length + catalog.length;
+    const library = r.from_library ?? [];
+    const n = r.found.length + r.from_ncbi.length + catalog.length + library.length;
     if (n === 0) return;
     const parts = [`${r.found.length} from the reference`];
+    if (library.length > 0) parts.push(`${library.length} from the ${r.library ?? "reference library"}`);
     if (catalog.length > 0) parts.push(`${catalog.length} from the curated databases`);
     if (r.from_ncbi.length > 0) parts.push(`${r.from_ncbi.length} from NCBI`);
     setNotice({
@@ -176,6 +188,8 @@ export function InputWizard({
         ? `Added ${n} gene${n === 1 ? "" : "s"} to the panel: ${parts.join(", ")}.`
         : `The panel was built with ${n} genes: ${parts.join(", ")}.`,
       catalog,
+      library,
+      libraryTitle: r.library ?? null,
       hints: r.hints ?? [],
       fetched: r.from_ncbi,
       missing: r.missing,
@@ -297,7 +311,8 @@ export function InputWizard({
               <p className="text-[15px] text-zinc-600 dark:text-zinc-400">
                 The reference is the annotated genome the others are compared
                 against. Provide the genome file (FASTA) and its annotation
-                (GFF), or fetch both from NCBI by accession.
+                (GFF), or fetch both by accession: from the reference library
+                when the server has one holding the genome, else from NCBI.
               </p>
               <div className="grid sm:grid-cols-2 gap-3">
                 <DropZone
@@ -318,7 +333,7 @@ export function InputWizard({
                 />
                 <div className="rounded-xl border border-zinc-200 p-4 flex flex-col dark:border-zinc-800">
                   <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                    or fetch from NCBI
+                    or fetch by accession
                   </p>
                   <input
                     value={accession}
@@ -331,11 +346,17 @@ export function InputWizard({
                     variant="secondary"
                     onClick={fetchNcbi}
                   >
-                    Search and download
+                    Fetch
                   </Button>
                   <p className="text-xs text-zinc-400 mt-2 dark:text-zinc-500">
-                    Downloads the genome and its annotation together.
+                    The genome and its annotation together, from the reference
+                    library or NCBI.
                   </p>
+                  {refSource && (
+                    <p className="text-sm text-emerald-700 mt-2 dark:text-emerald-400">
+                      {refSource}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -428,6 +449,12 @@ export function InputWizard({
                         <p key={h}>{h}</p>
                       ))}
                     </div>
+                  )}
+                  {notice.library.length > 0 && (
+                    <NoticeList
+                      title={`From the ${notice.libraryTitle ?? "reference library"}, with every variant of the name found in the genus' genomes (gene on place, genomes carrying it). The results say which variant each strain carries:`}
+                      items={notice.library}
+                    />
                   )}
                   {notice.catalog.length > 0 && (
                     <NoticeList
@@ -546,6 +573,8 @@ interface PanelResult {
   found: string[];
   from_ncbi: string[];
   from_catalog?: string[];
+  from_library?: string[];
+  library?: string | null;
   hints?: string[];
   missing: string[];
 }
@@ -554,6 +583,8 @@ interface PanelNotice {
   summary: string;
   hints: string[];
   catalog: string[];
+  library: string[];
+  libraryTitle: string | null;
   fetched: string[];
   missing: string[];
 }
@@ -589,11 +620,14 @@ function PanelHelp() {
             Paste a list of genes (separated by commas or new lines: symbols
             like inlA, locus tags like lmo0444) or drop a CSV file, and the
             sequences are collected automatically, in this order: from your
-            reference genome; then from the curated AMRFinderPlus
-            (resistance, disinfectant, metal, stress) and VFDB (virulence)
-            databases, picking the entry for your project{"\u2019"}s organism;
-            and only then from NCBI by name. A ready-made FASTA panel also
-            works.
+            reference genome; then from the reference library of your
+            project{"\u2019"}s genus, when the server has one (its complete
+            genomes, with every variant of a gene name: Listeria has several
+            cadA genes, and all of them are searched); then from the curated
+            AMRFinderPlus (resistance, disinfectant, metal, stress) and VFDB
+            (virulence) databases, picking the entry for your project{"\u2019"}s
+            organism; and only then from NCBI by name. A ready-made FASTA
+            panel also works.
           </p>
           <p>
             Gene names are not unique, so check the list of what was taken

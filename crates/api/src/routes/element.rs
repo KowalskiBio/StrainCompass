@@ -322,11 +322,32 @@ pub async fn panel_element(
         .map(str::to_string);
     let (kind, name, title, fetched) = match &accession {
         Some(acc) => {
-            let key = {
-                let conn = state.db.lock().unwrap();
-                crate::db::get_setting(&conn, "ncbi_api_key")?
+            // the local reference library first: the origin search offers
+            // its plasmids, and it needs no NCBI round trip
+            let local = match crate::routes::library::for_project(&state, project_id) {
+                Some(lib) => {
+                    let acc2 = acc.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let rep = lib.replicon(&acc2).ok()??;
+                        let seq = lib.replicon_seq(&rep).ok()??;
+                        Some((format!("{} from the {}", rep.title(), lib.title()), seq))
+                    })
+                    .await
+                    .ok()
+                    .flatten()
+                }
+                None => None,
             };
-            let (title, seq) = crate::routes::ncbi::fetch_record(acc, key.as_deref()).await?;
+            let (title, seq) = match local {
+                Some(t) => t,
+                None => {
+                    let key = {
+                        let conn = state.db.lock().unwrap();
+                        crate::db::get_setting(&conn, "ncbi_api_key")?
+                    };
+                    crate::routes::ncbi::fetch_record(acc, key.as_deref()).await?
+                }
+            };
             ("accession", acc.clone(), title, Some(seq))
         }
         None => {

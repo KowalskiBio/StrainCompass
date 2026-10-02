@@ -26,7 +26,8 @@ pub struct Origin {
 }
 
 /// The origin a panel builder note names: the catalog's "... [L28104.1:2652-2293]"
-/// or the NCBI fetch's "NCBI NZ_CP0001.1:100-900". None for a reference
+/// or the NCBI fetch's "NCBI NZ_CP0001.1:100-900" (or "Library ...", the
+/// same read from the local reference library). None for a reference
 /// gene, a VFDB entry (a protein id) or a whole-record fetch.
 pub fn record_origin(desc: &str) -> Option<Origin> {
     let from_brackets = desc
@@ -35,7 +36,7 @@ pub fn record_origin(desc: &str) -> Option<Origin> {
         .and_then(parse_range);
     from_brackets.or_else(|| {
         let mut w = desc.split_whitespace();
-        (w.next() == Some("NCBI"))
+        matches!(w.next(), Some("NCBI" | "Library"))
             .then(|| w.next())
             .flatten()
             .and_then(parse_range)
@@ -150,6 +151,9 @@ pub struct Neighbourhood {
     pub origin: Origin,
     /// Short description of the record (its NCBI title).
     pub title: String,
+    /// Where the record was read: "NCBI", or "Library" for the local
+    /// reference library.
+    pub source: String,
     pub cds: Vec<Cds>,
 }
 
@@ -192,8 +196,8 @@ pub fn partner_variants(panel: &[FastaRecord], hoods: &[Neighbourhood]) -> Vec<A
             let n = held.iter().filter(|(g, _)| g == gene).count() + 1;
             let id = variant_id(gene, n);
             let mut record = format!(
-                ">{id} NCBI {}:{}-{} beside {} in {}\n",
-                c.accession, c.start, c.end, h.source_gene, c.accession
+                ">{id} {} {}:{}-{} beside {} in {}\n",
+                h.source, c.accession, c.start, c.end, h.source_gene, c.accession
             );
             for chunk in c.seq.chunks(60) {
                 record.push_str(&String::from_utf8_lossy(chunk));
@@ -296,6 +300,10 @@ mod tests {
             None
         );
         assert_eq!(record_origin("reference lmo0200"), None);
+        let o = record_origin("Library NZ_CP2.1:11-16 beside cadC in NZ_CP2.1").unwrap();
+        assert_eq!((o.accession.as_str(), o.lo, o.hi), ("NZ_CP2.1", 11, 16));
+        // a library variant record names a group, not a place to refetch
+        assert_eq!(record_origin("Library g11 cadA: ATPase [Listeria library t; plasmid p, NZ_CP2.1:1-6; x; in 4 genomes]"), None);
         assert_eq!(record_origin("NCBI HF565366.1"), None);
     }
 
@@ -346,6 +354,7 @@ mod tests {
             source_gene: "cadC".into(),
             origin: record_origin(&panel[1].desc).unwrap(),
             title: "Listeria monocytogenes transposon Tn5422".into(),
+            source: "NCBI".into(),
             cds: vec![
                 Cds {
                     gene: "cadA".into(),

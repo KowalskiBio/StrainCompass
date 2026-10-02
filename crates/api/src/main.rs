@@ -146,6 +146,7 @@ fn routes() -> Router<SharedState> {
             put(routes::settings::put_key).delete(routes::settings::delete_key),
         )
         .route("/settings", get(routes::settings::get))
+        .route("/library", get(routes::library::list))
         .route("/presets", get(routes::presets::list))
 }
 
@@ -266,6 +267,7 @@ async fn main() {
 mod routes {
     pub mod element;
     pub mod export;
+    pub mod library;
     pub mod nblast;
     pub mod ncbi;
     pub mod origin;

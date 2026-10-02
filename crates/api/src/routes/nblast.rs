@@ -239,6 +239,11 @@ fn entry(orf: usize, m: &Option<OrfMatch>, source: &str) -> serde_json::Value {
 // names the classes that matter (mobilization, phage, resistance).
 // Genes SwissProt misses keep the on-demand nr search from the region
 // card.
+//
+// With a reference library of the project's genus installed, its protein
+// families are asked first: a gene gained from another strain of the
+// genus is named there with the name that strain's annotation gives it,
+// and SwissProt only sees what the library cannot name well.
 // ---------------------------------------------------------------------
 
 /// Where the curated database lives: `STRAINCOMPASS_SWISSPROT_DB`, or
@@ -354,9 +359,19 @@ async fn auto_pass(
     run_id: i64,
     query_ids: &[i64],
 ) -> ApiResult<()> {
-    let Some(db) = swissprot_db(state) else {
+    // the genus' reference library first, then SwissProt; either alone
+    // is enough to run the pass
+    let db = swissprot_db(state);
+    let lib = crate::routes::library::for_project(state, project_id).map(std::sync::Arc::new);
+    if db.is_none() && lib.is_none() {
         return Ok(());
-    };
+    }
+    // a name depends on the databases that gave it: a new library
+    // version searches again
+    let cache_scope = lib
+        .as_ref()
+        .map(|l| format!("{}|", l.title()))
+        .unwrap_or_default();
     let run_dir = state.run_dir(project_id, run_id);
 
     // Announce before anything slow: the badge is already watching,
@@ -429,10 +444,11 @@ async fn auto_pass(
     // wherever it appears, so re-runs and neighbouring strains cost
     // nothing. Keyed by the DNA's digest.
     let cache_path = state.project_dir(project_id).join("ncbi_cache.json");
-    let mut cache: std::collections::HashMap<String, Option<OrfMatch>> = std::fs::read(&cache_path)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default();
+    let mut cache: std::collections::HashMap<String, (Option<OrfMatch>, String)> =
+        std::fs::read(&cache_path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
 
     let mut named_total = 0usize;
     for (qi, qid) in query_ids.iter().enumerate() {
@@ -462,32 +478,37 @@ async fn auto_pass(
 
         // Cached answers skip the search entirely.
         let mut to_search: Vec<((usize, usize), String)> = Vec::new();
-        let mut results: Vec<((usize, usize), Option<OrfMatch>)> = Vec::new();
+        let mut results: Vec<((usize, usize), Option<OrfMatch>, String)> = Vec::new();
         for (p, seq) in jobs {
-            let key = digest(&seq);
-            if let Some(m) = cache.get(&key) {
-                results.push((p, m.clone()));
+            let key = format!("{cache_scope}{}", digest(&seq));
+            if let Some((m, source)) = cache.get(&key) {
+                results.push((p, m.clone(), source.clone()));
             } else {
                 to_search.push((p, seq));
             }
         }
 
         if !to_search.is_empty() {
-            let db = db.clone();
+            let (db, lib) = (db.clone(), lib.clone());
             let searches = to_search.clone();
-            let found = tokio::task::spawn_blocking(move || search_swissprot(&db, &searches))
-                .await
-                .map_err(|e| ApiError::Internal(format!("The naming search crashed. ({e})")))??;
-            for ((p, seq), m) in to_search.into_iter().zip(found.iter()) {
-                cache.insert(digest(&seq), m.clone());
-                results.push((p, m.clone()));
+            let found = tokio::task::spawn_blocking(move || {
+                name_genes(lib.as_deref(), db.as_deref(), &searches)
+            })
+            .await
+            .map_err(|e| ApiError::Internal(format!("The naming search crashed. ({e})")))??;
+            for ((p, seq), (m, source)) in to_search.into_iter().zip(found) {
+                cache.insert(
+                    format!("{cache_scope}{}", digest(&seq)),
+                    (m.clone(), source.clone()),
+                );
+                results.push((p, m, source));
             }
             let _ = std::fs::write(&cache_path, serde_json::to_vec(&cache).unwrap_or_default());
         }
 
         // Persist into the same sidecar the on-demand pass uses.
         let mut sidecar = load_sidecar(&qdir);
-        for ((ri, oi), m) in results {
+        for ((ri, oi), m, source) in results {
             if m.is_some() {
                 named_total += 1;
             }
@@ -495,11 +516,7 @@ async fn auto_pass(
             let key = format!("{}:{}-{}", row.qry_seqid, row.start, row.end);
             let mut entries = parse_entries(sidecar.get(&key));
             entries.retain(|e| e.orf != oi);
-            entries.push(SidecarEntry {
-                orf: oi,
-                m,
-                source: "swissprot".into(),
-            });
+            entries.push(SidecarEntry { orf: oi, m, source });
             let list: Vec<serde_json::Value> = entries
                 .iter()
                 .map(|e| entry(e.orf, &e.m, &e.source))
@@ -575,10 +592,16 @@ fn digest(s: &str) -> String {
 
 /// One blastx of every uncached gene against the curated database,
 /// tabular, best hit per gene by bitscore.
-fn search_swissprot(
+/// The best blastx hit of each gene against `db`, by bitscore: (identity,
+/// coverage, E-value, bitscore, subject id, subject title), in `searches`
+/// order. A database made with -parse_seqids keeps the id out of the
+/// title.
+type BlastxHit = (f64, f64, f64, f64, String, String);
+
+fn run_blastx(
     db: &std::path::Path,
     searches: &[((usize, usize), String)],
-) -> ApiResult<Vec<Option<OrfMatch>>> {
+) -> ApiResult<Vec<Option<BlastxHit>>> {
     use std::io::Write as _;
     let tools = straincompass_engine::tools::ToolPaths::discover()
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -610,7 +633,7 @@ fn search_swissprot(
         .arg("-num_threads")
         .arg("8")
         .arg("-outfmt")
-        .arg("6 qseqid pident qcovhsp evalue bitscore stitle")
+        .arg("6 qseqid pident qcovhsp evalue bitscore sseqid stitle")
         .output()
         .map_err(|e| ApiError::Internal(format!("blastx could not be run. ({e})")))?;
     let _ = std::fs::remove_dir_all(&tmp);
@@ -620,61 +643,168 @@ fn search_swissprot(
             String::from_utf8_lossy(&out.stderr)
         )));
     }
-
-    // Best hit per gene, by bitscore.
-    let mut best: std::collections::HashMap<String, OrfMatch> = std::collections::HashMap::new();
+    let mut best: std::collections::HashMap<String, BlastxHit> = std::collections::HashMap::new();
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         let f: Vec<&str> = line.split('\t').collect();
-        if f.len() < 6 {
+        if f.len() < 7 {
             continue;
         }
         let bitscore: f64 = match f[4].parse() {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let better = best
-            .get(f[0])
-            .map(|m: &OrfMatch| bitscore > m.bitscore)
-            .unwrap_or(true);
-        if !better {
+        if best.get(f[0]).is_some_and(|b| b.3 >= bitscore) {
             continue;
         }
-        // "sp|P0A3H9|RELX_LISMO Relaxase/mobilization protein n..." -
-        // the accession sits in the id, the name after it.
-        let mut title_parts = f[5].splitn(2, char::is_whitespace);
-        let raw_id = title_parts.next().unwrap_or_default();
-        let accession = raw_id
-            .trim_end_matches('|')
-            .split('|')
-            .nth(1)
-            .unwrap_or(raw_id)
-            .to_string();
-        // UniProt deflines carry their metadata with them ("MobV family
-        // relaxase OS=... OX=... GN=... PE=1 SV=1"); the gene's name is
-        // what precedes the first of it.
-        let full = title_parts.next().unwrap_or_default().trim().to_string();
-        let label = full
-            .split(" OS=")
-            .next()
-            .unwrap_or(&full)
-            .trim()
-            .to_string();
         best.insert(
             f[0].to_string(),
-            OrfMatch {
-                locus_tag: accession.clone(),
-                protein_id: accession,
-                label,
-                identity: f[1].parse().unwrap_or(0.0),
-                coverage: f[2].parse().unwrap_or(0.0),
-                evalue: f[3].parse().unwrap_or(f64::INFINITY),
+            (
+                f[1].parse().unwrap_or(0.0),
+                f[2].parse().unwrap_or(0.0),
+                f[3].parse().unwrap_or(f64::INFINITY),
                 bitscore,
-            },
+                f[5].to_string(),
+                f[6].to_string(),
+            ),
         );
     }
     Ok((0..searches.len())
-        .map(|i| best.get(&format!("g{i}")).cloned())
+        .map(|i| best.remove(&format!("g{i}")))
         .collect())
+}
+
+fn search_swissprot(
+    db: &std::path::Path,
+    searches: &[((usize, usize), String)],
+) -> ApiResult<Vec<Option<OrfMatch>>> {
+    Ok(run_blastx(db, searches)?
+        .into_iter()
+        .map(|hit| {
+            let (identity, coverage, evalue, bitscore, _, title) = hit?;
+            // "sp|P0A3H9|RELX_LISMO Relaxase/mobilization protein n..." -
+            // the accession sits in the id, the name after it.
+            let mut title_parts = title.splitn(2, char::is_whitespace);
+            let raw_id = title_parts.next().unwrap_or_default();
+            let accession = raw_id
+                .trim_end_matches('|')
+                .split('|')
+                .nth(1)
+                .unwrap_or(raw_id)
+                .to_string();
+            // UniProt deflines carry their metadata with them ("MobV family
+            // relaxase OS=... OX=... GN=... PE=1 SV=1"); the gene's name is
+            // what precedes the first of it.
+            let full = title_parts.next().unwrap_or_default().trim().to_string();
+            let label = full
+                .split(" OS=")
+                .next()
+                .unwrap_or(&full)
+                .trim()
+                .to_string();
+            Some(OrfMatch {
+                locus_tag: accession.clone(),
+                protein_id: accession,
+                label,
+                identity,
+                coverage,
+                evalue,
+                bitscore,
+            })
+        })
+        .collect())
+}
+
+/// A library match names a gene outright from here on; a weaker one, or
+/// a "hypothetical protein", lets SwissProt try first and is kept only
+/// when SwissProt has nothing.
+const LIBRARY_NAME_IDENTITY: f64 = 50.0;
+const LIBRARY_NAME_COVERAGE: f64 = 50.0;
+
+/// The library's protein families as the first naming source: (match,
+/// whether it names the gene outright).
+fn search_library(
+    lib: &straincompass_engine::library::Library,
+    searches: &[((usize, usize), String)],
+) -> ApiResult<Vec<Option<(OrfMatch, bool)>>> {
+    let hits = run_blastx(&lib.groups_protein_db(), searches)?;
+    Ok(hits
+        .into_iter()
+        .map(|hit| {
+            let (identity, coverage, evalue, bitscore, sseqid, _) = hit?;
+            let group = straincompass_engine::library::group_id(&sseqid)?;
+            let (protein, name, product, n) = lib.group_brief(group).ok()??;
+            let label = match (name.is_empty(), product.is_empty()) {
+                (false, false) => format!("{name}, {product}"),
+                (false, true) => name,
+                _ => product.clone(),
+            };
+            let strong = identity >= LIBRARY_NAME_IDENTITY
+                && coverage >= LIBRARY_NAME_COVERAGE
+                && !product.eq_ignore_ascii_case("hypothetical protein");
+            Some((
+                OrfMatch {
+                    // the group, for tracing; the protein for the link
+                    locus_tag: format!("{} g{group} ({n} genomes)", lib.title()),
+                    protein_id: protein,
+                    label,
+                    identity,
+                    coverage,
+                    evalue,
+                    bitscore,
+                },
+                strong,
+            ))
+        })
+        .collect())
+}
+
+/// Each gene's name and the database that gave it: the library when it
+/// names the gene outright, else SwissProt, else the library's weaker
+/// match; ("swissprot" or "library", None) when nothing matched. An
+/// unnamed gene stays open to the on-demand nr search either way.
+fn name_genes(
+    lib: Option<&straincompass_engine::library::Library>,
+    swissprot: Option<&std::path::Path>,
+    searches: &[((usize, usize), String)],
+) -> ApiResult<Vec<(Option<OrfMatch>, String)>> {
+    let mut out: Vec<(Option<OrfMatch>, String)> = vec![(None, String::new()); searches.len()];
+    let mut weak: Vec<Option<OrfMatch>> = vec![None; searches.len()];
+    if let Some(lib) = lib {
+        for (i, hit) in search_library(lib, searches)?.into_iter().enumerate() {
+            match hit {
+                Some((m, true)) => out[i] = (Some(m), "library".into()),
+                Some((m, false)) => weak[i] = Some(m),
+                None => {}
+            }
+        }
+    }
+    let open: Vec<usize> = (0..searches.len())
+        .filter(|i| out[*i].0.is_none())
+        .collect();
+    let sp: Vec<Option<OrfMatch>> = match swissprot {
+        Some(db) if !open.is_empty() => {
+            let subset: Vec<((usize, usize), String)> =
+                open.iter().map(|i| searches[*i].clone()).collect();
+            search_swissprot(db, &subset)?
+        }
+        _ => vec![None; open.len()],
+    };
+    for (i, m) in open.into_iter().zip(sp) {
+        out[i] = match (m, weak[i].take()) {
+            (Some(m), _) => (Some(m), "swissprot".into()),
+            (None, Some(w)) => (Some(w), "library".into()),
+            (None, None) => (
+                None,
+                if swissprot.is_some() {
+                    "swissprot"
+                } else {
+                    "library"
+                }
+                .into(),
+            ),
+        };
+    }
+    Ok(out)
 }
 
 /// Called when a comparison succeeds: name its novel genes in the
@@ -1078,7 +1208,7 @@ mod auto_pass_tests {
             let blastx = dir.join("stubbin/blastx");
             std::fs::write(
                 &blastx,
-                "#!/bin/sh\nprintf 'g0\\t99.0\\t100.0\\t1e-180\\t520\\tsp|P0A3H9|RELX_LISMO Relaxase/mobilization protein n\\n'\n",
+                "#!/bin/sh\nprintf 'g0\\t99.0\\t100.0\\t1e-180\\t520\\tsp|P0A3H9|RELX_LISMO\\tsp|P0A3H9|RELX_LISMO Relaxase/mobilization protein n\\n'\n",
             )
             .unwrap();
             std::fs::set_permissions(&blastx, std::fs::Permissions::from_mode(0o755)).unwrap();

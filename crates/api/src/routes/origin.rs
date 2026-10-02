@@ -10,6 +10,10 @@
 //! all bacteria when the genus has too few matches; the answer always
 //! states its scope.
 //!
+//! With a local reference library of the genus installed, the genus
+//! search runs on it instead, at once and without NCBI; only the search
+//! of all bacteria still goes to NCBI.
+//!
 //! Like the novel-gene naming, nothing runs in the background: the first
 //! request submits the search and stores its request id, and each later
 //! request polls it once - at most once a minute, as NCBI asks - until
@@ -120,6 +124,15 @@ pub async fn panel_origin(
         ),
         (_, true) => (BACTERIA.to_string(), "Searched all bacteria.".to_string()),
     };
+    if !q.wide {
+        if let Some(r) = local_origin(&state, genus.as_deref(), &seq, project_id, run_id).await? {
+            return Ok(Json(GeneOrigin {
+                gene_id: q.gene_id.clone(),
+                searched_with,
+                ..r
+            }));
+        }
+    }
     let key = {
         let mut h = Sha256::new();
         h.update(&seq);
@@ -218,6 +231,111 @@ pub async fn panel_origin(
     Ok(Json(result))
 }
 
+/// The genus search on the local reference library, when the genus has
+/// one: None sends the search to NCBI as before.
+async fn local_origin(
+    state: &SharedState,
+    genus: Option<&str>,
+    seq: &[u8],
+    project_id: i64,
+    run_id: i64,
+) -> ApiResult<Option<GeneOrigin>> {
+    let Some(genus) = genus else {
+        return Ok(None);
+    };
+    let Some(lib) = crate::routes::library::for_genus(state, genus) else {
+        return Ok(None);
+    };
+    let Some(blastn) = straincompass_engine::tools::find_optional("blastn") else {
+        return Ok(None);
+    };
+    let title = lib.title();
+    let counts = lib.manifest.counts.clone();
+    let work = state.run_dir(project_id, run_id).join("library_origin");
+    let seq = seq.to_vec();
+    let hits = tokio::task::spawn_blocking(move || lib.search(&blastn, &seq, &work))
+        .await
+        .map_err(|e| ApiError::Internal(format!("The reference library search failed. ({e})")))??;
+    let mut r = classify_library(&hits);
+    r.state = "done".into();
+    r.scope = genus.to_string();
+    r.scope_note = format!(
+        "Searched the {title}: {} complete {genus} genomes from RefSeq, near-identical ones kept once ({} kept). Counts are genomes.",
+        counts.get("assemblies").copied().unwrap_or(0),
+        counts.get("representative_assemblies").copied().unwrap_or(0),
+    );
+    if r.n_matches < MIN_MATCHES {
+        r.can_widen = true;
+        r.scope_note.push_str(&format!(
+            " Only {} genome{} there carr{} the gene in full; searching all bacteria at NCBI may say more.",
+            r.n_matches,
+            if r.n_matches == 1 { "" } else { "s" },
+            if r.n_matches == 1 { "ies" } else { "y" },
+        ));
+    }
+    Ok(Some(r))
+}
+
+/// The library's full-length matches as an origin answer. Each kept
+/// replicon stands for its near-identical ones, so the counts are of
+/// genomes, not of records.
+fn classify_library(hits: &[straincompass_engine::library::LibraryHit]) -> GeneOrigin {
+    let mut g = GeneOrigin::default();
+    let mut plasmids = Vec::new();
+    let mut chromosomes = Vec::new();
+    for h in hits {
+        if h.coverage < MATCH_COV || h.identity < MATCH_PID {
+            continue;
+        }
+        let n = h.represents as usize;
+        g.n_matches += n;
+        let what = if h.kind == "plasmid" {
+            g.n_plasmid += n;
+            if h.name.is_empty() {
+                "plasmid".to_string()
+            } else {
+                format!("plasmid {}", h.name)
+            }
+        } else {
+            g.n_chromosome += n;
+            "chromosome".to_string()
+        };
+        let mut title = format!("{} {what}", h.organism).trim().to_string();
+        if n > 1 {
+            title.push_str(&format!(" (and {} near-identical)", n - 1));
+        }
+        let rec = OriginRecord {
+            accession: h.accession.clone(),
+            title,
+            length: h.length,
+            kind: h.kind.clone(),
+            identity: h.identity,
+            coverage: h.coverage,
+        };
+        if h.kind == "plasmid" {
+            plasmids.push(rec);
+        } else {
+            chromosomes.push(rec);
+        }
+    }
+    // as for NCBI: closest first, the smaller plasmid on a tie
+    plasmids.sort_by(|a, b| {
+        b.identity
+            .total_cmp(&a.identity)
+            .then(a.length.cmp(&b.length))
+    });
+    chromosomes.sort_by(|a, b| b.identity.total_cmp(&a.identity));
+    plasmids.truncate(MAX_PLASMIDS);
+    chromosomes.truncate(MAX_CHROMOSOMES);
+    g.plasmids = plasmids;
+    g.chromosomes = chromosomes;
+    if g.n_matches == 0 {
+        g.message =
+            "No genome in the reference library carries this gene over its whole length.".into();
+    }
+    g
+}
+
 /// The panel record of `gene_id` that matched most often across the run:
 /// full matches first, else any match; the gene's own id when nothing
 /// matched or the run predates variants.
@@ -282,7 +400,7 @@ fn panel_gene_seq(
 /// The genus to search in: the project's organism, else the first word
 /// of the reference FASTA description ("NC_003210.1 Listeria
 /// monocytogenes EGD-e ..." -> "Listeria").
-fn project_genus(state: &SharedState, project_id: i64) -> Option<String> {
+pub(crate) fn project_genus(state: &SharedState, project_id: i64) -> Option<String> {
     let organism: String = {
         let conn = state.db.lock().unwrap();
         conn.query_row(
@@ -546,6 +664,41 @@ fn classify(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counts_library_matches_as_genomes() {
+        use straincompass_engine::library::LibraryHit;
+        let hit =
+            |acc: &str, kind: &str, name: &str, len: u64, pid: f64, cov: f64, n: u64| LibraryHit {
+                accession: acc.into(),
+                kind: kind.into(),
+                name: name.into(),
+                organism: "Listeria monocytogenes X".into(),
+                length: len,
+                identity: pid,
+                coverage: cov,
+                start: 1,
+                end: 100,
+                represents: n,
+            };
+        let r = classify_library(&[
+            hit("P1", "plasmid", "pLM80", 80_000, 100.0, 100.0, 4),
+            hit("P2", "plasmid", "", 60_000, 100.0, 100.0, 1),
+            hit("C1", "chromosome", "", 3_000_000, 99.5, 100.0, 10),
+            // a partial match is no carrier
+            hit("C2", "chromosome", "", 3_000_000, 99.0, 40.0, 50),
+        ]);
+        assert_eq!((r.n_matches, r.n_plasmid, r.n_chromosome), (15, 5, 10));
+        let accs: Vec<&str> = r.plasmids.iter().map(|p| p.accession.as_str()).collect();
+        assert_eq!(accs, ["P2", "P1"]); // the smaller plasmid first on a tie
+        assert_eq!(
+            r.plasmids[1].title,
+            "Listeria monocytogenes X plasmid pLM80 (and 3 near-identical)"
+        );
+        assert_eq!(r.chromosomes.len(), 1);
+        assert!(r.message.is_empty());
+        assert!(!classify_library(&[]).message.is_empty());
+    }
 
     #[test]
     fn reads_genus_from_organism_or_header() {

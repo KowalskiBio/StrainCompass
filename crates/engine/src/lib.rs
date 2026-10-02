@@ -11,6 +11,7 @@ pub mod fasta;
 pub mod gained;
 pub mod gaps;
 pub mod gff;
+pub mod library;
 pub mod longest_match;
 pub mod msa;
 pub mod panel;

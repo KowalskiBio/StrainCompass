@@ -1368,6 +1368,8 @@ dependencies = [
 name = "straincompass-engine"
 version = "0.1.0"
 dependencies = [
+ "flate2",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

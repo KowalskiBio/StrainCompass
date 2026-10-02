@@ -122,6 +122,7 @@ pub fn panel_gene_source(id: &str, desc: &str, ref_genes: &[WgaGene]) -> String 
     match first {
         "AMRFinderPlus" | "VFDB" => with(first),
         "NCBI" => with("NCBI Nucleotide"),
+        "Library" => with("reference library"),
         "reference" => with("reference genome"),
         _ => match ref_genes.iter().find(|g| {
             g.locus_tag == id || (!g.symbol.is_empty() && g.symbol.eq_ignore_ascii_case(id))

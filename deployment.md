@@ -63,6 +63,8 @@ Current state, so we know what NOT to touch:
   data/           # SQLite DB + project files (USER DATA)
   backups/        # automatic backups before every push
   logs/           # app logs (journald is primary, files secondary)
+  library/        # reference libraries, <genus>/<version>/ + current link
+                  # (section 15; outside data/ so backups skip it)
 ```
 
 - Allocated port: 8010, currently bound on 0.0.0.0 (section 11).
@@ -470,3 +472,26 @@ recheck") instead of being "Run #4" and "Run #5".
 - UI: `runLabel()` in `frontend/src/types.ts` is the single place that
   decides what a run is called, falling back to `Run #<id>`. A named run
   still shows its `#id` so it stays identifiable in logs and file paths.
+
+## 15. Reference libraries (added 2026-10-02)
+
+A reference library is a local database of one genus' complete genomes,
+built offline with `tools/library/build_library.py` (see
+`tools/library/README.md`). With one installed, gene panels and the
+"where does this gene occur" search use it instead of NCBI.
+
+- Location: `~/straincompass/library/<genus>/<version>/`, read through the
+  `current` symlink beside the versions. Override with
+  `STRAINCOMPASS_LIBRARY_DIR`. It sits outside `data/` on purpose: every
+  backup copies all of `data/`, and the Listeria library alone is ~1.2 GB.
+- Install: rsync the version folder, then `ln -sfn <version> current`. No
+  restart; the app opens the library per request. Check disk first: 1.2 GB
+  for the copy, and still 1.5 GB free after it (pre-flight rule).
+- Rollback: point `current` back at the previous version.
+- Missing or broken library: the app logs a warning and falls back to the
+  curated catalogs and NCBI. Settings > Reference libraries shows the state.
+- Tools on the VM: `blastn` and `blastx`, both already there for the
+  panel and the naming pass. Nothing new to install.
+- What it replaces: see the table in `tools/library/README.md`. NCBI stays
+  the fallback for whatever the library does not hold, and for "search all
+  bacteria" and the on-demand nr naming.

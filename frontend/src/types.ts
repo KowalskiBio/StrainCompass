@@ -706,3 +706,18 @@ export function formatDate(iso: string): string {
     minute: "2-digit",
   });
 }
+
+/** One installed reference library (GET /library). */
+export interface LibraryInfo {
+  genus: string;
+  version: string;
+  built: string;
+  counts: Record<string, number>;
+  /** Why an installed library cannot be used, if it cannot. */
+  error: string | null;
+}
+
+export interface LibrariesInfo {
+  root: string;
+  libraries: LibraryInfo[];
+}

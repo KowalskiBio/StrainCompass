@@ -1,4 +1,5 @@
 import type {
+  LibrariesInfo,
   AlignmentData,
   AlignmentDataWire,
   GeneDetail,
@@ -273,7 +274,9 @@ export const api = {
     });
   },
   fetchReferenceFromNcbi: (projectId: number, accession: string) =>
-    request<unknown>(`/projects/${projectId}/reference/ncbi`, {
+    // `source` names the reference library the genome came from; absent
+    // when it was downloaded from NCBI
+    request<{ source?: string }>(`/projects/${projectId}/reference/ncbi`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ accession }),
@@ -470,6 +473,7 @@ export const api = {
     request<{ status: string }>("/settings/ncbi_api_key", {
       method: "DELETE",
     }),
+  libraries: () => request<LibrariesInfo>("/library"),
   usage: (projectId: number) =>
     request<{ bytes: number; human: string }>(`/projects/${projectId}/usage`),
 };

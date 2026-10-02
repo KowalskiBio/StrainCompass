@@ -298,6 +298,12 @@ pub struct PanelFromIdsDto {
     /// the entry and product they were taken from.
     #[serde(default)]
     pub from_catalog: Vec<String>,
+    /// Genes taken from the local reference library, with their variants.
+    #[serde(default)]
+    pub from_library: Vec<String>,
+    /// The library used ("Listeria library 2026-10-02"), if any.
+    #[serde(default)]
+    pub library: Option<String>,
     /// Genes taken from the reference for which the curated catalogs hold
     /// a different, organism-specific gene of the same name.
     #[serde(default)]
@@ -384,13 +390,44 @@ async fn build_panel(
     .await
     .map_err(|e| ApiError::Internal(format!("The panel could not be built. ({e})")))??;
 
-    // Genes the reference does not carry: first the curated catalogs the
-    // resistance/virulence screen uses (sequence-curated, organism-aware
-    // names), then NCBI by name.
+    // Genes the reference does not carry: first the local reference
+    // library of the project's genus (every variant of the name, from the
+    // genus' own genomes), then the curated catalogs the resistance/
+    // virulence screen uses (sequence-curated, organism-aware names), then
+    // NCBI by name.
     let mut fasta = panel.fasta;
     let mut from_ncbi = Vec::new();
     let mut missing = panel.missing.clone();
     let mut from_catalog = Vec::new();
+    let mut from_library = Vec::new();
+    let mut library_hints = Vec::new();
+    let mut library_title = None;
+    if let Some(lib) = crate::routes::library::for_project(&state, project_id) {
+        library_title = Some(lib.title());
+        let wanted = missing.clone();
+        let found = panel.found.clone();
+        let ref_panel = fasta.clone();
+        let work = state.cache_dir(project_id).join("library");
+        let looked = tokio::task::spawn_blocking(move || {
+            let blastn = straincompass_engine::tools::find_optional("blastn");
+            crate::routes::library::panel_lookup(
+                &lib,
+                blastn.as_deref(),
+                &wanted,
+                &found,
+                &ref_panel,
+                &work,
+            )
+        })
+        .await
+        .map_err(|e| {
+            ApiError::Internal(format!("The reference library could not be read. ({e})"))
+        })?;
+        fasta.push_str(&looked.records);
+        from_library = looked.notes;
+        library_hints = looked.hints;
+        missing = looked.unresolved;
+    }
     let organism: String = {
         let conn = state.db.lock().unwrap();
         conn.query_row(
@@ -407,7 +444,7 @@ async fn build_panel(
     let ref_panel = fasta.clone();
     let found = panel.found.clone();
     let organism2 = organism.clone();
-    let (resolved, unresolved, hints) = tokio::task::spawn_blocking(move || {
+    let (resolved, unresolved, mut hints) = tokio::task::spawn_blocking(move || {
         catalog_lookup(&wanted, &found, &ref_panel, &organism2, vfdb_default)
     })
     .await
@@ -419,6 +456,7 @@ async fn build_panel(
         }
     }
     missing = unresolved;
+    hints.splice(0..0, library_hints);
     if !missing.is_empty() {
         let (organism, api_key) = {
             let conn = state.db.lock().unwrap();
@@ -504,7 +542,11 @@ async fn build_panel(
         }
     }
 
-    if panel.found.is_empty() && from_ncbi.is_empty() && from_catalog.is_empty() {
+    if panel.found.is_empty()
+        && from_ncbi.is_empty()
+        && from_catalog.is_empty()
+        && from_library.is_empty()
+    {
         let hints: Vec<String> = missing.iter().filter_map(|l| accession_hint(l)).collect();
         let mut msg = format!(
             "None of the entries in \u{201c}{source_name}\u{201d} match a gene in the reference annotation, and none could be fetched from NCBI. Check the spelling of the gene names."
@@ -516,6 +558,12 @@ async fn build_panel(
         return Err(ApiError::BadRequest(msg));
     }
 
+    // the sources each numbered their own variants: number them again,
+    // dropping a sequence a gene already holds
+    if let Ok(recs) = fasta::parse_fasta_str(&fasta) {
+        fasta = straincompass_engine::panel::renumber_variants(&recs);
+    }
+
     // variant sets: operon partners from the records the panel's genes
     // came from, and a word on sequences from another genus
     let api_key = {
@@ -523,10 +571,11 @@ async fn build_panel(
         crate::db::get_setting(&conn, "ncbi_api_key")?
     };
     let genus = organism.split_whitespace().next().unwrap_or("");
+    let lib = crate::routes::library::for_project(&state, project_id);
     let (extra, notes) =
-        crate::routes::ncbi::panel_variant_sets(&fasta, genus, api_key.as_deref()).await;
+        crate::routes::ncbi::panel_variant_sets(&fasta, genus, api_key.as_deref(), lib.as_ref())
+            .await;
     fasta.push_str(&extra);
-    let mut hints = hints;
     hints.extend(notes);
 
     let dto = store_panel(&state, project_id, append, "genes_of_interest.fasta", fasta).await?;
@@ -535,6 +584,8 @@ async fn build_panel(
         found: panel.found,
         from_ncbi,
         from_catalog,
+        from_library,
+        library: library_title,
         hints,
         missing,
     }))

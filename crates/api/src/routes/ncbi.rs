@@ -18,22 +18,23 @@ fn client() -> reqwest::Client {
         .expect("reqwest client")
 }
 
+/// An assembly accession: "GCF_000196035.1" or "GCA_000196035.1" (GCF
+/// RefSeq, GCA GenBank), nine digits, optionally a version.
 fn valid_accession(acc: &str) -> bool {
-    let re = |p: &str| {
-        let mut it = p.split('_');
-        match (it.next(), it.next(), it.next(), it.next()) {
-            (Some(pfx), Some(v), Some(n), None) => {
-                (pfx == "GCF" || pfx == "GCA")
-                    && v.len() == 3
-                    && v.chars().all(|c| c.is_ascii_digit())
-                    && !n.is_empty()
-                    && n.chars().all(|c| c.is_ascii_digit())
-            }
-            _ => false,
-        }
-    };
     let acc = acc.trim();
-    re(acc)
+    let Some(rest) = acc
+        .strip_prefix("GCF_")
+        .or_else(|| acc.strip_prefix("GCA_"))
+    else {
+        return false;
+    };
+    let (digits, version) = match rest.split_once('.') {
+        Some((d, v)) => (d, Some(v)),
+        None => (rest, None),
+    };
+    digits.len() == 9
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && version.is_none_or(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
 }
 
 #[derive(Deserialize)]
@@ -56,6 +57,44 @@ pub async fn fetch_reference(
             "This does not look like an NCBI assembly accession. It should look like GCF_000196035.1.".into(),
         ));
     }
+    // the local reference library first: its genomes are the files NCBI
+    // serves, with no download
+    if let Some((title, r)) = crate::routes::library::find_reference(&state, &accession) {
+        let read = |p: &std::path::Path| {
+            std::fs::read(p).map_err(|e| {
+                ApiError::Internal(format!("The reference library could not be read. ({e})"))
+            })
+        };
+        let fna = gunzip(&read(&r.fna_gz)?)?;
+        let gff = gunzip(&read(&r.gff_gz)?)?;
+        let name = if r.assembly_name.is_empty() {
+            r.accession.clone()
+        } else {
+            r.assembly_name.replace([' ', ','], "_")
+        };
+        crate::routes::uploads::delete_role(&state, project_id, "reference_fasta").await?;
+        crate::routes::uploads::delete_role(&state, project_id, "reference_gff").await?;
+        let f1 = crate::routes::uploads::store_upload_public(
+            &state,
+            project_id,
+            "reference_fasta",
+            &format!("{} {name} genome.fna", r.accession),
+            fna,
+        )
+        .await?;
+        let f2 = crate::routes::uploads::store_upload_public(
+            &state,
+            project_id,
+            "reference_gff",
+            &format!("{} {name} annotation.gff", r.accession),
+            gff,
+        )
+        .await?;
+        return Ok(Json(
+            serde_json::json!({ "fasta": f1, "gff": f2, "source": title }),
+        ));
+    }
+
     let api_key = {
         let conn = state.db.lock().unwrap();
         crate::db::get_setting(&conn, "ncbi_api_key")?
@@ -683,6 +722,24 @@ fn short_title(t: &str) -> String {
     format!("{}\u{2026}", cut.trim_end_matches([',', ';']))
 }
 
+/// A record of the local reference library: the replicon, its sequence
+/// and its annotated genes.
+type LocalRecord = (
+    straincompass_engine::library::Replicon,
+    Vec<u8>,
+    Vec<straincompass_engine::gff::Gene>,
+);
+
+fn local_record(
+    lib: &straincompass_engine::library::Library,
+    accession: &str,
+) -> Option<LocalRecord> {
+    let rep = lib.replicon(accession).ok()??;
+    let seq = lib.replicon_seq(&rep).ok()??;
+    let genes = lib.replicon_genes(&rep).ok()?;
+    Some((rep, seq, genes))
+}
+
 /// How far around a panel record's origin to look for its operon
 /// partners, bp each side: cadA and cadC of Tn5422 sit side by side, and
 /// an operon rarely spans more than a few kb.
@@ -697,10 +754,14 @@ const MAX_PARTNER_RECORDS: usize = 15;
 /// every variant whose record is not from the project's genus. Returns
 /// the records to append and the notes for the user. NCBI unreachable
 /// means no additions, never a failed build.
+///
+/// A record the local reference library holds is read there, genes and
+/// title alike; only the others go to NCBI.
 pub async fn panel_variant_sets(
     fasta: &str,
     genus: &str,
     api_key: Option<&str>,
+    lib: Option<&straincompass_engine::library::Library>,
 ) -> (String, Vec<String>) {
     use straincompass_engine::panel::variant_gene;
     use straincompass_engine::panel_variants::{
@@ -725,12 +786,31 @@ pub async fn panel_variant_sets(
         .iter()
         .filter_map(|r| record_origin(&r.desc).map(|o| (variant_gene(&r.id).to_string(), o)))
         .collect();
-    let mut accessions: Vec<&str> = origins.iter().map(|(_, o)| o.accession.as_str()).collect();
+    // the records the library holds: (replicon, sequence, genes)
+    let mut local: std::collections::HashMap<String, LocalRecord> = Default::default();
+    if let Some(lib) = lib {
+        for (_, o) in origins.iter().take(MAX_PARTNER_RECORDS) {
+            if local.contains_key(&o.accession) {
+                continue;
+            }
+            if let Some(rec) = local_record(lib, &o.accession) {
+                local.insert(o.accession.clone(), rec);
+            }
+        }
+    }
+    let mut accessions: Vec<&str> = origins
+        .iter()
+        .map(|(_, o)| o.accession.as_str())
+        .filter(|a| !local.contains_key(*a))
+        .collect();
     accessions.sort();
     accessions.dedup();
 
     // record titles: what each origin is (organism, element)
-    let mut titles: std::collections::HashMap<String, String> = Default::default();
+    let mut titles: std::collections::HashMap<String, String> = local
+        .iter()
+        .map(|(acc, r)| (acc.clone(), r.0.title()))
+        .collect();
     if !accessions.is_empty() {
         let url = format!(
             "{base}/esummary.fcgi?db=nuccore&id={}&retmode=json{key}",
@@ -760,6 +840,42 @@ pub async fn panel_variant_sets(
             continue;
         }
         seen.push(o.clone());
+        if let Some((rep, seq, genes)) = local.get(&o.accession) {
+            let (lo, hi) = (
+                o.lo.saturating_sub(PARTNER_WINDOW).max(1),
+                o.hi + PARTNER_WINDOW,
+            );
+            let cds = genes
+                .iter()
+                .filter(|g| g.biotype == "protein_coding" && g.end >= lo && g.start <= hi)
+                .filter_map(|g| {
+                    let s = straincompass_engine::library::Replicon::slice(
+                        seq,
+                        g.start,
+                        g.end,
+                        g.strand < 0,
+                    )?;
+                    Some(straincompass_engine::panel_variants::Cds {
+                        gene: straincompass_engine::panel_variants::base_gene_name(&g.symbol)
+                            .to_string(),
+                        // the accession the panel names, so the variant
+                        // reads as a partner of its origin
+                        accession: o.accession.clone(),
+                        start: g.start,
+                        end: g.end,
+                        seq: s,
+                    })
+                })
+                .collect();
+            hoods.push(Neighbourhood {
+                source_gene: gene.clone(),
+                origin: o.clone(),
+                title: rep.title(),
+                source: "Library".into(),
+                cds,
+            });
+            continue;
+        }
         let url = format!(
             "{base}/efetch.fcgi?db=nuccore&id={}&seq_start={}&seq_stop={}&rettype=fasta_cds_na&retmode=text{key}",
             o.accession,
@@ -776,6 +892,7 @@ pub async fn panel_variant_sets(
                 .get(&o.accession)
                 .cloned()
                 .unwrap_or_else(|| o.accession.clone()),
+            source: "NCBI".into(),
             cds: parse_cds_fasta(&text, &o.accession),
         });
     }
@@ -817,7 +934,29 @@ pub async fn panel_variant_sets(
 
 #[cfg(test)]
 mod accession_tests {
-    use super::looks_like_accession;
+    use super::{looks_like_accession, valid_accession};
+
+    #[test]
+    fn accepts_assembly_accessions() {
+        for a in [
+            "GCF_000196035.1",
+            "GCA_000196035.1",
+            " GCF_054558205.1 ",
+            "GCF_000196035",
+        ] {
+            assert!(valid_accession(a), "{a}");
+        }
+        for a in [
+            "GCF_00019603.1",
+            "GCF_000196035.",
+            "GCX_000196035.1",
+            "NC_003210.1",
+            "",
+            "GCF_000196035.1a",
+        ] {
+            assert!(!valid_accession(a), "{a}");
+        }
+    }
 
     #[test]
     fn accepts_genbank_refseq_and_wgs_accessions() {
@@ -884,7 +1023,7 @@ mod variant_set_tests {
                 ));
             }
         }
-        let (extra, notes) = panel_variant_sets(&fasta, "Listeria", None).await;
+        let (extra, notes) = panel_variant_sets(&fasta, "Listeria", None, None).await;
         for n in &notes {
             eprintln!("NOTE {n}");
         }
