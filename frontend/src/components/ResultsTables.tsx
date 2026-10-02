@@ -648,8 +648,11 @@ export function ResultsTables({
           onSort={toggleSort}
           onPinGene={setPinnedGene}
           onOpenGene={onOpenGene}
-          onOpenPanelGene={(g) =>
-            onOpenPanelGene(g, table === "panel_recheck" ? (queryId ?? run.queries[0]?.file_id) : undefined)
+          onOpenPanelGene={(g, clickedQuery) =>
+            onOpenPanelGene(
+              g,
+              table === "panel_recheck" ? (queryId ?? run.queries[0]?.file_id) : clickedQuery,
+            )
           }
           run={run}
           colWidths={colWidths}
@@ -748,7 +751,8 @@ function VirtualTable({
   onSort: (key: string) => void;
   onPinGene: React.Dispatch<React.SetStateAction<string | null>>;
   onOpenGene: (locus: string) => void;
-  onOpenPanelGene: (geneId: string) => void;
+  /** `queryId`: the strain whose cell was clicked, in the panel matrix. */
+  onOpenPanelGene: (geneId: string, queryId?: number) => void;
   run: Run;
   colWidths: Record<string, number>;
   onResizeColumn: (key: string, width: number) => void;
@@ -887,12 +891,17 @@ function VirtualTable({
                   onPinGene((prev) => (prev === key ? null : key));
                 }
               }}
-              onClick={() => {
+              onClick={(e) => {
                 if (table === "genes_coverage" || table === "matrix") {
                   const locus = row["locus_tag"] as string;
                   if (locus) onOpenGene(locus);
                 } else if (table === "panel_recheck" || table === "panel_matrix") {
-                  onOpenPanelGene(row["gene_id"] as string);
+                  // a strain's cell in the matrix opens the gene for that
+                  // strain; the gene name or length, for the first one
+                  const col = (e.target as HTMLElement).closest<HTMLElement>("[data-col]")?.dataset
+                    .col;
+                  const q = col?.startsWith("q_") ? Number(col.slice(2)) : undefined;
+                  onOpenPanelGene(row["gene_id"] as string, q);
                 } else if (table === "gained") {
                   // The genes column can only show a handful of names; the
                   // region card below the table lists every one of them.
@@ -903,6 +912,7 @@ function VirtualTable({
               {columns.map((c) => (
                 <div
                   key={c.key}
+                  data-col={c.key}
                   className={`px-3 flex items-center truncate border-r border-zinc-100 last:border-r-0 dark:border-zinc-800 ${
                     c.numeric ? "justify-end font-mono text-sm tabular-nums" : ""
                   }`}
@@ -960,8 +970,16 @@ function Cell({
         </span>
       );
     return (
-      <span className="tabular-nums" title={`Protein-level match at ${p.locus}`}>
+      <span
+        className="tabular-nums"
+        title={`Protein-level match at ${p.locus}${p.explained_by ? `: ${p.explained_by}` : ""}`}
+      >
         {p.identity.toFixed(0)} % aa over {p.coverage.toFixed(0)} %
+        {p.explained_by && (
+          <span className="ml-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+            {p.explained_by.startsWith("a gene in DNA") ? "(reference gene)" : `(${p.explained_by.split(",")[0]})`}
+          </span>
+        )}
       </span>
     );
   }

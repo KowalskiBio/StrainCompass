@@ -174,6 +174,7 @@ pub fn panel_recheck(
                         identity: h.pident,
                         coverage: h.qcovs,
                         locus: h.locus.clone(),
+                        ..Default::default()
                     };
                     r.variant_warning = p.suggests_variant();
                     r.protein = Some(p);

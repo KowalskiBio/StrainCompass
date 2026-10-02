@@ -269,6 +269,8 @@ export interface ProteinHit {
   /** Share of the panel protein covered, %. */
   coverage: number;
   locus: string;
+  /** What the match is when it is a known gene, not an unknown variant. */
+  explained_by?: string;
 }
 
 /** One panel gene across all queries of a run. */

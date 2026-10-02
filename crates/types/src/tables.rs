@@ -380,6 +380,11 @@ pub struct ProteinHit {
     pub coverage: f64,
     /// "contig:start-end(+|-)" in the query.
     pub locus: String,
+    /// What the match is when it is a known gene rather than an unknown
+    /// variant: "emrC, another panel gene", or a gene in DNA the strain
+    /// shares with the reference. Empty when unexplained.
+    #[serde(default)]
+    pub explained_by: String,
 }
 
 /// Protein identity and coverage at which a gene missing at DNA level is
@@ -387,6 +392,11 @@ pub struct ProteinHit {
 /// pumps such as emrC and sugE) sit near 40 %, other variants of one gene
 /// (the cadA of Tn5422 against cadA_Lm) near 70 %.
 pub const VARIANT_MIN_PROTEIN_IDENTITY: f64 = 60.0;
+/// A partial DNA match shorter than this share of the gene, whose protein
+/// match is only a distant relative, is a conserved stretch of another
+/// gene of the family (the ATPase core cadA shares with every Listeria
+/// metal pump), and the gene is called absent.
+pub const SHORT_MATCH_MAX_COVERAGE: f64 = 30.0;
 pub const VARIANT_MIN_PROTEIN_COVERAGE: f64 = 80.0;
 
 impl ProteinHit {

@@ -184,6 +184,8 @@ pub fn run_comparison(
                 inputs.params.blast_pid,
                 inputs.params.blast_evalue,
             )?;
+            let mut rows = rows;
+            crate::element::settle_panel_calls(&mut rows, Some(&gained_rows));
             Some(rows)
         }
         None => None,

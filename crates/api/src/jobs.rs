@@ -642,6 +642,11 @@ pub fn load_query_result(
     backfill_protein_ids(state, project_id, &mut res.genes_coverage);
     let qdir = path.parent().unwrap_or(&path).to_path_buf();
     backfill_query_loci(&qdir, &mut res);
+    // runs stored before the calls were settled against the protein
+    // search get the same treatment on read
+    if let Some(panel) = res.panel.as_mut() {
+        straincompass_engine::element::settle_panel_calls(panel, res.gained.as_deref());
+    }
     Ok(res)
 }
 

@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use straincompass_types::{
     Call, ContextGene, ContigStat, ElementHit, GainedAnchor, GainedRow, PanelRow, WgaGene,
+    SHORT_MATCH_MAX_COVERAGE, VARIANT_MIN_PROTEIN_IDENTITY,
 };
 
 /// Genes this far either side of the hit are listed as its context.
@@ -132,12 +133,70 @@ pub fn panel_gene_source(id: &str, desc: &str, ref_genes: &[WgaGene]) -> String 
 }
 
 /// Where to show a panel gene in a query: its DNA hit, else the place of
-/// its protein-level relative; empty when neither exists.
+/// its protein-level relative; empty when neither exists. An absent gene
+/// with a relative is shown at the relative, the whole gene, rather than
+/// at the short stretch the DNA search may have matched inside it.
 pub fn panel_locus(row: &PanelRow) -> &str {
-    if !row.qry_locus.is_empty() {
-        &row.qry_locus
-    } else {
-        row.protein.as_ref().map(|p| p.locus.as_str()).unwrap_or("")
+    match (&row.protein, row.call) {
+        (Some(p), Call::Absent) => &p.locus,
+        _ if !row.qry_locus.is_empty() => &row.qry_locus,
+        (Some(p), _) => &p.locus,
+        _ => "",
+    }
+}
+
+fn loci_overlap(a: &str, b: &str) -> bool {
+    match (parse_locus(a), parse_locus(b)) {
+        (Some((ca, sa, ea, _)), Some((cb, sb, eb, _))) => ca == cb && sa <= eb && sb <= ea,
+        _ => false,
+    }
+}
+
+/// Settle each panel call against what the protein search found.
+///
+/// A protein match is another variant of the gene only when nothing else
+/// explains it. It is not when it sits on another panel gene found in the
+/// strain (qacH's match is the strain's emrC, a ~70 % relative), nor when
+/// it lies in DNA the strain shares with the reference, where it is a
+/// chromosomal relative the reference has too (gadD1 against the core
+/// glutamate decarboxylase). `gained` holds the strain's stretches with
+/// no reference counterpart; None skips that test.
+///
+/// Then a short partial match (under `SHORT_MATCH_MAX_COVERAGE` of the
+/// gene) whose protein match is no variant is a conserved stretch of
+/// another gene of the family, and the gene is absent.
+pub fn settle_panel_calls(rows: &mut [PanelRow], gained: Option<&[GainedRow]>) {
+    let found: Vec<(String, String)> = rows
+        .iter()
+        .filter(|r| r.call != Call::Absent && !r.qry_locus.is_empty())
+        .map(|r| (r.gene_id.clone(), r.qry_locus.clone()))
+        .collect();
+    for r in rows.iter_mut() {
+        let Some(p) = r.protein.as_mut() else {
+            continue;
+        };
+        let other = found
+            .iter()
+            .find(|(g, l)| *g != r.gene_id && loci_overlap(l, &p.locus));
+        if let Some((g, _)) = other {
+            p.explained_by = format!("{g}, another panel gene found in this strain");
+        } else if let (Some(gained), Some((contig, s, e, _))) = (gained, parse_locus(&p.locus)) {
+            let in_gained = gained
+                .iter()
+                .any(|x| x.qry_seqid == contig && x.start <= e && s <= x.end);
+            if !in_gained {
+                p.explained_by =
+                    "a gene in DNA this strain shares with the reference genome".into();
+            }
+        }
+        r.variant_warning = p.explained_by.is_empty() && p.suggests_variant();
+        if r.call == Call::Partial
+            && r.cov_pct < SHORT_MATCH_MAX_COVERAGE
+            && !r.variant_warning
+            && p.identity < VARIANT_MIN_PROTEIN_IDENTITY
+        {
+            r.call = Call::Absent;
+        }
     }
 }
 
@@ -147,34 +206,44 @@ pub fn panel_locus(row: &PanelRow) -> &str {
 /// found in full, or not found at all by a run that checked proteins.
 pub fn panel_match_note(row: &PanelRow) -> String {
     let g = &row.gene_id;
-    let mut s = match row.call {
-        Call::Present => return String::new(),
-        Call::Partial => format!(
+    let mut s = match (row.call, &row.protein) {
+        (Call::Present, _) => return String::new(),
+        (Call::Partial, _) => format!(
             "Only part of {g} matches at DNA level: {:.0} % identity over {:.0} % of the gene.",
             row.identity, row.cov_pct
         ),
-        Call::Absent => match &row.protein {
-            Some(p) => format!("No DNA match for {g}. A protein-level search found a related gene at {}.", p.locus),
-            None if row.n_variants == 0 => {
-                return format!(
-                    "This run predates the protein-level check; run the comparison again to look for other variants of {g}."
-                )
-            }
-            None => return String::new(),
-        },
+        (Call::Absent, Some(p)) if row.cov_pct > 0.0 => format!(
+            "{g} is not here. Only a short stretch, {:.0} % of the gene at {:.0} % identity, matches at DNA level, inside a related gene at {}.",
+            row.cov_pct, row.identity, p.locus
+        ),
+        (Call::Absent, Some(p)) => format!(
+            "No DNA match for {g}. A protein-level search found a related gene at {}.",
+            p.locus
+        ),
+        (Call::Absent, None) if row.n_variants == 0 => {
+            return format!(
+                "This run predates the protein-level check; run the comparison again to look for other variants of {g}."
+            )
+        }
+        (Call::Absent, None) => return String::new(),
     };
     if let Some(p) = &row.protein {
         s.push_str(&format!(
             " At protein level it is {:.0} % identical over {:.0} % of the protein.",
             p.identity, p.coverage
         ));
-        if row.variant_warning {
+        if !p.explained_by.is_empty() {
+            s.push_str(&format!(
+                " That match is {}, not another variant of {g}.",
+                p.explained_by
+            ));
+        } else if row.variant_warning {
             s.push_str(&format!(
                 " That is close enough to be another variant of {g}, one the panel does not hold: check it before calling {g} absent."
             ));
-        } else if row.call == Call::Absent {
+        } else {
             s.push_str(&format!(
-                " That is too distant to be {g} itself; most likely a relative from the same gene family."
+                " That is too distant to be {g} itself; most likely a related gene from the same family."
             ));
         }
     }
@@ -778,6 +847,82 @@ mod tests {
     }
 
     #[test]
+    fn settles_calls_against_the_protein_search() {
+        use straincompass_types::ProteinHit;
+        let prot = |identity: f64, locus: &str| {
+            Some(ProteinHit {
+                variant: String::new(),
+                identity,
+                coverage: 95.0,
+                locus: locus.into(),
+                ..Default::default()
+            })
+        };
+        let row = |gene: &str, call: Call, cov: f64, locus: &str| PanelRow {
+            gene_id: gene.into(),
+            call,
+            cov_pct: cov,
+            identity: 75.0,
+            qry_locus: locus.into(),
+            n_variants: 1,
+            ..Default::default()
+        };
+        let mut rows = vec![
+            // a 135 bp stretch of another metal pump, 37 % as protein
+            PanelRow {
+                protein: prot(37.0, "chr:1000-2900(+)"),
+                ..row("cadA", Call::Partial, 6.0, "chr:2400-2535(+)")
+            },
+            // qacH's match is the strain's emrC
+            PanelRow {
+                protein: prot(71.0, "p1:2087-2413(-)"),
+                ..row("qacH", Call::Partial, 87.0, "p1:2087-2413(-)")
+            },
+            row("emrC", Call::Present, 100.0, "p1:2027-2413(-)"),
+            // gadD1 against the core glutamate decarboxylase, shared DNA
+            PanelRow {
+                protein: prot(70.0, "chr:58314-59516(+)"),
+                ..row("lmo0447", Call::Partial, 87.0, "chr:58314-59516(+)")
+            },
+            // an unexplained 70 % relative on a plasmid: a real candidate
+            PanelRow {
+                protein: prot(70.0, "p2:300-2400(-)"),
+                ..row("cadX", Call::Absent, 0.0, "")
+            },
+        ];
+        let gained = vec![
+            GainedRow {
+                qry_seqid: "p1".into(),
+                start: 1,
+                end: 4265,
+                ..Default::default()
+            },
+            GainedRow {
+                qry_seqid: "p2".into(),
+                start: 1,
+                end: 13000,
+                ..Default::default()
+            },
+        ];
+        settle_panel_calls(&mut rows, Some(&gained));
+        assert_eq!(rows[0].call, Call::Absent);
+        assert_eq!(panel_locus(&rows[0]), "chr:1000-2900(+)");
+        assert!(panel_match_note(&rows[0]).contains("short stretch"));
+        assert!(!rows[1].variant_warning);
+        assert!(rows[1]
+            .protein
+            .as_ref()
+            .unwrap()
+            .explained_by
+            .starts_with("emrC"));
+        assert_eq!(rows[1].call, Call::Partial);
+        assert!(!rows[3].variant_warning);
+        assert!(panel_match_note(&rows[3]).contains("shares with the reference"));
+        assert!(rows[4].variant_warning);
+        assert!(panel_match_note(&rows[4]).contains("another variant of cadX"));
+    }
+
+    #[test]
     fn explains_a_gene_not_found_in_full() {
         use straincompass_types::ProteinHit;
         let tn5422 = ProteinHit {
@@ -785,6 +930,7 @@ mod tests {
             identity: 70.2,
             coverage: 98.0,
             locus: "c46:328-2463(-)".into(),
+            ..Default::default()
         };
         let mut row = PanelRow {
             gene_id: "cadA".into(),
@@ -807,7 +953,18 @@ mod tests {
             ..tn5422
         });
         row.variant_warning = false;
-        assert!(panel_match_note(&row).contains("same gene family"));
+        assert!(panel_match_note(&row).contains("same family"));
+
+        // the 12 strains without Tn5422: a 135 bp stretch of another ATPase
+        row.call = Call::Partial;
+        row.identity = 75.4;
+        row.cov_pct = 6.0;
+        let n = panel_match_note(&row);
+        assert!(
+            n.contains("6 % of the gene") && n.contains("same family"),
+            "{n}"
+        );
+        row.call = Call::Absent;
 
         row.protein = None;
         assert_eq!(panel_match_note(&row), "");
