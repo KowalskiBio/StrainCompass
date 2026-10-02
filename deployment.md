@@ -51,7 +51,7 @@ Current state, so we know what NOT to touch:
   user is not in the docker group and has no sudo). So despite the
   plan mentioning containers, the actual deployment is: native Rust
   static binary + systemd + existing nginx. This is simpler anyway.
-- Disk: 3.9G free on / after the Listeria library went in (2026-10-02;
+- Disk: 4.1G free on / with the Listeria library installed (2026-10-03;
   it was ~13G at the first recon). Check before every deploy; each backup
   is a full copy of the data dir, and a new library version needs its
   size again until the old one is removed.
@@ -490,10 +490,13 @@ built offline with `tools/library/build_library.py` (see
   restart; the app opens the library per request. Check disk first: 1.2 GB
   for the copy, and still 1.5 GB free after it (pre-flight rule).
 - Rollback: point `current` back at the previous version.
-- Installed: `listeria/2026-10-02` (1.2 GB, 835 genomes), switched on
-  2026-10-02 after its 1,701 files matched the manifest checksums on the
-  VM. With 3.9G free, delete an old version once its successor is checked
-  rather than keeping several.
+- Installed: `listeria/2026-10-02.2` (1.4 GB, 835 genomes, locus tags of
+  merged genomes indexed), switched on 2026-10-03 after its 1,701 files
+  matched the manifest checksums on the VM; `2026-10-02` removed after the
+  smoke test. 4.1G free afterwards. Delete an old version once its
+  successor is checked rather than keeping several; from the next build on,
+  `rsync --link-dest` shares the unchanged stored genomes (see
+  `tools/library/README.md`).
 - Missing or broken library: the app logs a warning and falls back to the
   curated catalogs and NCBI. Settings > Reference libraries shows the state.
 - Tools on the VM: `blastn` and `blastx`, both already there for the
