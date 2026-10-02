@@ -433,6 +433,10 @@ pub struct PanelMatrixRow {
     /// Per query: possibly present as a variant the panel lacks.
     #[serde(default)]
     pub variant_warnings: Vec<bool>,
+    /// Per query, for a gene not present in full: the protein identity of
+    /// the closest related gene, percent; None when there is none.
+    #[serde(default)]
+    pub related_identities: Vec<Option<f64>>,
 }
 
 /// One query contig and how much of it aligns to the reference.
@@ -501,6 +505,13 @@ pub struct PanelContext {
     /// Empty for a gene found in full.
     #[serde(default)]
     pub match_note: String,
+    /// For a gene not present in full: the name of the closest related
+    /// gene where the strain's annotation or prediction gives one.
+    #[serde(default)]
+    pub related_gene: String,
+    /// Its protein identity to the gene of interest, percent.
+    #[serde(default)]
+    pub related_identity: Option<f64>,
     pub call: Call,
     pub cov_pct: f64,
     pub identity: f64,
@@ -582,6 +593,10 @@ pub struct ElementHit {
     /// Query contigs the element matched, most matched bases first.
     pub contigs: Vec<String>,
     pub genome_bp: u64,
+    /// For a gene not present in full in this query: the protein identity
+    /// of the closest related gene, percent.
+    #[serde(default)]
+    pub related_identity: Option<f64>,
 }
 
 /// A whole-element comparison across the queries of a run.

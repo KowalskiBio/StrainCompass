@@ -57,6 +57,24 @@ export function CallBadge({ call }: { call: Call }) {
  * dialog opened from another dialog does not take its parent with it. */
 const openModals: symbol[] = [];
 
+/** Beside a call for a gene not present in full: a related gene was found,
+ * at this protein identity. Strong relatives (60 % and up) stand out. */
+export function RelatedChip({ identity, name }: { identity: number; name?: string }) {
+  const strong = identity >= 60;
+  return (
+    <span
+      className={`inline-block px-1.5 rounded text-xs whitespace-nowrap ${
+        strong
+          ? "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300"
+          : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+      }`}
+      title={`The gene itself is not here, but a related gene${name ? `, ${name},` : ""} is: ${identity.toFixed(0)} % identical at protein level.${strong ? " A close relative." : " A distant relative from the same family."}`}
+    >
+      related {identity.toFixed(0)} %
+    </span>
+  );
+}
+
 export function Modal({
   open,
   onClose,

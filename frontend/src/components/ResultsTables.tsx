@@ -24,7 +24,7 @@ import type {
   TableQuery,
 } from "../types";
 import { nuccoreRangeUrl } from "../types";
-import { CallBadge, Spinner, usePopoverDismiss } from "./ui";
+import { CallBadge, RelatedChip, Spinner, usePopoverDismiss } from "./ui";
 
 export type TableKind =
   | "genes_coverage"
@@ -111,7 +111,7 @@ const PANEL_COLUMNS: Column[] = [
   { key: "call", label: "Call", width: 170 },
   { key: "qry_locus", label: "Query contig", width: 230 },
   { key: "variant_source", label: "Matched variant", width: 230 },
-  { key: "protein", label: "Protein check", width: 210 },
+  { key: "protein", label: "Related gene", width: 250 },
 ];
 
 /** Amber flag: the gene may be present as a variant the panel lacks. */
@@ -951,13 +951,17 @@ function Cell({
   const v = row[col];
   const [copied, setCopied] = useState(false);
   if (col === "call") {
-    if (table === "panel_recheck" && row["variant_warning"])
+    if (table === "panel_recheck") {
+      const r = row as unknown as PanelRow;
+      const related = r.call !== "PRESENT" ? r.protein?.identity : undefined;
       return (
         <span className="inline-flex items-center gap-1.5">
           <CallBadge call={v as Call} />
-          <VariantFlag title={VARIANT_FLAG_TITLE} />
+          {related !== undefined && <RelatedChip identity={related} />}
+          {r.variant_warning && <VariantFlag title={VARIANT_FLAG_TITLE} />}
         </span>
       );
+    }
     return <CallBadge call={v as Call} />;
   }
   if (col === "protein" && table === "panel_recheck") {
@@ -966,7 +970,7 @@ function Cell({
     if (!p)
       return (
         <span className="text-zinc-400 text-sm dark:text-zinc-500">
-          {r.call === "PRESENT" ? "" : r.n_variants ? "no relative" : "not checked"}
+          {r.call === "PRESENT" ? "" : r.n_variants ? "none found" : "not checked"}
         </span>
       );
     return (
@@ -974,7 +978,7 @@ function Cell({
         className="tabular-nums"
         title={`Protein-level match at ${p.locus}${p.explained_by ? `: ${p.explained_by}` : ""}`}
       >
-        {p.identity.toFixed(0)} % aa over {p.coverage.toFixed(0)} %
+        {r.call === "PRESENT" ? "" : `${p.identity.toFixed(0)} % protein identity`}
         {p.explained_by && (
           <span className="ml-1.5 text-xs text-zinc-500 dark:text-zinc-400">
             {p.explained_by.startsWith("a gene in DNA") ? "(reference gene)" : `(${p.explained_by.split(",")[0]})`}
@@ -1167,6 +1171,9 @@ function Cell({
         >
           <span className="inline-flex items-center gap-1.5">
             <CallBadge call={r.calls[idx]} />
+            {r.related_identities?.[idx] != null && (
+              <RelatedChip identity={r.related_identities[idx] as number} />
+            )}
             {r.variant_warnings?.[idx] && <VariantFlag title={VARIANT_FLAG_TITLE} />}
           </span>
         </span>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type { ContextGene, ElementReport, GeneOrigin, OriginRecord, PanelContext, Run } from "../types";
-import { CallBadge, ErrorBox, Modal, Spinner } from "./ui";
+import { CallBadge, ErrorBox, Modal, RelatedChip, Spinner } from "./ui";
 import { PanelAlignmentDialog } from "./PanelAlignmentDialog";
 
 /**
@@ -214,10 +214,20 @@ function WhereItSits({
             <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-3 text-sm">
               <Fact label="Call">
                 <CallBadge call={ctx.call} />
-                <span className="ml-2 text-zinc-500 dark:text-zinc-400">
-                  {ctx.cov_pct.toFixed(0)} % cov., {ctx.identity.toFixed(1)} % id.
-                </span>
+                {ctx.call !== "ABSENT" && (
+                  <span className="ml-2 text-zinc-500 dark:text-zinc-400">
+                    {ctx.cov_pct.toFixed(0)} % cov., {ctx.identity.toFixed(1)} % id.
+                  </span>
+                )}
               </Fact>
+              {ctx.related_identity != null && (
+                <Fact label="Related gene">
+                  <RelatedChip identity={ctx.related_identity} name={ctx.related_gene} />
+                  {ctx.related_gene && (
+                    <span className="ml-2 text-zinc-700 dark:text-zinc-300">{ctx.related_gene}</span>
+                  )}
+                </Fact>
+              )}
               <Fact label="Contig">
                 <span className="font-mono">{ctx.contig.seqid}</span>
                 <span className="ml-1 text-zinc-500 dark:text-zinc-400">({fmtBp(ctx.contig.length)})</span>
@@ -598,7 +608,14 @@ function AcrossStrains({
                             <span className="ml-1.5 text-xs text-zinc-400 dark:text-zinc-500">(source)</span>
                           )}
                       </td>
-                      <td className="px-3 py-1.5">{h.call ? <CallBadge call={h.call} /> : "-"}</td>
+                      <td className="px-3 py-1.5 whitespace-nowrap">
+                        {h.call ? <CallBadge call={h.call} /> : "-"}
+                        {h.related_identity != null && (
+                          <span className="ml-1.5">
+                            <RelatedChip identity={h.related_identity} />
+                          </span>
+                        )}
+                      </td>
                       <td className="px-3 py-1.5">
                         <AlignedBar pct={h.covered_pct} />
                       </td>

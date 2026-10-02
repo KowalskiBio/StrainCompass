@@ -309,6 +309,8 @@ export interface PanelMatrixRow {
   loci: string[];
   /** Per query: possibly present as another variant. */
   variant_warnings?: boolean[];
+  /** Per query, gene not present in full: closest related gene's protein identity, %. */
+  related_identities?: (number | null)[];
 }
 
 export interface ContigStat {
@@ -351,6 +353,9 @@ export interface PanelContext {
   panel_source: string;
   /** What the hit is when not a full match (partial, protein relative). */
   match_note: string;
+  /** Gene not present in full: the closest related gene's name and protein identity. */
+  related_gene?: string;
+  related_identity?: number | null;
   call: Call;
   cov_pct: number;
   identity: number;
@@ -381,6 +386,8 @@ export interface ElementHit {
   identity: number;
   contigs: string[];
   genome_bp: number;
+  /** Gene not present in full: closest related gene's protein identity, %. */
+  related_identity?: number | null;
 }
 
 /** How much of the element carrying a panel gene each query holds. */

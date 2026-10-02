@@ -27,6 +27,14 @@ fn succeeded_queries(state: &SharedState, run_id: i64) -> ApiResult<(i64, Vec<i6
     Ok((project_id, query_ids))
 }
 
+/// The closest related gene's protein identity for a gene not present in
+/// full, the "is there something like it?" beside the call.
+fn related_identity(row: Option<&PanelRow>) -> Option<f64> {
+    row.filter(|r| r.call != Call::Present)
+        .and_then(|r| r.protein.as_ref())
+        .map(|p| p.identity)
+}
+
 fn no_panel() -> ApiError {
     ApiError::BadRequest("This run has no gene panel results (no panel was provided).".into())
 }
@@ -62,6 +70,7 @@ pub async fn panel_matrix(
                     .push(hit.map(|h| h.qry_locus.clone()).unwrap_or_default());
                 row.variant_warnings
                     .push(hit.is_some_and(|h| h.variant_warning));
+                row.related_identities.push(related_identity(hit));
             }
             rows.push(row);
         }
@@ -151,6 +160,7 @@ pub async fn panel_context(
                 .map(|r| element::panel_gene_source(&row.gene_id, &r.desc, &ref_genes))
                 .unwrap_or_default(),
             match_note: element::panel_match_note(&row),
+            related_identity: related_identity(Some(&row)),
             call: row.call,
             cov_pct: row.cov_pct,
             identity: row.identity,
@@ -206,6 +216,28 @@ pub async fn panel_context(
                 markers.push(g.label.clone());
             }
         }
+        if row.call != Call::Present && row.protein.is_some() {
+            // name the related gene: another panel gene when the match is
+            // one (qacH's is emrC), else what the neighbourhood list calls it
+            let panel_gene = row
+                .protein
+                .as_ref()
+                .and_then(|p| p.explained_by.split_once(", another panel gene"))
+                .map(|(g, _)| g.to_string());
+            let listed = genes
+                .iter()
+                .find(|g| g.is_hit && !g.label.is_empty())
+                .map(|g| match g.locus_tag.as_str() {
+                    "" => g.label.clone(),
+                    lt if lt == g.label => lt.to_string(),
+                    lt => format!("{} ({lt})", g.label),
+                });
+            if let Some(name) = panel_gene.or(listed) {
+                ctx.match_note
+                    .push_str(&format!(" The related gene is {name}."));
+                ctx.related_gene = name;
+            }
+        }
         let (mut verdict, mut text) = element::verdict(&stat, region.as_ref(), &markers);
         if row.call == Call::Absent {
             // shown at a related gene: its place is not the gene's
@@ -230,6 +262,10 @@ pub async fn panel_context(
     .map_err(|e| ApiError::Internal(format!("The gene's surroundings could not be read. ({e})")))??;
     Ok(Json(ctx))
 }
+
+/// One query's view of a panel gene, for the element comparison: id,
+/// name, call, hit locus, related gene's protein identity.
+type QueryGene = (i64, String, Option<Call>, Option<String>, Option<f64>);
 
 #[derive(serde::Deserialize)]
 pub struct PanelElementBody {
@@ -258,7 +294,7 @@ pub async fn panel_element(
     let qdir = |qid: i64| run_dir.join("queries").join(qid.to_string());
 
     // names and calls per query
-    let mut meta: Vec<(i64, String, Option<Call>, Option<String>)> = Vec::new();
+    let mut meta: Vec<QueryGene> = Vec::new();
     let mut source_gained: Vec<straincompass_types::GainedRow> = Vec::new();
     for qid in &query_ids {
         let res = jobs::load_query_result(&state, project_id, run_id, *qid)?;
@@ -274,6 +310,7 @@ pub async fn panel_element(
             res.query_name,
             hit.map(|h| h.call),
             hit.map(|h| h.qry_locus.clone()),
+            related_identity(hit),
         ));
     }
 
@@ -396,14 +433,16 @@ pub async fn panel_element(
         .zip(sizes)
         .map(|((qid, cov), genome_bp)| {
             let m = meta.iter().find(|m| m.0 == qid);
-            element::element_hit(
+            let mut h = element::element_hit(
                 qid,
                 m.map(|m| m.1.clone()).unwrap_or_default(),
                 m.and_then(|m| m.2),
                 cov,
                 element_len,
                 genome_bp,
-            )
+            );
+            h.related_identity = m.and_then(|m| m.4);
+            h
         })
         .collect();
     Ok(Json(ElementReport {

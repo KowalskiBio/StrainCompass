@@ -162,9 +162,11 @@ fn loci_overlap(a: &str, b: &str) -> bool {
 /// glutamate decarboxylase). `gained` holds the strain's stretches with
 /// no reference counterpart; None skips that test.
 ///
-/// Then a short partial match (under `SHORT_MATCH_MAX_COVERAGE` of the
-/// gene) whose protein match is no variant is a conserved stretch of
-/// another gene of the family, and the gene is absent.
+/// Then a partial match is called absent when what matched is another
+/// gene: an explained protein match, or a short partial match (under
+/// `SHORT_MATCH_MAX_COVERAGE` of the gene) whose protein match is no
+/// variant, a conserved stretch of another gene of the family. The
+/// protein match stays on the row as the related gene.
 pub fn settle_panel_calls(rows: &mut [PanelRow], gained: Option<&[GainedRow]>) {
     let found: Vec<(String, String)> = rows
         .iter()
@@ -190,11 +192,13 @@ pub fn settle_panel_calls(rows: &mut [PanelRow], gained: Option<&[GainedRow]>) {
             }
         }
         r.variant_warning = p.explained_by.is_empty() && p.suggests_variant();
-        if r.call == Call::Partial
-            && r.cov_pct < SHORT_MATCH_MAX_COVERAGE
+        // the gene of interest is absent when what matched is another,
+        // known gene: the related gene is reported beside the call
+        let explained = !p.explained_by.is_empty();
+        let short_distant = r.cov_pct < SHORT_MATCH_MAX_COVERAGE
             && !r.variant_warning
-            && p.identity < VARIANT_MIN_PROTEIN_IDENTITY
-        {
+            && p.identity < VARIANT_MIN_PROTEIN_IDENTITY;
+        if r.call == Call::Partial && (explained || short_distant) {
             r.call = Call::Absent;
         }
     }
@@ -212,9 +216,15 @@ pub fn panel_match_note(row: &PanelRow) -> String {
             "Only part of {g} matches at DNA level: {:.0} % identity over {:.0} % of the gene.",
             row.identity, row.cov_pct
         ),
+        (Call::Absent, Some(p)) if row.cov_pct > 0.0 && row.cov_pct < SHORT_MATCH_MAX_COVERAGE => {
+            format!(
+                "{g} is not here. Only a short stretch, {:.0} % of the gene at {:.0} % identity, matches at DNA level, inside a related gene at {}.",
+                row.cov_pct, row.identity, p.locus
+            )
+        }
         (Call::Absent, Some(p)) if row.cov_pct > 0.0 => format!(
-            "{g} is not here. Only a short stretch, {:.0} % of the gene at {:.0} % identity, matches at DNA level, inside a related gene at {}.",
-            row.cov_pct, row.identity, p.locus
+            "{g} is not here. The closest sequence is a related gene at {}: {:.0} % DNA identity over {:.0} % of {g}.",
+            p.locus, row.identity, row.cov_pct
         ),
         (Call::Absent, Some(p)) => format!(
             "No DNA match for {g}. A protein-level search found a related gene at {}.",
@@ -731,6 +741,7 @@ pub fn element_hit(
         identity: cov.identity,
         contigs: cov.contigs,
         genome_bp,
+        related_identity: None,
     }
 }
 
@@ -992,8 +1003,9 @@ mod tests {
             .unwrap()
             .explained_by
             .starts_with("emrC"));
-        assert_eq!(rows[1].call, Call::Partial);
+        assert_eq!(rows[1].call, Call::Absent);
         assert!(!rows[3].variant_warning);
+        assert_eq!(rows[3].call, Call::Absent);
         assert!(panel_match_note(&rows[3]).contains("shares with the reference"));
         assert!(rows[4].variant_warning);
         assert!(panel_match_note(&rows[4]).contains("another variant of cadX"));
