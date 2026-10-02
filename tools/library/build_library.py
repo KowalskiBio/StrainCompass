@@ -614,7 +614,12 @@ def main():
         # is the genome asked for, not its representative
         fna, gff, prot = a.files()
         for src, dst in ((fna, refs / f"{a.accession}.fna.gz"), (gff, refs / f"{a.accession}.gff.gz")):
-            with open(src, "rb") as fi, gzip.open(dst, "wb", compresslevel=6) as fo:
+            # no timestamp or name in the gzip header: the same genome gives
+            # the same bytes in every build, so a new version installs by
+            # hard-linking the unchanged files (rsync --link-dest)
+            with open(src, "rb") as fi, open(dst, "wb") as raw, gzip.GzipFile(
+                filename="", mode="wb", compresslevel=6, fileobj=raw, mtime=0
+            ) as fo:
                 shutil.copyfileobj(fi, fo)
         mine = {r["accession"] for r in a.replicons if r["accession"] in kept}
         if not mine:

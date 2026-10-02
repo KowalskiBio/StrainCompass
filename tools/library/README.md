@@ -113,9 +113,15 @@ and renames it when complete.
 Copy the version folder next to the existing ones, then switch the link:
 
 ```sh
-rsync -a out/listeria/2026-10-02 proxmox1:straincompass/library/listeria/
-ssh proxmox1 'ln -sfn 2026-10-02 straincompass/library/listeria/current'
+# files unchanged since the installed version are hard-linked, not copied
+rsync -a --link-dest=../2026-10-02 out/listeria/2026-10-03 \
+  proxmox1:straincompass/library/listeria/
+ssh proxmox1 'ln -sfn 2026-10-03 straincompass/library/listeria/current'
 ```
+
+The stored genomes are written without a timestamp, so they are byte-for-
+byte the same between builds of the same genomes and link instead of copy
+(builds up to 2026-10-02.2 wrote timestamped gzips and share nothing).
 
 The app reads the library per request, so no restart is needed. Keep the
 previous version until the new one has been checked; switching back is the
