@@ -387,7 +387,8 @@ export interface ElementHit {
 export interface ElementReport {
   gene_id: string;
   source_query_id: number;
-  element_kind: "contig" | "accession";
+  /** "region": an insertion in a shared contig, "contig:start-end". */
+  element_kind: "contig" | "region" | "accession";
   element_name: string;
   element_title: string;
   element_len: number;

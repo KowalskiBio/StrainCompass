@@ -87,6 +87,14 @@ export function PanelAlignmentDialog({
       }
     >
       <div className="space-y-4">
+        {left && (
+          <SequenceActions
+            label={`${geneId} (panel sequence, ${left.panel_len.toLocaleString("en-US")} bp)`}
+            fastaHeader={`${geneId} ${left.variant_source || left.variant}`}
+            seq={left.panel_seq}
+            blastTitle={`Open NCBI BLAST with the panel's ${geneId} sequence`}
+          />
+        )}
         <p className="text-sm text-zinc-600 dark:text-zinc-400">
           The panel{"’"}s {geneId} sequence (top row) aligned base by base to where each strain
           matches it (bottom row). Highlighted letters are mismatches, dashes are insertions or
@@ -216,6 +224,13 @@ function Side({
               {view.contig}:{view.contig_start.toLocaleString("en-US")}-
               {view.contig_end.toLocaleString("en-US")} ({view.strand < 0 ? "-" : "+"} strand)
             </p>
+            <SequenceActions
+              label="Matched stretch of this strain"
+              fastaHeader={`${view.query_name.replace(/\.(fasta|fa|fna)$/i, "")} ${view.contig}:${view.contig_start}-${view.contig_end}(${view.strand < 0 ? "-" : "+"}) best match to ${view.gene_id}`}
+              seq={view.strain_row.replace(/-/g, "")}
+              blastTitle="Open NCBI BLAST with this stretch of your strain (it is sent to NCBI)"
+              compact
+            />
             {view.match_note && (
               <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
                 {view.match_note}
@@ -267,6 +282,70 @@ function Stat({ label, children }: { label: string; children: React.ReactNode })
     <div>
       <dt className="text-xs text-zinc-500 dark:text-zinc-400">{label}</dt>
       <dd className="tabular-nums">{children}</dd>
+    </div>
+  );
+}
+
+/** NCBI BLAST's web form, prefilled with a nucleotide query. */
+function blastUrl(seq: string): string {
+  return `https://blast.ncbi.nlm.nih.gov/Blast.cgi?PROGRAM=blastn&PAGE_TYPE=BlastSearch&LINK_LOC=blasthome&QUERY=${encodeURIComponent(seq)}`;
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // no clipboard API (plain http): the old selection route
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  }
+}
+
+/** Copy a sequence (plain or FASTA) or send it to NCBI BLAST. */
+function SequenceActions({
+  label,
+  fastaHeader,
+  seq,
+  blastTitle,
+  compact,
+}: {
+  label: string;
+  fastaHeader: string;
+  seq: string;
+  blastTitle: string;
+  compact?: boolean;
+}) {
+  const [copied, setCopied] = useState<"seq" | "fasta" | null>(null);
+  const fasta = `>${fastaHeader}\n${seq.match(/.{1,60}/g)?.join("\n") ?? ""}\n`;
+  const copy = (what: "seq" | "fasta") =>
+    copyText(what === "seq" ? seq : fasta).then((ok) => {
+      if (!ok) return;
+      setCopied(what);
+      setTimeout(() => setCopied(null), 1500);
+    });
+  const btn = `${compact ? "h-8 px-2.5 text-xs" : "h-9 px-3 text-sm"} inline-flex items-center rounded-lg border border-zinc-300 bg-white font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800`;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className={`${compact ? "text-xs" : "text-sm"} text-zinc-600 dark:text-zinc-400 mr-1`}>
+        {label}
+      </span>
+      <button className={btn} onClick={() => copy("seq")} title="Copy the bases only">
+        {copied === "seq" ? "Copied" : "Copy sequence"}
+      </button>
+      <button className={btn} onClick={() => copy("fasta")} title="Copy as FASTA, with a header line">
+        {copied === "fasta" ? "Copied" : "Copy FASTA"}
+      </button>
+      <a className={btn} href={blastUrl(seq)} target="_blank" rel="noreferrer" title={blastTitle}>
+        BLAST at NCBI
+      </a>
     </div>
   );
 }

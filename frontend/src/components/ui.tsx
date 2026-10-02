@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import type { Call } from "../types";
 
 export function Button({
@@ -76,6 +77,12 @@ export function Modal({
     if (!open) return;
     const me = Symbol("modal");
     openModals.push(me);
+    // the page behind a dialog stays put: no scrolling it by accident
+    const body = document.body;
+    if (openModals.length === 1) {
+      body.dataset.prevOverflow = body.style.overflow;
+      body.style.overflow = "hidden";
+    }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && openModals[openModals.length - 1] === me) onClose();
     };
@@ -83,12 +90,18 @@ export function Modal({
     return () => {
       window.removeEventListener("keydown", onKey);
       openModals.splice(openModals.indexOf(me), 1);
+      if (openModals.length === 0) {
+        body.style.overflow = body.dataset.prevOverflow ?? "";
+        delete body.dataset.prevOverflow;
+      }
     };
   }, [open, onClose]);
   if (!open) return null;
-  return (
+  // Portaled to <body>: a dialog opened from another dialog is not inside
+  // its scroll box, so scrolling it never scrolls the one beneath.
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-zinc-900/40 p-4 sm:p-8 overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-zinc-900/40 backdrop-blur-sm p-4 sm:p-8 overflow-y-auto overscroll-contain"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -115,7 +128,8 @@ export function Modal({
         </div>
         <div className="p-6">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

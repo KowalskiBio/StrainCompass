@@ -250,6 +250,25 @@ pub fn panel_match_note(row: &PanelRow) -> String {
     s
 }
 
+/// The gained region holding a hit when it is an insertion in a larger,
+/// mostly shared contig (SSI-1 in a 638 kb chromosomal contig): that
+/// region, not the contig, is the element carrying the gene. None when
+/// the hit lies in shared DNA, or the region is (nearly) the whole contig,
+/// a plasmid or unplaced piece, where the contig itself is the element.
+pub fn insertion_carrying<'a>(
+    gained: &'a [GainedRow],
+    contig: &str,
+    start: u64,
+    end: u64,
+) -> Option<&'a GainedRow> {
+    gained.iter().find(|r| {
+        r.qry_seqid == contig
+            && r.start <= start
+            && end <= r.end
+            && r.anchor != GainedAnchor::Unanchored
+    })
+}
+
 /// The verdict box of a gene absent from the strain but shown at its
 /// closest related gene: the box says the gene is not found, and where
 /// the related gene sits joins the note about that match, so "plasmid"
@@ -861,6 +880,33 @@ mod tests {
                 ..Default::default()
             }),
         }
+    }
+
+    #[test]
+    fn an_insertion_not_its_contig_is_the_element() {
+        let gained = vec![
+            GainedRow {
+                qry_seqid: "chr14".into(),
+                start: 224_063,
+                end: 233_408,
+                anchor: GainedAnchor::Between,
+                ..Default::default()
+            },
+            GainedRow {
+                qry_seqid: "p46".into(),
+                start: 1,
+                end: 13_100,
+                anchor: GainedAnchor::Unanchored,
+                ..Default::default()
+            },
+        ];
+        // SSI-1 inside a chromosomal contig: the 9.3 kb insertion
+        let r = insertion_carrying(&gained, "chr14", 231_564, 233_015).unwrap();
+        assert_eq!((r.start, r.end), (224_063, 233_408));
+        // a plasmid contig is its own element
+        assert!(insertion_carrying(&gained, "p46", 328, 2463).is_none());
+        // a gene in shared DNA has no insertion
+        assert!(insertion_carrying(&gained, "chr14", 10, 900).is_none());
     }
 
     #[test]

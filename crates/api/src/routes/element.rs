@@ -259,8 +259,12 @@ pub async fn panel_element(
 
     // names and calls per query
     let mut meta: Vec<(i64, String, Option<Call>, Option<String>)> = Vec::new();
+    let mut source_gained: Vec<straincompass_types::GainedRow> = Vec::new();
     for qid in &query_ids {
         let res = jobs::load_query_result(&state, project_id, run_id, *qid)?;
+        if *qid == body.source_query_id {
+            source_gained = res.gained.clone().unwrap_or_default();
+        }
         let hit = res
             .panel
             .as_ref()
@@ -289,11 +293,17 @@ pub async fn panel_element(
             ("accession", acc.clone(), title, Some(seq))
         }
         None => {
-            let locus = meta
-                .iter()
-                .find(|m| m.0 == body.source_query_id)
-                .and_then(|m| m.3.clone())
-                .unwrap_or_default();
+            let src = meta.iter().find(|m| m.0 == body.source_query_id);
+            // only a strain that carries the gene has its element: a
+            // Partial match sits in a related gene, in other DNA
+            if src.and_then(|m| m.2) != Some(Call::Present) {
+                return Err(ApiError::BadRequest(format!(
+                    "{} is not present in full in {}, so its DNA is not the element carrying the gene. Choose a strain where the gene is Present.",
+                    body.gene_id,
+                    src.map(|m| m.1.as_str()).unwrap_or("the chosen strain")
+                )));
+            }
+            let locus = src.and_then(|m| m.3.clone()).unwrap_or_default();
             let contig = element::parse_locus(&locus)
                 .map(|l| l.0)
                 .or_else(|| (!locus.is_empty()).then(|| locus.clone()))
@@ -303,7 +313,19 @@ pub async fn panel_element(
                         body.gene_id
                     ))
                 })?;
-            ("contig", contig, String::new(), None)
+            match element::parse_locus(&locus)
+                .and_then(|(c, s, e, _)| element::insertion_carrying(&source_gained, &c, s, e))
+            {
+                // an insertion in the chromosome: the inserted stretch is
+                // the element, not the whole (mostly shared) contig
+                Some(r) => (
+                    "region",
+                    format!("{}:{}-{}", r.qry_seqid, r.start, r.end),
+                    String::new(),
+                    None,
+                ),
+                None => ("contig", contig, String::new(), None),
+            }
         }
     };
 
@@ -329,17 +351,32 @@ pub async fn panel_element(
         run_id,
         body.source_query_id,
         move |tools, work| {
+            // "contig:start-end" for an inserted region, else a contig
+            let (contig, range) = match element_name.rsplit_once(':') {
+                Some((c, r)) if kind == "region" => (c.to_string(), r.split_once('-')),
+                _ => (element_name.clone(), None),
+            };
             let seq = match fetched {
                 Some(s) => s,
-                None => fasta::parse_fasta(&src_fa)?
-                    .into_iter()
-                    .find(|r| r.id == element_name)
-                    .map(|r| r.seq)
-                    .ok_or_else(|| {
-                        straincompass_engine::friendly(format!(
-                            "The contig {element_name} is not in the strain's genome file."
-                        ))
-                    })?,
+                None => {
+                    let whole = fasta::parse_fasta(&src_fa)?
+                        .into_iter()
+                        .find(|r| r.id == contig)
+                        .map(|r| r.seq)
+                        .ok_or_else(|| {
+                            straincompass_engine::friendly(format!(
+                                "The contig {contig} is not in the strain's genome file."
+                            ))
+                        })?;
+                    match range.and_then(|(a, b)| {
+                        Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?))
+                    }) {
+                        Some((a, b)) if a >= 1 && b <= whole.len() && a <= b => {
+                            whole[a - 1..b].to_vec()
+                        }
+                        _ => whole,
+                    }
+                }
             };
             let sizes: Vec<u64> = targets
                 .iter()

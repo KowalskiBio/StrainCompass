@@ -432,8 +432,10 @@ function AcrossStrains({
         if (cancelled) return;
         const row = p.rows.find((r) => r.gene_id === geneId);
         const pos = new Set<number>();
+        // only strains carrying the gene in full have its element; a
+        // Partial match sits in a related gene, in other DNA
         row?.calls.forEach((c, i) => {
-          if (c !== "ABSENT") pos.add(run.queries[i].file_id);
+          if (c === "PRESENT") pos.add(run.queries[i].file_id);
         });
         setPositives(pos);
       })
@@ -494,8 +496,8 @@ function AcrossStrains({
       </p>
       {noPositives ? (
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          {geneId} was not found in any strain of this run, so there is no element to compare. You
-          can still compare a complete record from NCBI:
+          {geneId} is not present in full in any strain of this run, so there is no element to
+          compare. You can still compare a complete record from NCBI:
         </p>
       ) : null}
       <div className="flex flex-wrap items-end gap-4 text-sm">
@@ -507,7 +509,7 @@ function AcrossStrains({
                 checked={!useAccession}
                 onChange={() => setUseAccession(false)}
               />
-              Contig carrying the gene in
+              DNA carrying the gene in
               {positives ? (
                 <QuerySelect run={run} value={source} onChange={setSource} only={positives} />
               ) : (
@@ -554,9 +556,16 @@ function AcrossStrains({
         <>
           <p className="text-sm text-zinc-700 dark:text-zinc-300">
             Element:{" "}
+            {report.element_kind === "region" && <>the insertion carrying {geneId}, </>}
             <span className="font-mono">{report.element_name}</span>
             {report.element_title && <> - {report.element_title}</>} ({fmtBp(report.element_len)})
           </p>
+          {report.element_kind === "region" && (
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              {geneId} sits in a stretch the reference lacks, inside a contig that is otherwise
+              shared, so that stretch is compared rather than the whole contig.
+            </p>
+          )}
           <div className="border border-zinc-200 rounded-lg overflow-x-auto dark:border-zinc-800">
             <table className="w-full text-sm">
               <thead className="bg-zinc-50 text-zinc-500 text-xs dark:bg-zinc-800/60 dark:text-zinc-400">
@@ -584,7 +593,7 @@ function AcrossStrains({
                     <tr key={h.query_id} className="border-t border-zinc-100 dark:border-zinc-800">
                       <td className="px-3 py-1.5 whitespace-nowrap">
                         {h.query_name}
-                        {report.element_kind === "contig" &&
+                        {report.element_kind !== "accession" &&
                           h.query_id === report.source_query_id && (
                             <span className="ml-1.5 text-xs text-zinc-400 dark:text-zinc-500">(source)</span>
                           )}

@@ -589,7 +589,9 @@ pub struct ElementHit {
 pub struct ElementReport {
     pub gene_id: String,
     pub source_query_id: i64,
-    /// "contig" (the contig carrying the gene) or "accession".
+    /// "contig" (the contig carrying the gene), "region" (the inserted
+    /// stretch carrying it, "contig:start-end", when the contig is
+    /// otherwise shared with the reference) or "accession".
     pub element_kind: String,
     /// The contig name or the accession.
     pub element_name: String,
