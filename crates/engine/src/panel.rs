@@ -169,7 +169,7 @@ pub fn panel_from_ids_with(
                                 .collect::<Result<Vec<_>>>()?;
                             let (i, why) = choose(bare, &cands)
                                 .filter(|(i, _)| *i < gs.len())
-                                .unwrap_or((0, "the first in the genome".into()));
+                                .unwrap_or((0, "it is the first in the genome".into()));
                             ambiguous.push(ambiguity_note(bare, gs, i, &why));
                             gs[i]
                         };
@@ -211,9 +211,11 @@ pub fn panel_from_ids_with(
     })
 }
 
-/// "prfA names 2 genes in your reference: lmo0200 (listeriolysin positive
-/// regulatory protein), taken (VFDB files it as prfA), and lmo2543
-/// (peptide chain release factor 1). Write lmo2543 to search that one."
+/// "prfA: Taken from your reference: lmo0200 (listeriolysin positive
+/// regulatory protein), because VFDB files it as prfA. Your reference
+/// gives the name to lmo2543 (peptide chain release factor 1) too; write
+/// lmo2543 to search it." The "prfA: " lead groups it with the gene's
+/// other notes.
 fn ambiguity_note(name: &str, genes: &[&Gene], chosen: usize, why: &str) -> String {
     let words = |g: &Gene| {
         if g.product.is_empty() {
@@ -229,8 +231,7 @@ fn ambiguity_note(name: &str, genes: &[&Gene], chosen: usize, why: &str) -> Stri
         .map(|(_, g)| g)
         .collect();
     format!(
-        "{name} names {} genes in your reference: {}, taken ({why}), and {}. Write {} to search {}.",
-        genes.len(),
+        "{name}: Taken from your reference: {}, because {why}. Your reference gives the name to {} too; write {} to search {}.",
         words(genes[chosen]),
         others.iter().map(|g| words(g)).collect::<Vec<_>>().join(" and "),
         others
@@ -238,7 +239,7 @@ fn ambiguity_note(name: &str, genes: &[&Gene], chosen: usize, why: &str) -> Stri
             .map(|g| g.locus_tag.as_str())
             .collect::<Vec<_>>()
             .join(" or "),
-        if others.len() == 1 { "that one" } else { "one of those" },
+        if others.len() == 1 { "it" } else { "one of those" },
     )
 }
 
@@ -374,9 +375,10 @@ mod tests {
         );
         assert_eq!(p.ambiguous.len(), 1);
         let note = &p.ambiguous[0];
-        assert!(note.contains("prfA names 2 genes"), "{note}");
-        assert!(note.contains("lmo0200 (listeriolysin positive regulatory protein), taken (the first in the genome)"), "{note}");
-        assert!(note.contains("Write lmo2543 to search that one."), "{note}");
+        assert_eq!(
+            note,
+            "prfA: Taken from your reference: lmo0200 (listeriolysin positive regulatory protein), because it is the first in the genome. Your reference gives the name to lmo2543 (peptide chain release factor 1) too; write lmo2543 to search it."
+        );
         // asking by locus tag is never ambiguous
         let p = panel_from_ids(&fa, &gff, "lmo2543").unwrap();
         assert!(p.ambiguous.is_empty());
@@ -399,7 +401,7 @@ mod tests {
             p.fasta
         );
         assert!(p.ambiguous[0]
-            .contains("lmo2543 (peptide chain release factor 1), taken (a test said so)"));
+            .contains("lmo2543 (peptide chain release factor 1), because a test said so."));
     }
 
     #[test]

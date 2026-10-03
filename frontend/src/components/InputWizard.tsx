@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type ParamSpecLike } from "../api";
+import { api, type GeneNotes, type ParamSpecLike } from "../api";
 import type { ProjectFile, RunParams } from "../types";
 import { Button, DropZone, ErrorBox, InfoIcon, Spinner } from "./ui";
 
@@ -445,9 +445,24 @@ export function InputWizard({
                   <p>{notice.summary}</p>
                   {notice.hints.length > 0 && (
                     <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-                      {notice.hints.map((h) => (
-                        <p key={h}>{h}</p>
-                      ))}
+                      {notice.hints.map((g) =>
+                        g.gene ? (
+                          <div key={g.gene} className="mt-1.5 first:mt-0">
+                            <p className="font-medium italic">{g.gene}</p>
+                            <ul className="list-disc pl-5 space-y-0.5">
+                              {g.notes.map((n) => (
+                                <li key={n}>{n}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : (
+                          g.notes.map((n) => (
+                            <p key={n} className="mt-1.5 first:mt-0">
+                              {n}
+                            </p>
+                          ))
+                        ),
+                      )}
                     </div>
                   )}
                   {notice.library.length > 0 && (
@@ -575,13 +590,13 @@ interface PanelResult {
   from_catalog?: string[];
   from_library?: string[];
   library?: string | null;
-  hints?: string[];
+  hints?: GeneNotes[];
   missing: string[];
 }
 
 interface PanelNotice {
   summary: string;
-  hints: string[];
+  hints: GeneNotes[];
   catalog: string[];
   library: string[];
   libraryTitle: string | null;

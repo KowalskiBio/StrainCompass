@@ -307,7 +307,8 @@ pub struct PanelFromIdsDto {
     /// Genes taken from the reference for which the curated catalogs hold
     /// a different, organism-specific gene of the same name.
     #[serde(default)]
-    pub hints: Vec<String>,
+    /// The notes on the panel, one group per gene they concern.
+    pub hints: Vec<GeneNotes>,
     pub missing: Vec<String>,
 }
 
@@ -608,11 +609,27 @@ async fn build_panel(
     };
     let genus = organism.split_whitespace().next().unwrap_or("");
     let lib = crate::routes::library::for_project(&state, project_id);
-    let (extra, notes) =
+    let (extra, notes, summary) =
         crate::routes::ncbi::panel_variant_sets(&fasta, genus, api_key.as_deref(), lib.as_ref())
             .await;
     fasta.push_str(&extra);
     hints.extend(notes);
+    // the plain list of a gene's variants, only where nothing above
+    // already tells them
+    let told = |g: &str| {
+        let lead = format!("{g}: ");
+        hints.iter().any(|h| h.starts_with(&lead))
+            || from_library
+                .iter()
+                .any(|n| n.starts_with(&format!("{g} \u{2190}")))
+    };
+    let summary: Vec<String> = summary
+        .into_iter()
+        .filter(|(g, _)| !told(g))
+        .map(|(_, line)| line)
+        .collect();
+    hints.extend(summary);
+    let hints = by_gene(hints);
 
     let dto = store_panel(&state, project_id, append, "genes_of_interest.fasta", fasta).await?;
     Ok(Json(PanelFromIdsDto {
@@ -625,6 +642,45 @@ async fn build_panel(
         hints,
         missing,
     }))
+}
+
+/// A gene's notes on the panel build, told together.
+#[derive(Debug, serde::Serialize, PartialEq)]
+pub struct GeneNotes {
+    /// Empty for notes on no one gene.
+    pub gene: String,
+    pub notes: Vec<String>,
+}
+
+/// Notes grouped by the gene each leads with ("prfA: Taken ..."), in the
+/// order the genes first come up, the lead taken off.
+fn by_gene(hints: Vec<String>) -> Vec<GeneNotes> {
+    let mut out: Vec<GeneNotes> = Vec::new();
+    for h in hints {
+        let (gene, text) = match h.split_once(": ") {
+            Some((g, t)) if !g.is_empty() && !g.contains(char::is_whitespace) => {
+                (g.to_string(), t.to_string())
+            }
+            _ => (String::new(), h),
+        };
+        let mut c = text.chars();
+        let text = match c.next() {
+            Some(f) => f.to_uppercase().chain(c).collect(),
+            None => continue,
+        };
+        match out.iter_mut().find(|g| g.gene == gene) {
+            Some(g) => {
+                if !g.notes.contains(&text) {
+                    g.notes.push(text)
+                }
+            }
+            None => out.push(GeneNotes {
+                gene,
+                notes: vec![text],
+            }),
+        }
+    }
+    out
 }
 
 /// GET /projects/{id}/files
@@ -954,7 +1010,7 @@ fn catalog_lookup(
                 }
                 resolved.push((extra, String::new()));
                 hints.push(format!(
-                    "{name}: taken from your reference genome. {} files a different sequence under {} ({}); it is searched too, as another variant of {name}.",
+                    "{name}: Also searched, beside your reference's copy: the different sequence {} files under {} ({}).",
                     v.source, v.symbol, v.product
                 ));
             }
@@ -975,4 +1031,41 @@ fn catalog_record(id: &str, g: &straincompass_engine::catalog::CatalogGene) -> S
         rec.push('\n');
     }
     rec
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notes_are_told_once_per_gene() {
+        let g = by_gene(vec![
+            "prfA: Taken from your reference: x.".into(),
+            "hly: Also searched, beside your reference's copy: lso.".into(),
+            "prfA: not searched, sharing only the name: RF1.".into(),
+            "prfA: not searched, sharing only the name: RF1.".into(),
+            "The sequence from AB1.1 is not from Listeria.".into(),
+        ]);
+        let notes = |gene: &str, notes: &[&str]| GeneNotes {
+            gene: gene.into(),
+            notes: notes.iter().map(|n| n.to_string()).collect(),
+        };
+        assert_eq!(
+            g,
+            [
+                notes(
+                    "prfA",
+                    &[
+                        "Taken from your reference: x.",
+                        "Not searched, sharing only the name: RF1."
+                    ]
+                ),
+                notes(
+                    "hly",
+                    &["Also searched, beside your reference's copy: lso."]
+                ),
+                notes("", &["The sequence from AB1.1 is not from Listeria."]),
+            ]
+        );
+    }
 }

@@ -225,12 +225,15 @@ pub fn panel_lookup(
             if let Some((i, p)) = beside {
                 let v = variants.remove(i);
                 out.hints.push(format!(
-                    "{id}: taken as the {} beside {} ({} on {}), since {} in your list too: genes of one operon are meant together.",
+                    "{id}: Taken: the {} beside {} of your list, {} on {}.",
                     v.label,
                     words_and(&p),
-                    if v.product.is_empty() { &v.label } else { &v.product },
+                    if v.product.is_empty() {
+                        &v.label
+                    } else {
+                        &v.product
+                    },
                     v.place,
-                    if p.len() == 1 { "it is" } else { "they are" },
                 ));
                 variants.insert(0, v);
             }
@@ -240,8 +243,7 @@ pub fn panel_lookup(
         let (variants, unrelated) =
             split_family(lib, blastx, &anchor, &products, variants, Some(0), work);
         if !unrelated.is_empty() {
-            out.hints
-                .push(unrelated_note(&id, &title, &products, &unrelated, false));
+            out.hints.push(unrelated_note(&id, &unrelated));
         }
         for (i, v) in variants.iter().enumerate() {
             out.records
@@ -290,10 +292,6 @@ pub fn panel_lookup(
             .filter_map(|g| lib.group_brief(*g).ok().flatten().map(|b| b.2))
             .collect();
         let (others, unrelated) = split_family(lib, blastx, seq, &products, others, None, work);
-        if !unrelated.is_empty() {
-            out.hints
-                .push(unrelated_note(name, &title, &products, &unrelated, true));
-        }
         // a variant the reference itself carries elsewhere is a paralog
         // of the reference gene (EGD-e's lmo1490 beside its aroE, lmo0490)
         let seqs: Vec<Vec<u8>> = others.iter().map(|v| v.seq.clone()).collect();
@@ -322,21 +320,20 @@ pub fn panel_lookup(
                 if paralogs.len() == 1 { "it is" } else { "they are" },
             ));
         }
-        if others.is_empty() {
-            continue;
-        }
         for (i, v) in others.iter().enumerate() {
             // numbered after the reference copy; renumbered with the rest
             out.records
                 .push_str(&record(&variant_id(name, i + 2), v, &title));
         }
-        out.hints.push(format!(
-            "{name}: taken from your reference genome. The {title} holds {} other variant{} of {name} ({}); {} searched too, and the results say which one matched.",
-            others.len(),
-            if others.len() == 1 { "" } else { "s" },
-            others.iter().map(summary).collect::<Vec<_>>().join("; "),
-            if others.len() == 1 { "it is" } else { "they are" },
-        ));
+        if !others.is_empty() {
+            out.hints.push(format!(
+                "{name}: Also searched, beside your reference's copy: {}.",
+                others.iter().map(summary).collect::<Vec<_>>().join("; "),
+            ));
+        }
+        if !unrelated.is_empty() {
+            out.hints.push(unrelated_note(name, &unrelated));
+        }
     }
     out
 }
@@ -450,53 +447,41 @@ fn split_family(
     (related, unrelated)
 }
 
-/// "prfA: the Listeria library 2026-10-02 also gives the name prfA to 1
-/// different gene: peptide chain release factor 1 (on chromosome (...),
-/// 832 genomes). It shares only the name with the prfA searched here
-/// (listeriolysin O transcriptional regulator PrfA), so it is not searched
-/// as prfA. ..." `meant` is what the searched gene is, by its products;
-/// `reference` says it is the reference genome's own copy.
-fn unrelated_note(
-    name: &str,
-    title: &str,
-    meant: &[String],
-    unrelated: &[LibraryVariant],
-    reference: bool,
-) -> String {
+/// "prfA: Not searched, sharing only the name: peptide chain release
+/// factor 1 (on chromosome (Listeria monocytogenes EGD-e), 832 genomes; on
+/// chromosome (Listeria aquatica X), 3 genomes). To search it, add it
+/// under a name of its own, e.g. prfA_2 (NC_003210.1:2619415-2620491 rev)."
+/// Genes of one product are told once, their places together.
+fn unrelated_note(name: &str, unrelated: &[LibraryVariant]) -> String {
+    let what = |v: &LibraryVariant| {
+        if v.product.is_empty() {
+            v.label.clone()
+        } else {
+            v.product.clone()
+        }
+    };
+    let mut kinds: Vec<(String, Vec<String>)> = Vec::new();
+    for v in unrelated {
+        let place = format!(
+            "on {}, {} genome{}",
+            v.place,
+            v.n_genomes,
+            if v.n_genomes == 1 { "" } else { "s" }
+        );
+        match kinds.iter_mut().find(|(k, _)| *k == what(v)) {
+            Some((_, places)) => places.push(place),
+            None => kinds.push((what(v), vec![place])),
+        }
+    }
     let first = &unrelated[0];
-    let one = unrelated.len() == 1;
-    let meant = meant
-        .iter()
-        .find(|p| !p.trim().is_empty())
-        .map(|p| format!(" ({p})"))
-        .unwrap_or_default();
-    let whose = if reference {
-        "of your reference"
-    } else {
-        "searched here"
-    };
-    let covered = if reference {
-        format!(" Other genomes' copies of your reference's {name} are found by the reference copy itself.")
-    } else {
-        String::new()
-    };
     format!(
-        "{name}: the {title} also gives the name {name} to {} different gene{}: {}. {} only the name with the {name} {whose}{meant}, so {} not searched as {name}.{covered} To search one, add it under a name of its own, e.g. {name}_2 ({}{}).",
-        unrelated.len(),
-        if one { "" } else { "s" },
-        unrelated
+        "{name}: Not searched, sharing only the name: {}. To search {}, add it under a name of its own, e.g. {name}_2 ({}{}).",
+        kinds
             .iter()
-            .map(|v| format!(
-                "{} (on {}, {} genome{})",
-                if v.product.is_empty() { &v.label } else { &v.product },
-                v.place,
-                v.n_genomes,
-                if v.n_genomes == 1 { "" } else { "s" }
-            ))
+            .map(|(k, places)| format!("{k} ({})", places.join("; ")))
             .collect::<Vec<_>>()
             .join("; "),
-        if one { "It shares" } else { "They share" },
-        if one { "it is" } else { "they are" },
+        if kinds.len() == 1 { "it" } else { "one" },
         first.locus,
         if first.minus { " rev" } else { "" },
     )
@@ -632,23 +617,23 @@ mod tests {
 
     #[test]
     fn unrelated_genes_are_named_for_what_they_are() {
-        let rf1 = variant(
-            7,
-            "peptide chain release factor 1",
-            "chromosome (Listeria monocytogenes EGD-e)",
-            "NC_003210.1:2619415-2620491",
-            832,
-        );
+        let rf1 = |place: &str, locus: &str, n| {
+            variant(7, "peptide chain release factor 1", place, locus, n)
+        };
         let note = unrelated_note(
             "prfA",
-            "Listeria library t",
-            &["listeriolysin O transcriptional regulator PrfA".into()],
-            &[rf1],
-            true,
+            &[
+                rf1(
+                    "chromosome (Listeria monocytogenes EGD-e)",
+                    "NC_003210.1:2619415-2620491",
+                    832,
+                ),
+                rf1("chromosome (Listeria aquatica X)", "NZ_C.1:1-1077", 3),
+            ],
         );
         assert_eq!(
             note,
-            "prfA: the Listeria library t also gives the name prfA to 1 different gene: peptide chain release factor 1 (on chromosome (Listeria monocytogenes EGD-e), 832 genomes). It shares only the name with the prfA of your reference (listeriolysin O transcriptional regulator PrfA), so it is not searched as prfA. Other genomes' copies of your reference's prfA are found by the reference copy itself. To search one, add it under a name of its own, e.g. prfA_2 (NC_003210.1:2619415-2620491 rev)."
+            "prfA: Not searched, sharing only the name: peptide chain release factor 1 (on chromosome (Listeria monocytogenes EGD-e), 832 genomes; on chromosome (Listeria aquatica X), 3 genomes). To search it, add it under a name of its own, e.g. prfA_2 (NC_003210.1:2619415-2620491 rev)."
         );
     }
 
@@ -704,7 +689,7 @@ mod tests {
             out.records
         );
         assert!(
-            out.hints[0].starts_with("bcrA: taken as the bcrA beside bcrB (efflux transporter transcriptional regulator BcrA on plasmid pLM33"),
+            out.hints[0].starts_with("bcrA: Taken: the bcrA beside bcrB of your list, efflux transporter transcriptional regulator BcrA on plasmid pLM33"),
             "{:?}",
             out.hints
         );

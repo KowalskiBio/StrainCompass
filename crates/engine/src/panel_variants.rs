@@ -266,7 +266,7 @@ fn library_origin(desc: &str) -> Option<String> {
 
 /// One line per gene with more than one variant, naming where each comes
 /// from, so a surprising choice is visible before the run.
-pub fn variant_summary(panel: &[FastaRecord]) -> Vec<String> {
+pub fn variant_summary(panel: &[FastaRecord]) -> Vec<(String, String)> {
     let mut genes: Vec<&str> = Vec::new();
     for r in panel {
         let g = variant_gene(&r.id);
@@ -291,11 +291,12 @@ pub fn variant_summary(panel: &[FastaRecord]) -> Vec<String> {
                 })
                 .collect();
             (from.len() > 1).then(|| {
-                format!(
-                    "{g}: {} sequences are searched as variants ({}); each strain's result says which one matched.",
+                let line = format!(
+                    "{g}: Searched as {} variants: {}. Each strain's result says which one matched.",
                     from.len(),
                     from.join(", ")
-                )
+                );
+                (g.to_string(), line)
             })
         })
         .collect()
@@ -422,7 +423,11 @@ mod tests {
         ];
         let s = variant_summary(&panel);
         assert_eq!(s.len(), 1);
-        assert!(s[0].starts_with("cadA: 2 sequences") && s[0].contains("AP022822.1, L28104.1"));
+        assert_eq!(s[0].0, "cadA");
+        assert!(
+            s[0].1.starts_with("cadA: Searched as 2 variants")
+                && s[0].1.contains("AP022822.1, L28104.1")
+        );
     }
 
     #[test]
@@ -436,8 +441,8 @@ mod tests {
             ),
         ];
         assert_eq!(
-            variant_summary(&panel),
-            ["prfA: 2 sequences are searched as variants (reference genome, prfA on chromosome (Listeria ivanovii XYSL)); each strain's result says which one matched."]
+            variant_summary(&panel)[0].1,
+            "prfA: Searched as 2 variants: reference genome, prfA on chromosome (Listeria ivanovii XYSL). Each strain's result says which one matched."
         );
     }
 }

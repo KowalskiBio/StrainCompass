@@ -752,7 +752,8 @@ const MAX_PARTNER_RECORDS: usize = 15;
 /// record's origin that the panel holds under another source (the cadA
 /// beside cadC in Tn5422), added as further variants, and a note for
 /// every variant whose record is not from the project's genus. Returns
-/// the records to append and the notes for the user. NCBI unreachable
+/// the records to append, the notes for the user and, per gene, the list
+/// of its variants. NCBI unreachable
 /// means no additions, never a failed build.
 ///
 /// A record the local reference library holds is read there, genes and
@@ -762,13 +763,13 @@ pub async fn panel_variant_sets(
     genus: &str,
     api_key: Option<&str>,
     lib: Option<&straincompass_engine::library::Library>,
-) -> (String, Vec<String>) {
+) -> (String, Vec<String>, Vec<(String, String)>) {
     use straincompass_engine::panel::variant_gene;
     use straincompass_engine::panel_variants::{
         parse_cds_fasta, partner_variants, record_origin, variant_summary, Neighbourhood,
     };
     let Ok(recs) = straincompass_engine::fasta::parse_fasta_str(fasta) else {
-        return (String::new(), Vec::new());
+        return (String::new(), Vec::new(), Vec::new());
     };
     let base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
     let delay = std::time::Duration::from_millis(if api_key.is_some() { 110 } else { 380 });
@@ -928,8 +929,7 @@ pub async fn panel_variant_sets(
     if let Ok(more) = straincompass_engine::fasta::parse_fasta_str(&records) {
         all.extend(more);
     }
-    notes.extend(variant_summary(&all));
-    (records, notes)
+    (records, notes, variant_summary(&all))
 }
 
 #[cfg(test)]
@@ -1023,7 +1023,7 @@ mod variant_set_tests {
                 ));
             }
         }
-        let (extra, notes) = panel_variant_sets(&fasta, "Listeria", None, None).await;
+        let (extra, notes, _) = panel_variant_sets(&fasta, "Listeria", None, None).await;
         for n in &notes {
             eprintln!("NOTE {n}");
         }
