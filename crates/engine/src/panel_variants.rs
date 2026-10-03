@@ -249,6 +249,21 @@ pub fn partner_variants(panel: &[FastaRecord], hoods: &[Neighbourhood]) -> Vec<A
     out
 }
 
+/// Where a reference-library record comes from, in words: "prfA on
+/// chromosome (Listeria ivanovii XYSL)" for "Library g5662 prfA: ...
+/// [Listeria library v; chromosome (Listeria ivanovii XYSL), NZ_CP1.1:1-9;
+/// ...]". None for any other record.
+fn library_origin(desc: &str) -> Option<String> {
+    let mut w = desc.split_whitespace();
+    if w.next() != Some("Library") || !w.next()?.starts_with('g') {
+        return None;
+    }
+    let label = w.next()?.trim_end_matches(':');
+    let bracket = desc[desc.rfind('[')? + 1..].split(']').next()?;
+    let (place, _locus) = bracket.split("; ").nth(1)?.rsplit_once(", ")?;
+    Some(format!("{label} on {place}"))
+}
+
 /// One line per gene with more than one variant, naming where each comes
 /// from, so a surprising choice is visible before the run.
 pub fn variant_summary(panel: &[FastaRecord]) -> Vec<String> {
@@ -270,7 +285,9 @@ pub fn variant_summary(panel: &[FastaRecord]) -> Vec<String> {
                     None if r.desc.is_empty() || r.desc.starts_with("reference") => {
                         "reference genome".into()
                     }
-                    None => r.desc.split_whitespace().take(2).collect::<Vec<_>>().join(" "),
+                    None => library_origin(&r.desc).unwrap_or_else(|| {
+                        r.desc.split_whitespace().take(2).collect::<Vec<_>>().join(" ")
+                    }),
                 })
                 .collect();
             (from.len() > 1).then(|| {
@@ -406,5 +423,21 @@ mod tests {
         let s = variant_summary(&panel);
         assert_eq!(s.len(), 1);
         assert!(s[0].starts_with("cadA: 2 sequences") && s[0].contains("AP022822.1, L28104.1"));
+    }
+
+    #[test]
+    fn summarises_library_variants_by_their_place() {
+        let panel = vec![
+            rec("prfA", "reference LM4B_RS01000", A),
+            rec(
+                "prfA__v2",
+                "Library g5662 prfA: PrfA [Listeria library t; chromosome (Listeria ivanovii XYSL), NZ_CP1.1:1-9; annotated with this name; in 16 genomes]",
+                B,
+            ),
+        ];
+        assert_eq!(
+            variant_summary(&panel),
+            ["prfA: 2 sequences are searched as variants (reference genome, prfA on chromosome (Listeria ivanovii XYSL)); each strain's result says which one matched."]
+        );
     }
 }

@@ -89,6 +89,16 @@ pub struct LibraryVariant {
     pub minus: bool,
 }
 
+/// A gene near another one on its replicon.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Neighbour {
+    pub name: String,
+    pub locus_tag: String,
+    pub old_locus_tag: String,
+    /// Its variant group; None for a gene in none (a pseudogene).
+    pub group: Option<i64>,
+}
+
 /// A replicon matching a sequence.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct LibraryHit {
@@ -662,6 +672,39 @@ impl Library {
             .map_err(sql)
     }
 
+    /// The genes within `window` bp of a gene's place ("NZ_CP2.1:47228-49363")
+    /// on its replicon, the gene itself left out: an operon's partners.
+    pub fn neighbours(&self, locus: &str, window: u64) -> Result<Vec<Neighbour>> {
+        let Some((acc, (lo, hi))) = locus.rsplit_once(':').and_then(|(acc, range)| {
+            let (a, b) = range.split_once('-')?;
+            let (a, b): (i64, i64) = (a.parse().ok()?, b.parse().ok()?);
+            Some((acc, (a.min(b), a.max(b))))
+        }) else {
+            return Ok(Vec::new());
+        };
+        let w = window as i64;
+        let conn = self.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT name, locus_tag, old_locus_tag, group_id FROM genes
+                 WHERE replicon = ?1 AND start <= ?3 + ?4 AND end >= ?2 - ?4
+                   AND NOT (start = ?2 AND end = ?3)
+                 ORDER BY start",
+            )
+            .map_err(sql)?;
+        let rows = stmt
+            .query_map(rusqlite::params![acc, lo, hi, w], |r| {
+                Ok(Neighbour {
+                    name: r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    locus_tag: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    old_locus_tag: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    group: r.get(3)?,
+                })
+            })
+            .map_err(sql)?;
+        rows.collect::<std::result::Result<_, _>>().map_err(sql)
+    }
+
     /// A genome stored in the library, by its RefSeq (GCF_) or GenBank
     /// (GCA_) assembly accession: every assembly of the build, kept or
     /// merged, with the genome and annotation files NCBI serves for it.
@@ -986,6 +1029,23 @@ pub(crate) mod tests {
         assert!(lib.variants("inlA").unwrap().is_empty());
         assert_eq!(v[2].place, "an unnamed plasmid (Listeria monocytogenes X)");
         assert_eq!(v[2].seq, b"ATGGGG");
+    }
+
+    #[test]
+    fn finds_the_genes_beside_a_gene() {
+        let tmp = tempdir("neighbours");
+        let lib = fixture(&tmp);
+        Connection::open(tmp.join("library.sqlite"))
+            .unwrap()
+            .execute_batch(
+                "INSERT INTO genes VALUES (4,'NZ_CP2.1',49400,49800,'-','cadC','T_4','','regulator','WP_4',0,NULL,NULL),
+                                          (5,'NZ_CP2.1',58000,58300,'+','far','T_5','','x','WP_5',0,13,NULL);",
+            )
+            .unwrap();
+        let near = lib.neighbours("NZ_CP2.1:47228-49363", 8_000).unwrap();
+        assert_eq!(near.len(), 1, "{near:?}");
+        assert_eq!((near[0].name.as_str(), near[0].group), ("cadC", None));
+        assert!(lib.neighbours("not a locus", 8_000).unwrap().is_empty());
     }
 
     #[test]
