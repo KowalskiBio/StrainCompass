@@ -1,6 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import type { ContextGene, ElementReport, GeneOrigin, OriginRecord, PanelContext, Run } from "../types";
+import type {
+  ContextGene,
+  ElementGene,
+  ElementHit,
+  ElementReport,
+  GeneOrigin,
+  OriginRecord,
+  PanelContext,
+  Run,
+} from "../types";
 import { CallBadge, ErrorBox, Modal, RelatedChip, Spinner } from "./ui";
 import { PanelAlignmentDialog } from "./PanelAlignmentDialog";
 
@@ -33,7 +42,7 @@ export function PanelGeneDialog({
     <Modal
       open={Boolean(geneId)}
       onClose={onClose}
-      wide
+      extraWide
       title={
         <span className="flex items-baseline gap-3 flex-wrap">
           Panel gene <span className="font-mono">{geneId}</span>
@@ -363,7 +372,11 @@ function ContextGenes({ ctx }: { ctx: PanelContext }) {
                 )}
                 {g.is_hit && (
                   <> <span className="inline-block px-1.5 rounded text-xs bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
-                      {g.source === "panel" ? "hit" : ctx.gene_id}
+                      {g.source === "panel"
+                        ? "hit"
+                        : ctx.call === "PRESENT"
+                          ? ctx.gene_id
+                          : `${ctx.call === "PARTIAL" ? "partial match" : "closest match"} to ${ctx.gene_id}`}
                     </span></>
                 )}
                 {g.source !== "panel" && g.label && g.match_identity != null && (
@@ -428,6 +441,9 @@ function AcrossStrains({
   const [useAccession, setUseAccession] = useState(false);
   const [accession, setAccession] = useState("");
   const [report, setReport] = useState<ElementReport | null>(null);
+  // the strain whose share of the element is shown in detail
+  const [openRow, setOpenRow] = useState<number | null>(null);
+  useEffect(() => setOpenRow(null), [report]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -576,16 +592,18 @@ function AcrossStrains({
               shared, so that stretch is compared rather than the whole contig.
             </p>
           )}
-          <div className="border border-zinc-200 rounded-lg overflow-x-auto dark:border-zinc-800">
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            Click a strain to see which parts of the element it holds
+            {report.genes && report.genes.length > 0 ? ", gene by gene" : ""}.
+          </p>
+          <div className="border border-zinc-200 rounded-lg overflow-hidden dark:border-zinc-800">
             <table className="w-full text-sm">
               <thead className="bg-zinc-50 text-zinc-500 text-xs dark:bg-zinc-800/60 dark:text-zinc-400">
                 <tr>
                   <th className="text-left font-medium px-3 py-2">Strain</th>
                   <th className="text-left font-medium px-3 py-2">{geneId}</th>
                   <th className="text-left font-medium px-3 py-2">Element present</th>
-                  <th className="text-left font-medium px-3 py-2">Reading</th>
                   <th className="text-right font-medium px-3 py-2">Pieces</th>
-                  <th className="text-right font-medium px-3 py-2 whitespace-nowrap">Largest piece</th>
                   <th className="text-right font-medium px-3 py-2">Identity</th>
                   <th className="text-right font-medium px-3 py-2">Genome</th>
                 </tr>
@@ -599,47 +617,79 @@ function AcrossStrains({
                       : h.covered_pct < 5
                         ? "absent entirely"
                         : `partly present (${fmtBp(h.covered_bp)})`;
+                  const isOpen = openRow === h.query_id;
                   return (
-                    <tr key={h.query_id} className="border-t border-zinc-100 dark:border-zinc-800">
-                      <td className="px-3 py-1.5 whitespace-nowrap">
-                        {h.query_name}
-                        {report.element_kind !== "accession" &&
-                          h.query_id === report.source_query_id && (
-                            <span className="ml-1.5 text-xs text-zinc-400 dark:text-zinc-500">(source)</span>
-                          )}
-                      </td>
-                      <td className="px-3 py-1.5 whitespace-nowrap">
-                        {h.call ? <CallBadge call={h.call} /> : "-"}
-                        {h.related_identity != null && (
-                          <span className="ml-1.5">
-                            <RelatedChip identity={h.related_identity} />
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-1.5">
-                        <AlignedBar pct={h.covered_pct} />
-                      </td>
-                      <td className="px-3 py-1.5 whitespace-nowrap">{reading}</td>
-                      <td className="px-3 py-1.5 text-right tabular-nums">{h.pieces}</td>
-                      <td className="px-3 py-1.5 text-right tabular-nums">
-                        {h.largest_piece ? fmtBp(h.largest_piece) : "-"}
-                      </td>
-                      <td className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">
-                        {h.covered_bp ? `${h.identity.toFixed(1)} %` : "-"}
-                      </td>
-                      <td
-                        className="px-3 py-1.5 text-right tabular-nums whitespace-nowrap"
-                        title={`${h.genome_bp.toLocaleString("en-US")} bp`}
+                    <Fragment key={h.query_id}>
+                      <tr
+                        onClick={() => setOpenRow(isOpen ? null : h.query_id)}
+                        aria-expanded={isOpen}
+                        className={`border-t border-zinc-100 cursor-pointer hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/50 ${isOpen ? "bg-zinc-50 dark:bg-zinc-800/50" : ""}`}
                       >
-                        {fmtBp(h.genome_bp)}
-                        {sourceSize !== undefined && delta !== 0 && (
-                          <span className="ml-1 text-xs text-zinc-500 dark:text-zinc-400">
-                            ({delta > 0 ? "+" : "-"}
-                            {fmtBp(Math.abs(delta))})
+                        <td className="px-3 py-1.5 break-all">
+                          <span className="inline-flex items-start gap-1.5">
+                            <span
+                              aria-hidden
+                              className={`mt-0.5 text-[10px] text-zinc-400 transition-transform ${isOpen ? "rotate-90" : ""}`}
+                            >
+                              ▶
+                            </span>
+                            <span>
+                              {h.query_name}
+                              {report.element_kind !== "accession" &&
+                                h.query_id === report.source_query_id && (
+                                  <span className="ml-1.5 text-xs text-zinc-400 dark:text-zinc-500">
+                                    (source)
+                                  </span>
+                                )}
+                            </span>
                           </span>
-                        )}
-                      </td>
-                    </tr>
+                        </td>
+                        <td className="px-3 py-1.5">
+                          <span className="inline-flex flex-wrap items-center gap-1">
+                            {h.call ? <CallBadge call={h.call} /> : "-"}
+                            {h.related_identity != null && (
+                              <RelatedChip identity={h.related_identity} />
+                            )}
+                          </span>
+                        </td>
+                        <td className="px-3 py-1.5">
+                          <AlignedBar pct={h.covered_pct} />
+                          <span className="block text-xs text-zinc-500 dark:text-zinc-400">
+                            {reading}
+                          </span>
+                        </td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">
+                          {h.pieces}
+                          {h.largest_piece > 0 && (
+                            <span className="block text-xs text-zinc-500 whitespace-nowrap dark:text-zinc-400">
+                              largest {fmtBp(h.largest_piece)}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">
+                          {h.covered_bp ? `${h.identity.toFixed(1)} %` : "-"}
+                        </td>
+                        <td
+                          className="px-3 py-1.5 text-right tabular-nums"
+                          title={`${h.genome_bp.toLocaleString("en-US")} bp`}
+                        >
+                          {fmtBp(h.genome_bp)}
+                          {sourceSize !== undefined && delta !== 0 && (
+                            <span className="block text-xs text-zinc-500 dark:text-zinc-400">
+                              {delta > 0 ? "+" : "-"}
+                              {fmtBp(Math.abs(delta))}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                      {isOpen && (
+                        <tr className="bg-zinc-50/60 dark:bg-zinc-800/30">
+                          <td colSpan={6} className="px-3 pt-2 pb-4">
+                            <ElementDetail report={report} hit={h} />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -654,6 +704,195 @@ function AcrossStrains({
         </>
       )}
     </section>
+  );
+}
+
+type GeneShare = "present" | "partly" | "missing";
+
+/** How much of one element gene a strain's stretches cover, and how alike. */
+function geneCover(g: ElementGene, hit: ElementHit): { pct: number; identity: number | null } {
+  const len = g.end - g.start + 1;
+  let covered = 0;
+  let weighted = 0;
+  for (const p of hit.covered ?? []) {
+    const o = Math.min(g.end, p.end) - Math.max(g.start, p.start) + 1;
+    if (o > 0) {
+      covered += o;
+      weighted += o * p.identity;
+    }
+  }
+  return { pct: (100 * covered) / len, identity: covered > 0 ? weighted / covered : null };
+}
+
+function shareOf(pct: number): GeneShare {
+  return pct >= 90 ? "present" : pct >= 10 ? "partly" : "missing";
+}
+
+const SHARE_FILL: Record<GeneShare, string> = {
+  present: "fill-emerald-500 dark:fill-emerald-400",
+  partly: "fill-amber-400 dark:fill-amber-500",
+  missing: "fill-zinc-300 dark:fill-zinc-600",
+};
+
+const SHARE_TEXT: Record<GeneShare, string> = {
+  present: "text-emerald-700 dark:text-emerald-400",
+  partly: "text-amber-700 dark:text-amber-400",
+  missing: "text-zinc-500 dark:text-zinc-400",
+};
+
+/** One strain's share of the element: where its stretches lie and, for an
+ * annotated record, which of the record's genes they hold. */
+function ElementDetail({ report, hit }: { report: ElementReport; hit: ElementHit }) {
+  const [filter, setFilter] = useState<"all" | GeneShare>("all");
+  const genes = report.genes ?? [];
+  const pieces = hit.covered ?? [];
+  const rows = useMemo(
+    () =>
+      genes.map((g) => {
+        const c = geneCover(g, hit);
+        return { g, ...c, share: shareOf(c.pct) };
+      }),
+    [genes, hit],
+  );
+  const count = (k: GeneShare) => rows.filter((r) => r.share === k).length;
+  const shown = filter === "all" ? rows : rows.filter((r) => r.share === filter);
+  const len = Math.max(1, report.element_len);
+  const x = (bp: number) => (1000 * (bp - 1)) / len;
+
+  return (
+    <div className="space-y-3">
+      <svg
+        viewBox="0 0 1000 40"
+        preserveAspectRatio="none"
+        className="w-full h-10"
+        role="img"
+        aria-label={`Map of the element: genes above, the stretches ${hit.query_name} holds below`}
+      >
+        <rect x="0" y="27" width="1000" height="8" rx="2" className="fill-zinc-200 dark:fill-zinc-700" />
+        {pieces.map((p) => (
+          <rect
+            key={`${p.start}-${p.end}`}
+            x={x(p.start)}
+            y="27"
+            width={Math.max(1, x(p.end + 1) - x(p.start))}
+            height="8"
+            className="fill-sky-600 dark:fill-sky-400"
+            opacity={p.identity >= 99 ? 1 : p.identity >= 95 ? 0.7 : 0.45}
+          >
+            <title>
+              {`${p.start.toLocaleString("en-US")}-${p.end.toLocaleString("en-US")} (${fmtBp(p.end - p.start + 1)}), ${p.identity.toFixed(1)} % identity`}
+            </title>
+          </rect>
+        ))}
+        {rows.map(({ g, pct, share }) => (
+          <rect
+            key={`${g.start}-${g.end}-${g.locus_tag}`}
+            x={x(g.start)}
+            y={g.strand < 0 ? 13 : 2}
+            width={Math.max(1.5, x(g.end + 1) - x(g.start))}
+            height="9"
+            rx="1"
+            className={`${SHARE_FILL[share]} ${g.name.toLowerCase() === report.gene_id.toLowerCase() ? "stroke-zinc-900 dark:stroke-zinc-100" : ""}`}
+            strokeWidth="1.5"
+          >
+            <title>{`${g.name || g.locus_tag}: ${g.product || "no product"} (${pct.toFixed(0)} % held)`}</title>
+          </rect>
+        ))}
+      </svg>
+      <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
+        {genes.length > 0 && (
+          <span>Genes above (forward strand on top), coloured by how much of each {hit.query_name} holds.</span>
+        )}
+        <span>
+          <span className="inline-block w-3 h-2 align-middle rounded-sm bg-sky-600 dark:bg-sky-400" /> stretches
+          found (paler = less alike)
+        </span>
+      </p>
+
+      {genes.length > 0 ? (
+        <>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            {(
+              [
+                ["all", `All ${rows.length}`],
+                ["present", `Present ${count("present")}`],
+                ["partly", `Partly ${count("partly")}`],
+                ["missing", `Missing ${count("missing")}`],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                onClick={() => setFilter(k)}
+                className={`h-7 px-2.5 rounded-md border ${filter === k ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900" : "border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="max-h-[28rem] overflow-y-auto border border-zinc-200 rounded-lg bg-white dark:border-zinc-800 dark:bg-zinc-900">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-zinc-50 text-zinc-500 text-xs dark:bg-zinc-800 dark:text-zinc-400">
+                <tr>
+                  <th className="text-left font-medium px-3 py-2">Gene</th>
+                  <th className="text-left font-medium px-3 py-2">Product</th>
+                  <th className="text-right font-medium px-3 py-2">Place</th>
+                  <th className="text-left font-medium px-3 py-2">In {hit.query_name}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map(({ g, pct, identity, share }) => (
+                  <tr
+                    key={`${g.start}-${g.end}-${g.locus_tag}`}
+                    className="border-t border-zinc-100 align-top dark:border-zinc-800"
+                  >
+                    <td className="px-3 py-1.5">
+                      <span className={g.name ? "italic" : "font-mono text-xs"}>
+                        {g.name || g.locus_tag || "-"}
+                      </span>
+                      {g.name && g.locus_tag && (
+                        <span className="block font-mono text-xs text-zinc-500 dark:text-zinc-400">
+                          {g.locus_tag}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-1.5 text-zinc-700 dark:text-zinc-300">{g.product || "-"}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums text-xs text-zinc-500 dark:text-zinc-400">
+                      {g.start.toLocaleString("en-US")}-{g.end.toLocaleString("en-US")}
+                      <span className="block">{g.strand < 0 ? "reverse" : "forward"}</span>
+                    </td>
+                    <td className={`px-3 py-1.5 tabular-nums ${SHARE_TEXT[share]}`}>
+                      {share === "present" ? "present" : share === "partly" ? "partly" : "missing"}
+                      <span className="block text-xs text-zinc-500 dark:text-zinc-400">
+                        {pct.toFixed(0)} % of it
+                        {identity != null && <>, {identity.toFixed(1)} % identity</>}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+            {report.element_kind === "accession"
+              ? "This record has no annotated genes to list, so only the stretches are shown."
+              : "A strain's own contig carries no gene annotation, so only the stretches are shown. To see them gene by gene, compare a complete record, e.g. a library plasmid from the section above."}
+          </p>
+          {pieces.length > 0 && (
+            <ul className="text-xs tabular-nums text-zinc-600 space-y-0.5 dark:text-zinc-400">
+              {pieces.map((p) => (
+                <li key={`${p.start}-${p.end}`}>
+                  {p.start.toLocaleString("en-US")}-{p.end.toLocaleString("en-US")} ({fmtBp(p.end - p.start + 1)}),{" "}
+                  {p.identity.toFixed(1)} % identity
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

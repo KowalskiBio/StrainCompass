@@ -710,6 +710,57 @@ pub async fn fetch_record(accession: &str, api_key: Option<&str>) -> ApiResult<(
     Ok((title, seq))
 }
 
+/// The annotated coding genes of a whole record, from NCBI's CDS FASTA.
+/// Empty when NCBI cannot be reached or annotates none: the genes only
+/// add detail to a comparison, they never fail it.
+pub async fn fetch_record_genes(
+    accession: &str,
+    api_key: Option<&str>,
+) -> Vec<straincompass_types::ElementGene> {
+    let mut url = format!(
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id={}&rettype=fasta_cds_na&retmode=text",
+        accession.trim()
+    );
+    if let Some(k) = api_key {
+        url.push_str(&format!("&api_key={k}"));
+    }
+    match download(&client(), &url).await {
+        Ok(bytes) => parse_cds_genes(&String::from_utf8_lossy(&bytes)),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// The genes of `rettype=fasta_cds_na` text, by their header tags
+/// ("[gene=bcrA] [locus_tag=X_1] [protein=...] [location=complement(5..90)]").
+fn parse_cds_genes(text: &str) -> Vec<straincompass_types::ElementGene> {
+    text.lines()
+        .filter_map(|l| l.strip_prefix('>'))
+        .filter_map(|h| {
+            let tag = |k: &str| {
+                h.split(&format!("[{k}="))
+                    .nth(1)
+                    .and_then(|r| r.split(']').next())
+                    .unwrap_or("")
+                    .to_string()
+            };
+            let loc = tag("location");
+            let nums: Vec<u64> = loc
+                .split(|c: char| !c.is_ascii_digit())
+                .filter_map(|n| n.parse().ok())
+                .collect();
+            Some(straincompass_types::ElementGene {
+                start: nums.iter().copied().min()?,
+                end: nums.iter().copied().max()?,
+                strand: if loc.starts_with("complement") { -1 } else { 1 },
+                name: straincompass_engine::panel_variants::base_gene_name(&tag("gene"))
+                    .to_string(),
+                locus_tag: tag("locus_tag"),
+                product: tag("protein"),
+            })
+        })
+        .collect()
+}
+
 /// A record title short enough for a note: "Listeria monocytogenes
 /// transposon Tn5422 ATPase (cadA), accessory protein ..." keeps its
 /// first 60 characters, cut at a word.
@@ -1031,5 +1082,28 @@ mod variant_set_tests {
             eprintln!("{l}");
         }
         assert!(extra.contains("L28104.1:158-2293"), "{extra}");
+    }
+}
+
+#[cfg(test)]
+mod record_gene_tests {
+    use super::parse_cds_genes;
+
+    #[test]
+    fn reads_the_genes_of_a_cds_listing() {
+        let text = ">lcl|NZ_CP1.1_cds_WP_2.1_1 [gene=bcrA_2] [locus_tag=X_1] [protein=efflux regulator BcrA] [location=75746..76285] [gbkey=CDS]\nATGAAA\n\
+                    >lcl|NZ_CP1.1_cds_WP_3.1_2 [locus_tag=X_2] [protein=hypothetical protein] [location=complement(<80000..80300)] [gbkey=CDS]\nATG\n";
+        let g = parse_cds_genes(text);
+        assert_eq!(g.len(), 2);
+        assert_eq!(
+            (g[0].name.as_str(), g[0].start, g[0].end, g[0].strand),
+            ("bcrA", 75746, 76285, 1)
+        );
+        assert_eq!(g[0].product, "efflux regulator BcrA");
+        assert_eq!(
+            (g[1].name.as_str(), g[1].locus_tag.as_str(), g[1].strand),
+            ("", "X_2", -1)
+        );
+        assert_eq!((g[1].start, g[1].end), (80000, 80300));
     }
 }

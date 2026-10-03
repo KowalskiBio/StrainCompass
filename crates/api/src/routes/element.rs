@@ -320,6 +320,8 @@ pub async fn panel_element(
         .map(str::trim)
         .filter(|a| !a.is_empty())
         .map(str::to_string);
+    // the record's genes, to tell what each strain's stretches hold
+    let mut record_genes: Vec<straincompass_types::ElementGene> = Vec::new();
     let (kind, name, title, fetched) = match &accession {
         Some(acc) => {
             // the local reference library first: the origin search offers
@@ -330,7 +332,12 @@ pub async fn panel_element(
                     tokio::task::spawn_blocking(move || {
                         let rep = lib.replicon(&acc2).ok()??;
                         let seq = lib.replicon_seq(&rep).ok()??;
-                        Some((format!("{} from the {}", rep.title(), lib.title()), seq))
+                        let genes = lib.replicon_genes(&rep).unwrap_or_default();
+                        Some((
+                            format!("{} from the {}", rep.title(), lib.title()),
+                            seq,
+                            genes,
+                        ))
                     })
                     .await
                     .ok()
@@ -339,13 +346,19 @@ pub async fn panel_element(
                 None => None,
             };
             let (title, seq) = match local {
-                Some(t) => t,
+                Some((title, seq, genes)) => {
+                    record_genes = genes.into_iter().map(element_gene).collect();
+                    (title, seq)
+                }
                 None => {
                     let key = {
                         let conn = state.db.lock().unwrap();
                         crate::db::get_setting(&conn, "ncbi_api_key")?
                     };
-                    crate::routes::ncbi::fetch_record(acc, key.as_deref()).await?
+                    let record = crate::routes::ncbi::fetch_record(acc, key.as_deref()).await?;
+                    record_genes =
+                        crate::routes::ncbi::fetch_record_genes(acc, key.as_deref()).await;
+                    record
                 }
             };
             ("accession", acc.clone(), title, Some(seq))
@@ -474,7 +487,20 @@ pub async fn panel_element(
         element_title: title,
         element_len,
         hits,
+        genes: record_genes,
     }))
+}
+
+/// A library record's gene as an element gene.
+fn element_gene(g: straincompass_engine::gff::Gene) -> straincompass_types::ElementGene {
+    straincompass_types::ElementGene {
+        start: g.start,
+        end: g.end,
+        strand: g.strand,
+        name: straincompass_engine::panel_variants::base_gene_name(&g.symbol).to_string(),
+        locus_tag: g.locus_tag,
+        product: g.product,
+    }
 }
 
 #[derive(serde::Deserialize)]

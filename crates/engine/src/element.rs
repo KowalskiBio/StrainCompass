@@ -596,6 +596,8 @@ pub struct Coverage {
     pub largest_piece: u64,
     pub identity: f64,
     pub contigs: Vec<String>,
+    /// The merged stretches, in element order.
+    pub stretches: Vec<straincompass_types::ElementPiece>,
 }
 
 /// Merge blast hits (element start, element end, identity, aligned
@@ -617,12 +619,28 @@ pub fn coverage_from_hits(hits: &[(u64, u64, f64, u64, String)]) -> Coverage {
     }
     let mut contigs: Vec<(&str, u64)> = by_contig.into_iter().collect();
     contigs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    // each stretch's identity from the hits inside it
+    let stretches = ivs
+        .iter()
+        .map(|&(s, e)| {
+            let inside = hits
+                .iter()
+                .filter(|h| h.0.min(h.1) >= s && h.0.max(h.1) <= e);
+            let (w, n) = inside.fold((0.0, 0u64), |(w, n), h| (w + h.2 * h.3 as f64, n + h.3));
+            straincompass_types::ElementPiece {
+                start: s,
+                end: e,
+                identity: if n > 0 { w / n as f64 } else { 0.0 },
+            }
+        })
+        .collect();
     Coverage {
         covered_bp,
         pieces: ivs.len(),
         largest_piece,
         identity,
         contigs: contigs.into_iter().map(|(c, _)| c.to_string()).collect(),
+        stretches,
     }
 }
 
@@ -743,6 +761,7 @@ pub fn element_hit(
         contigs: cov.contigs,
         genome_bp,
         related_identity: None,
+        covered: cov.stretches,
     }
 }
 
@@ -778,6 +797,10 @@ mod tests {
         assert_eq!(c.largest_piece, 200);
         assert_eq!(c.contigs, vec!["c1".to_string(), "c2".to_string()]);
         assert!((c.identity - (10000.0 + 98.0 * 111.0 + 9000.0) / 311.0).abs() < 1e-9);
+        let spans: Vec<(u64, u64)> = c.stretches.iter().map(|p| (p.start, p.end)).collect();
+        assert_eq!(spans, [(1, 200), (501, 600)]);
+        assert!((c.stretches[0].identity - (10000.0 + 98.0 * 111.0) / 211.0).abs() < 1e-9);
+        assert_eq!(c.stretches[1].identity, 90.0);
         assert_eq!(coverage_from_hits(&[]), Coverage::default());
     }
 

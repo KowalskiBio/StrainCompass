@@ -597,6 +597,33 @@ pub struct ElementHit {
     /// of the closest related gene, percent.
     #[serde(default)]
     pub related_identity: Option<f64>,
+    /// The stretches of the element found, in element coordinates, in
+    /// element order.
+    #[serde(default)]
+    pub covered: Vec<ElementPiece>,
+}
+
+/// One stretch of an element found in a genome.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ElementPiece {
+    /// 1-based inclusive, on the element.
+    pub start: u64,
+    pub end: u64,
+    /// Identity over the stretch, length-weighted, percent.
+    pub identity: f64,
+}
+
+/// An annotated gene of an element record (a library or NCBI plasmid).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ElementGene {
+    /// 1-based inclusive, on the element.
+    pub start: u64,
+    pub end: u64,
+    /// 1 or -1.
+    pub strand: i8,
+    pub name: String,
+    pub locus_tag: String,
+    pub product: String,
 }
 
 /// A whole-element comparison across the queries of a run.
@@ -614,6 +641,10 @@ pub struct ElementReport {
     pub element_title: String,
     pub element_len: u64,
     pub hits: Vec<ElementHit>,
+    /// The record's annotated genes; empty for a strain's own contig,
+    /// which carries no annotation.
+    #[serde(default)]
+    pub genes: Vec<ElementGene>,
 }
 
 /// One NCBI record carrying a panel gene, from the gene origin lookup.

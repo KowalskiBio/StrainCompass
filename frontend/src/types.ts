@@ -388,6 +388,25 @@ export interface ElementHit {
   genome_bp: number;
   /** Gene not present in full: closest related gene's protein identity, %. */
   related_identity?: number | null;
+  /** The stretches of the element found, in element coordinates and order. */
+  covered?: ElementPiece[];
+}
+
+/** One stretch of an element found in a genome, 1-based inclusive. */
+export interface ElementPiece {
+  start: number;
+  end: number;
+  identity: number;
+}
+
+/** An annotated gene of an element record (a library or NCBI plasmid). */
+export interface ElementGene {
+  start: number;
+  end: number;
+  strand: number;
+  name: string;
+  locus_tag: string;
+  product: string;
 }
 
 /** How much of the element carrying a panel gene each query holds. */
@@ -400,6 +419,8 @@ export interface ElementReport {
   element_title: string;
   element_len: number;
   hits: ElementHit[];
+  /** The record's annotated genes; empty for a strain's own contig. */
+  genes?: ElementGene[];
 }
 
 /** One NCBI record carrying a panel gene. */
