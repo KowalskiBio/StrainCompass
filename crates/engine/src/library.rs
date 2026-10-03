@@ -17,7 +17,7 @@
 use crate::{friendly, Result};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -87,6 +87,17 @@ pub struct LibraryVariant {
     pub n_chromosome: u64,
     /// The representative sits on the minus strand of `locus`.
     pub minus: bool,
+}
+
+/// A protein's kin in the library: see [`Library::protein_kin`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProteinKin {
+    /// Gene name of its variant group; empty when the group has none.
+    pub name: String,
+    /// Locus tags of its group's genes in the species' reference genome.
+    pub reference_loci: Vec<String>,
+    /// That genome's strain ("EGD-e").
+    pub reference_strain: String,
 }
 
 /// A gene near another one on its replicon.
@@ -672,6 +683,61 @@ impl Library {
             .map_err(sql)
     }
 
+    /// What the library knows of some proteins (by accession, "WP_..."):
+    /// the gene name of their variant group, and their group's genes in
+    /// the species' RefSeq reference genome, the one whose proteins carry
+    /// NP_ accessions (EGD-e in Listeria monocytogenes). Annotation often
+    /// names a gene only by function ("glutamate decarboxylase"); the
+    /// reference genome's locus tag (lmo2363) tells two such apart, and
+    /// panels are often keyed on those tags. Unknown proteins are left out.
+    pub fn protein_kin(&self, proteins: &[String]) -> Result<HashMap<String, ProteinKin>> {
+        let mut out = HashMap::new();
+        if proteins.is_empty() {
+            return Ok(out);
+        }
+        let conn = self.conn()?;
+        let marks = vec!["?"; proteins.len()].join(",");
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT DISTINCT g.protein_id, g.group_id, COALESCE(gr.label, '')
+                 FROM genes g JOIN groups gr ON gr.id = g.group_id
+                 WHERE g.protein_id IN ({marks})"
+            ))
+            .map_err(sql)?;
+        let found: Vec<(String, i64, String)> = stmt
+            .query_map(rusqlite::params_from_iter(proteins), |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .map_err(sql)?
+            .collect::<std::result::Result<_, _>>()
+            .map_err(sql)?;
+        let mut in_reference = conn
+            .prepare(
+                "SELECT g.locus_tag, COALESCE(a.strain, '') FROM genes g
+                 JOIN replicons r ON r.accession = g.replicon
+                 JOIN assemblies a ON a.accession = r.assembly
+                 WHERE g.group_id = ?1 AND g.protein_id LIKE 'NP\\_%' ESCAPE '\\'
+                 ORDER BY g.locus_tag",
+            )
+            .map_err(sql)?;
+        for (protein, group, name) in found {
+            let tags: Vec<(String, String)> = in_reference
+                .query_map([group], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(sql)?
+                .collect::<std::result::Result<_, _>>()
+                .map_err(sql)?;
+            out.insert(
+                protein,
+                ProteinKin {
+                    name,
+                    reference_strain: tags.first().map(|t| t.1.clone()).unwrap_or_default(),
+                    reference_loci: tags.into_iter().map(|t| t.0).collect(),
+                },
+            );
+        }
+        Ok(out)
+    }
+
     /// The genes within `window` bp of a gene's place ("NZ_CP2.1:47228-49363")
     /// on its replicon, the gene itself left out: an operon's partners.
     pub fn neighbours(&self, locus: &str, window: u64) -> Result<Vec<Neighbour>> {
@@ -1068,6 +1134,39 @@ pub(crate) mod tests {
         assert!(lib.variants("inlA").unwrap().is_empty());
         assert_eq!(v[2].place, "an unnamed plasmid (Listeria monocytogenes X)");
         assert_eq!(v[2].seq, b"ATGGGG");
+    }
+
+    #[test]
+    fn names_a_protein_by_its_group_and_reference_genome_gene() {
+        let tmp = tempdir("kin");
+        let lib = fixture(&tmp);
+        Connection::open(tmp.join("library.sqlite"))
+            .unwrap()
+            .execute_batch(
+                "INSERT INTO assemblies VALUES ('GCF_9','Listeria monocytogenes EGD-e','EGD-e',1,'GCF_9','ASM9v1','GCA_9');
+                 INSERT INTO replicons VALUES ('NC_9.1','GCF_9','chromosome','',2900000,1,1,'NC_9.1',1);
+                 INSERT INTO genes VALUES (9,'NC_9.1',500,2600,'+','','lmo0100','','ATPase','NP_9',0,10,NULL),
+                                          (8,'NC_9.1',9000,9900,'+','','lmo0200','','ATPase','NP_8',0,11,NULL);",
+            )
+            .unwrap();
+        let kin = lib
+            .protein_kin(&["WP_1".into(), "WP_2".into(), "WP_3".into(), "WP_404".into()])
+            .unwrap();
+        assert_eq!(
+            kin["WP_1"],
+            ProteinKin {
+                name: "cadA".into(),
+                reference_loci: vec!["lmo0100".into()],
+                reference_strain: "EGD-e".into(),
+            }
+        );
+        // an unnamed group still has its reference genome gene
+        assert_eq!(kin["WP_2"].name, "");
+        assert_eq!(kin["WP_2"].reference_loci, ["lmo0200"]);
+        // a group the reference genome lacks keeps only its name
+        assert!(kin["WP_3"].reference_loci.is_empty());
+        assert!(!kin.contains_key("WP_404"));
+        assert!(lib.protein_kin(&[]).unwrap().is_empty());
     }
 
     #[test]

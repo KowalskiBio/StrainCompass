@@ -216,6 +216,7 @@ pub fn run_comparison(
             end: g.end,
             strand: g.strand,
             product: g.product.clone(),
+            protein_id: g.protein_id.clone(),
         })
         .collect();
     let blocks: Vec<WgaBlock> = delta

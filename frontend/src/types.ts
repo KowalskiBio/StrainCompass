@@ -337,6 +337,14 @@ export interface ContextGene {
   match_coverage: number | null;
   /** Reference locus tag, for "annotation" genes. */
   locus_tag: string;
+  /** Gene name of the library variant group, when the annotation gives
+   * only a function ("gad" for "glutamate decarboxylase"). */
+  group_name: string;
+  /** The same group's gene(s) in the species' RefSeq reference genome
+   * ("lmo2363"), telling apart genes of one function. */
+  reference_loci: string[];
+  /** That genome's strain ("EGD-e"). */
+  reference_strain: string;
   distance: number;
   is_hit: boolean;
   mobile: boolean;

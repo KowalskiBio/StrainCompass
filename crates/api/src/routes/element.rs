@@ -13,8 +13,8 @@ use straincompass_engine::delta::DeltaFile;
 use straincompass_engine::element::{self, ElementTarget};
 use straincompass_engine::fasta;
 use straincompass_types::{
-    Call, ElementRecord, ElementRecords, ElementReport, Page, PanelAlignmentView, PanelContext,
-    PanelMatrixRow, PanelRow, TableQuery,
+    Call, ContextGene, ElementRecord, ElementRecords, ElementReport, Page, PanelAlignmentView,
+    PanelContext, PanelMatrixRow, PanelRow, TableQuery,
 };
 
 fn succeeded_queries(state: &SharedState, run_id: i64) -> ApiResult<(i64, Vec<i64>)> {
@@ -135,11 +135,32 @@ pub async fn panel_context(
     let panel_record = jobs::panel_record(&state, project_id, run_id, &variant);
     // the reference's own genes, to list neighbours in shared stretches;
     // a run without them still answers, with predicted genes only
-    let ref_genes: Vec<straincompass_types::WgaGene> =
+    let mut ref_genes: Vec<straincompass_types::WgaGene> =
         jobs::load_reference_json(&state, project_id, run_id)
             .ok()
             .and_then(|v| serde_json::from_value(v["genes"].clone()).ok())
             .unwrap_or_default();
+    if ref_genes.iter().all(|g| g.protein_id.is_empty()) {
+        // a run from before the proteins were kept: take them from the
+        // staged annotation by locus tag, which another reference's
+        // annotation does not share
+        let staged = state
+            .project_dir(project_id)
+            .join("reference")
+            .join("ref.gff");
+        if let Ok(staged) = straincompass_engine::gff::parse_gff(&staged) {
+            let protein: std::collections::HashMap<&str, &str> = staged
+                .iter()
+                .map(|g| (g.locus_tag.as_str(), g.protein_id.as_str()))
+                .collect();
+            for g in &mut ref_genes {
+                if let Some(p) = protein.get(g.locus_tag.as_str()) {
+                    g.protein_id = p.to_string();
+                }
+            }
+        }
+    }
+    let library = crate::routes::library::for_project(&state, project_id);
 
     let ctx = tokio::task::spawn_blocking(move || -> ApiResult<PanelContext> {
         let qry_fa = qdir.join("query.fa");
@@ -210,6 +231,9 @@ pub async fn panel_context(
             element::CONTEXT_WINDOW,
         ));
         genes.sort_by_key(|g| g.start);
+        if let Some(lib) = &library {
+            name_by_library(lib, &mut genes);
+        }
         let mut markers: Vec<String> = Vec::new();
         for g in genes.iter().filter(|g| g.mobile && !g.is_hit) {
             if !markers.contains(&g.label) {
@@ -227,10 +251,16 @@ pub async fn panel_context(
             let listed = genes
                 .iter()
                 .find(|g| g.is_hit && !g.label.is_empty())
-                .map(|g| match g.locus_tag.as_str() {
-                    "" => g.label.clone(),
-                    lt if lt == g.label => lt.to_string(),
-                    lt => format!("{} ({lt})", g.label),
+                .map(|g| {
+                    let name = match g.locus_tag.as_str() {
+                        "" => g.label.clone(),
+                        lt if lt == g.label => lt.to_string(),
+                        lt => format!("{} ({lt})", g.label),
+                    };
+                    match g.reference_loci.as_slice() {
+                        [] => name,
+                        loci => format!("{name}, {} in {}", loci.join(", "), g.reference_strain),
+                    }
                 });
             if let Some(name) = panel_gene.or(listed) {
                 ctx.match_note
@@ -261,6 +291,37 @@ pub async fn panel_context(
     .await
     .map_err(|e| ApiError::Internal(format!("The gene's surroundings could not be read. ({e})")))??;
     Ok(Json(ctx))
+}
+
+/// Give the reference's genes near a hit what the library knows of their
+/// proteins: a gene name where the annotation has only a function, and
+/// the gene of the species' reference genome they match ("lmo2363"), so
+/// that two glutamate decarboxylases are told apart. Best effort: a
+/// library that cannot be read adds nothing.
+fn name_by_library(lib: &straincompass_engine::library::Library, genes: &mut [ContextGene]) {
+    let proteins: Vec<String> = genes
+        .iter()
+        .filter(|g| !g.protein_id.is_empty())
+        .map(|g| g.protein_id.clone())
+        .collect();
+    let Ok(kin) = lib.protein_kin(&proteins) else {
+        return;
+    };
+    for g in genes.iter_mut() {
+        let Some(k) = kin.get(&g.protein_id) else {
+            continue;
+        };
+        // a gene symbol of the annotation's own ("gadC") stands; a group
+        // name only fills in for a function ("glutamate decarboxylase")
+        if g.label.contains(' ') || g.label.is_empty() {
+            g.group_name = k.name.clone();
+        }
+        // a gene that is itself a reference genome gene needs no pointer
+        if !k.reference_loci.contains(&g.locus_tag) {
+            g.reference_loci = k.reference_loci.clone();
+            g.reference_strain = k.reference_strain.clone();
+        }
+    }
 }
 
 /// One query's view of a panel gene, for the element comparison: id,

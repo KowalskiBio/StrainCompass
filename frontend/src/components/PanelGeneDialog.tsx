@@ -366,10 +366,28 @@ function ContextGenes({ ctx }: { ctx: PanelContext }) {
                 {g.start.toLocaleString("en-US")}-{g.end.toLocaleString("en-US")} ({g.strand < 0 ? "-" : "+"})
               </td>
               <td className="px-3 py-1.5 leading-6">
+                {g.group_name && (
+                  <>
+                    <span
+                      className="italic font-medium"
+                      title="The gene name of this protein's variant group in the reference library; the annotation itself gives only its function."
+                    >
+                      {g.group_name}
+                    </span>{" "}
+                  </>
+                )}
                 {g.label ||
                   (!g.locus_tag && <span className="text-zinc-400 dark:text-zinc-500">unnamed</span>)}
                 {g.locus_tag && g.locus_tag !== g.label && (
                   <> <span className="font-mono text-xs text-zinc-500 dark:text-zinc-400">{g.locus_tag}</span></>
+                )}
+                {g.reference_loci?.length > 0 && (
+                  <> <span
+                      className="text-xs text-zinc-500 dark:text-zinc-400"
+                      title={`In the reference library this protein groups with ${g.reference_loci.join(", ")} of ${g.reference_strain}, the species' RefSeq reference genome: the same gene, by another strain's name.`}
+                    >
+                      = {g.reference_strain} <span className="font-mono">{g.reference_loci.join(", ")}</span>
+                    </span></>
                 )}
                 {g.is_hit && (
                   <> <span className="inline-block px-1.5 rounded text-xs bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">

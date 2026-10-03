@@ -481,6 +481,7 @@ async fn execute_run(state: &SharedState, run_id: i64) -> ApiResult<()> {
                 end: g.end,
                 strand: g.strand,
                 product: g.product.clone(),
+                protein_id: g.protein_id.clone(),
             })
             .collect();
         std::fs::write(

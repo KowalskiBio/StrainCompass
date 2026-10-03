@@ -479,6 +479,21 @@ pub struct ContextGene {
     /// The reference locus tag, for "annotation" genes.
     #[serde(default)]
     pub locus_tag: String,
+    /// Protein accession of an "annotation" gene, to look it up in the
+    /// reference library.
+    #[serde(skip)]
+    pub protein_id: String,
+    /// Gene name of the library variant group the gene belongs to, when
+    /// the annotation gives it none of its own ("gad").
+    #[serde(default)]
+    pub group_name: String,
+    /// The same group's gene(s) in the species' RefSeq reference genome
+    /// ("lmo2363"), telling apart genes of one function.
+    #[serde(default)]
+    pub reference_loci: Vec<String>,
+    /// That genome's strain ("EGD-e").
+    #[serde(default)]
+    pub reference_strain: String,
     /// Bases between this gene and the panel hit; 0 when they overlap.
     pub distance: u64,
     /// The gene overlaps the panel hit itself.
@@ -804,6 +819,9 @@ pub struct WgaGene {
     /// Function annotation from the GFF `product` attribute.
     #[serde(default)]
     pub product: String,
+    /// RefSeq/GenBank protein accession of the coding gene ("WP_...").
+    #[serde(default)]
+    pub protein_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

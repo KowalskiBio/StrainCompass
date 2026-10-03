@@ -373,6 +373,7 @@ pub fn context_genes(
                 distance,
                 is_hit: distance == 0,
                 partial: o.partial,
+                ..Default::default()
             });
         }
     }
@@ -452,6 +453,7 @@ pub fn annotation_context_genes(
                 label,
                 source: "annotation".into(),
                 locus_tag: g.locus_tag.clone(),
+                protein_id: g.protein_id.clone(),
                 distance,
                 is_hit: distance == 0,
                 partial: g.start < a.ref_start || g.end > a.ref_end,
@@ -844,6 +846,7 @@ mod tests {
             end: e,
             strand,
             product: "transposase".into(),
+            protein_id: format!("WP_{tag}"),
         };
         let genes = vec![
             g("t1", "plcA", 1001, 1500, 1),
@@ -855,6 +858,8 @@ mod tests {
         let tags: Vec<&str> = out.iter().map(|o| o.locus_tag.as_str()).collect();
         assert_eq!(tags, vec!["t1", "t2", "t3"]);
         assert!(out[0].is_hit && !out[0].partial && (out[0].start, out[0].end) == (1501, 2000));
+        // the protein comes along, for the library to name the gene by
+        assert_eq!(out[0].protein_id, "WP_t1");
         // clipped at the block end, unnamed so labelled by its product
         assert!(
             out[1].partial && out[1].end == 3000 && out[1].label == "transposase" && out[1].mobile
