@@ -114,6 +114,10 @@ fn routes() -> Router<SharedState> {
             "/runs/{id}/panel_element",
             post(routes::element::panel_element),
         )
+        .route(
+            "/runs/{id}/panel_element_records",
+            get(routes::element::panel_element_records),
+        )
         .route("/runs/{id}/panel_origin", get(routes::origin::panel_origin))
         .route("/runs/{id}/screen", get(routes::screen::screen))
         .route(

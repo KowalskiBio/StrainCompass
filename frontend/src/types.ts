@@ -423,6 +423,27 @@ export interface ElementReport {
   genes?: ElementGene[];
 }
 
+/** A reference-library record carrying a panel gene. */
+export interface ElementRecord {
+  accession: string;
+  title: string;
+  kind: string;
+  length: number;
+  /** The library genomes it stands for. */
+  genomes: number;
+}
+
+/** The library records carrying a panel gene. */
+export interface ElementRecords {
+  /** Empty without a library. */
+  library: string;
+  records: ElementRecord[];
+  /** Largest record the comparison takes; chromosomes are bigger. */
+  max_bp: number;
+  /** Why the list could not be made, when it could not. */
+  note: string;
+}
+
 /** One NCBI record carrying a panel gene. */
 export interface OriginRecord {
   accession: string;

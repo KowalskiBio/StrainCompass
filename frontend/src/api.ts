@@ -10,6 +10,7 @@ import type {
   GainedVerify,
   GeneCoverageRow,
   IdentifiedOrf,
+  ElementRecords,
   ElementReport,
   MatrixRow,
   Page,
@@ -388,6 +389,11 @@ export const api = {
   panelOrigin: (runId: number, geneId: string, wide = false) =>
     request<GeneOrigin>(
       `/runs/${runId}/panel_origin?gene_id=${encodeURIComponent(geneId)}${wide ? "&wide=true" : ""}`,
+    ),
+  /** The reference library's records carrying a panel gene. */
+  panelElementRecords: (runId: number, geneId: string) =>
+    request<ElementRecords>(
+      `/runs/${runId}/panel_element_records?gene_id=${encodeURIComponent(geneId)}`,
     ),
   panelElement: (runId: number, geneId: string, sourceQueryId: number, accession?: string) =>
     cached(

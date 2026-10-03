@@ -13,8 +13,8 @@ use straincompass_engine::delta::DeltaFile;
 use straincompass_engine::element::{self, ElementTarget};
 use straincompass_engine::fasta;
 use straincompass_types::{
-    Call, ElementReport, Page, PanelAlignmentView, PanelContext, PanelMatrixRow, PanelRow,
-    TableQuery,
+    Call, ElementRecord, ElementRecords, ElementReport, Page, PanelAlignmentView, PanelContext,
+    PanelMatrixRow, PanelRow, TableQuery,
 };
 
 fn succeeded_queries(state: &SharedState, run_id: i64) -> ApiResult<(i64, Vec<i64>)> {
@@ -501,6 +501,80 @@ fn element_gene(g: straincompass_engine::gff::Gene) -> straincompass_types::Elem
         locus_tag: g.locus_tag,
         product: g.product,
     }
+}
+
+#[derive(serde::Deserialize)]
+pub struct ElementRecordsQuery {
+    pub gene_id: String,
+}
+
+/// GET /runs/{id}/panel_element_records?gene_id : the reference library's
+/// records carrying the gene (any of its panel variants), to compare the
+/// strains against without typing an accession.
+pub async fn panel_element_records(
+    State(state): State<SharedState>,
+    Path(run_id): Path<i64>,
+    Query(q): Query<ElementRecordsQuery>,
+) -> ApiResult<Json<ElementRecords>> {
+    let (project_id, _) = succeeded_queries(&state, run_id)?;
+    let max_bp = crate::routes::ncbi::MAX_RECORD_BP as u64;
+    let Some(lib) = crate::routes::library::for_project(&state, project_id) else {
+        return Ok(Json(ElementRecords {
+            max_bp,
+            ..Default::default()
+        }));
+    };
+    let library = lib.title();
+    let seqs: Vec<(String, Vec<u8>)> = fasta::parse_fasta(
+        state
+            .run_dir(project_id, run_id)
+            .join("panel")
+            .join("panel.fa"),
+    )
+    .map_err(|_| {
+        ApiError::NotFound("This run's gene panel file is no longer on the server.".into())
+    })?
+    .into_iter()
+    .filter(|r| straincompass_engine::panel::variant_gene(&r.id) == q.gene_id)
+    .map(|r| (r.id, r.seq))
+    .collect();
+    let work = state.cache_dir(project_id).join("library");
+    let found = tokio::task::spawn_blocking(move || {
+        let Some(blastn) = straincompass_engine::tools::find_optional("blastn") else {
+            return Err(
+                "blastn is not installed on the server, so the library cannot be searched."
+                    .to_string(),
+            );
+        };
+        let groups: Vec<i64> = lib
+            .groups_of(&blastn, &seqs, &work)
+            .map_err(|e| e.to_string())?
+            .into_values()
+            .flatten()
+            .collect();
+        lib.records_carrying(&groups).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("The reference library could not be read. ({e})")))?;
+    let (records, note) = match found {
+        Ok(r) => (r, String::new()),
+        Err(e) => (Vec::new(), e),
+    };
+    Ok(Json(ElementRecords {
+        library,
+        records: records
+            .into_iter()
+            .map(|(rep, genomes)| ElementRecord {
+                accession: rep.accession.clone(),
+                title: rep.title(),
+                kind: rep.kind.clone(),
+                length: rep.length,
+                genomes,
+            })
+            .collect(),
+        max_bp,
+        note,
+    }))
 }
 
 #[derive(serde::Deserialize)]

@@ -4,6 +4,7 @@ import type {
   ContextGene,
   ElementGene,
   ElementHit,
+  ElementRecords,
   ElementReport,
   GeneOrigin,
   OriginRecord,
@@ -438,8 +439,11 @@ function AcrossStrains({
   // the strains carrying the gene, from the panel matrix row
   const [positives, setPositives] = useState<Set<number> | null>(null);
   const [source, setSource] = useState<number | undefined>(undefined);
-  const [useAccession, setUseAccession] = useState(false);
+  // what to compare: the strain's own DNA, a library record or any accession
+  const [mode, setMode] = useState<"strain" | "library" | "accession">("strain");
   const [accession, setAccession] = useState("");
+  const [records, setRecords] = useState<ElementRecords | null>(null);
+  const [record, setRecord] = useState("");
   const [report, setReport] = useState<ElementReport | null>(null);
   // the strain whose share of the element is shown in detail
   const [openRow, setOpenRow] = useState<number | null>(null);
@@ -472,6 +476,35 @@ function AcrossStrains({
   }, [run, geneId]);
 
   useEffect(() => {
+    let cancelled = false;
+    setRecords(null);
+    api
+      .panelElementRecords(run.id, geneId)
+      .then((r) => !cancelled && setRecords(r))
+      // the list only saves typing an accession; without it the box stays
+      .catch(() => !cancelled && setRecords(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [run, geneId]);
+
+  // the records small enough to compare whole; the rest are chromosomes
+  const comparable = useMemo(
+    () => (records ? records.records.filter((r) => r.length <= records.max_bp) : []),
+    [records],
+  );
+  const chromosomeGenomes = useMemo(
+    () =>
+      records
+        ? records.records
+            .filter((r) => r.length > records.max_bp)
+            .reduce((n, r) => n + r.genomes, 0)
+        : 0,
+    [records],
+  );
+  useEffect(() => setRecord(comparable[0]?.accession ?? ""), [comparable]);
+
+  useEffect(() => {
     if (!positives) return;
     setSource(
       preferredSource !== undefined && positives.has(preferredSource)
@@ -480,8 +513,19 @@ function AcrossStrains({
     );
   }, [positives, preferredSource]);
 
+  const noPositives = positives !== null && positives.size === 0;
+  // with no strain carrying the gene, its own DNA is not on offer
+  const effectiveMode =
+    noPositives && mode === "strain" ? (comparable.length > 0 ? "library" : "accession") : mode;
+
   async function compare(presetAcc?: string) {
-    const acc = presetAcc ?? (useAccession ? accession.trim() : undefined);
+    const acc =
+      presetAcc ??
+      (effectiveMode === "library"
+        ? record || undefined
+        : effectiveMode === "accession"
+          ? accession.trim() || undefined
+          : undefined);
     // a record needs no strain carrying the gene; the strain then only
     // anchors the genome-size differences
     const src = source ?? (acc ? run.queries[0]?.file_id : undefined);
@@ -500,8 +544,13 @@ function AcrossStrains({
 
   useEffect(() => {
     if (!preset) return;
-    setUseAccession(true);
-    setAccession(preset.acc);
+    if (comparable.some((r) => r.accession === preset.acc)) {
+      setMode("library");
+      setRecord(preset.acc);
+    } else {
+      setMode("accession");
+      setAccession(preset.acc);
+    }
     compare(preset.acc);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset]);
@@ -510,30 +559,58 @@ function AcrossStrains({
     () => report?.hits.find((h) => h.query_id === report.source_query_id)?.genome_bp,
     [report],
   );
-  const noPositives = positives !== null && positives.size === 0;
+
+  const genomes = (n: number) => `${n} genome${n === 1 ? "" : "s"}`;
+  const ready =
+    effectiveMode === "library"
+      ? Boolean(record)
+      : effectiveMode === "accession"
+        ? Boolean(accession.trim())
+        : source !== undefined;
 
   return (
     <section className="space-y-3">
       <SectionTitle>Is the whole element missing in the other strains?</SectionTitle>
       <p className="text-sm text-zinc-600 dark:text-zinc-400">
-        Takes the DNA carrying {geneId} in one strain and measures how much of it every strain of
-        this run contains. A strain lacking the whole element (e.g. a plasmid) differs from one
+        Takes the DNA carrying {geneId}, in one strain or in a record of the reference library,
+        and measures how much of it every strain of this run contains. A strain lacking the whole element (e.g. a plasmid) differs from one
         lacking only the gene.
       </p>
-      {noPositives ? (
+      {noPositives && (
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          {geneId} is not present in full in any strain of this run, so there is no element to
-          compare. You can still compare a complete record from NCBI:
+          {geneId} is not present in full in any strain of this run, so no strain's own DNA can
+          be compared.
+          {comparable.length > 0 ? " Compare a record of the library instead:" : ""}
         </p>
-      ) : null}
+      )}
+      {records && records.library && chromosomeGenomes > 0 && (
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          {comparable.length === 0 ? (
+            <>
+              In the {records.library}, {geneId} sits only on the chromosome (
+              {genomes(chromosomeGenomes)}), so there is no plasmid to compare.
+              {!noPositives &&
+                ` The DNA carrying ${geneId} in a strain is the element to compare: for a chromosomal gene, the inserted stretch around it.`}
+            </>
+          ) : (
+            <>
+              In the {records.library}, {geneId} also sits on the chromosome (
+              {genomes(chromosomeGenomes)}); a chromosome is too big to compare whole.
+            </>
+          )}
+        </p>
+      )}
+      {records?.note && (
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">{records.note}</p>
+      )}
       <div className="flex flex-wrap items-end gap-4 text-sm">
-        {!noPositives && (
-          <fieldset className="space-y-2">
-            <label className="flex items-center gap-2">
+        <fieldset className="space-y-2 min-w-0">
+          {!noPositives && (
+            <label className="flex flex-wrap items-center gap-2">
               <input
                 type="radio"
-                checked={!useAccession}
-                onChange={() => setUseAccession(false)}
+                checked={effectiveMode === "strain"}
+                onChange={() => setMode("strain")}
               />
               DNA carrying the gene in
               {positives ? (
@@ -542,31 +619,53 @@ function AcrossStrains({
                 <Spinner className="text-zinc-400" />
               )}
             </label>
-            <label className="flex items-center gap-2">
-              <input type="radio" checked={useAccession} onChange={() => setUseAccession(true)} />
-              Complete record from NCBI (e.g. a plasmid)
+          )}
+          {comparable.length > 0 && (
+            <label className="flex flex-wrap items-center gap-2">
+              <input
+                type="radio"
+                checked={effectiveMode === "library"}
+                onChange={() => setMode("library")}
+              />
+              A record of the library carrying it
+              <select
+                value={record}
+                onChange={(e) => {
+                  setRecord(e.target.value);
+                  setMode("library");
+                }}
+                className="h-9 max-w-full px-2 rounded-lg border border-zinc-300 bg-white text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              >
+                {comparable.map((r) => (
+                  <option key={r.accession} value={r.accession}>
+                    {r.title} ({fmtBp(r.length)}, {genomes(r.genomes)})
+                  </option>
+                ))}
+              </select>
             </label>
-          </fieldset>
-        )}
-        {(useAccession || noPositives) && (
-          <input
-            value={accession}
-            onChange={(e) => {
-              setAccession(e.target.value);
-              setUseAccession(true);
-            }}
-            placeholder="NZ_CP168866.1"
-            className="h-9 px-3 rounded-lg border border-zinc-300 font-mono text-sm w-52 dark:border-zinc-700 dark:bg-zinc-900"
-          />
-        )}
+          )}
+          <label className="flex flex-wrap items-center gap-2">
+            <input
+              type="radio"
+              checked={effectiveMode === "accession"}
+              onChange={() => setMode("accession")}
+            />
+            {comparable.length > 0 || !records?.library
+              ? "Another record, by accession"
+              : "A record by accession (e.g. a plasmid from NCBI)"}
+            {effectiveMode === "accession" && (
+              <input
+                value={accession}
+                onChange={(e) => setAccession(e.target.value)}
+                placeholder="NZ_CP168866.1"
+                className="h-9 px-3 rounded-lg border border-zinc-300 font-mono text-sm w-52 dark:border-zinc-700 dark:bg-zinc-900"
+              />
+            )}
+          </label>
+        </fieldset>
         <button
           onClick={() => compare()}
-          disabled={
-            busy ||
-            (useAccession || noPositives
-              ? !accession.trim()
-              : source === undefined)
-          }
+          disabled={busy || !ready}
           className="h-9 px-4 rounded-lg bg-zinc-900 text-white font-medium hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
         >
           {busy ? "Comparing..." : "Compare"}

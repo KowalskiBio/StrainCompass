@@ -789,6 +789,45 @@ impl Library {
         Ok(None)
     }
 
+    /// The records carrying a gene of any of `groups`, with the number of
+    /// near-identical records each stands for, most common first.
+    pub fn records_carrying(&self, groups: &[i64]) -> Result<Vec<(Replicon, u64)>> {
+        if groups.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids = groups
+            .iter()
+            .map(|g| g.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let conn = self.conn()?;
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT DISTINCT r.accession, r.assembly, r.kind, r.name, r.length, a.organism, a.strain, r.represents
+                 FROM genes g JOIN replicons r ON r.accession = g.replicon
+                 LEFT JOIN assemblies a ON a.accession = r.assembly
+                 WHERE g.group_id IN ({ids})
+                 ORDER BY r.represents DESC, r.accession"
+            ))
+            .map_err(sql)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    Replicon {
+                        accession: r.get(0)?,
+                        assembly: r.get(1)?,
+                        kind: r.get(2)?,
+                        name: r.get(3)?,
+                        length: r.get::<_, i64>(4)? as u64,
+                        organism: with_strain(r.get(5)?, r.get(6)?),
+                    },
+                    r.get::<_, Option<i64>>(7)?.unwrap_or(1).max(1) as u64,
+                ))
+            })
+            .map_err(sql)?;
+        rows.collect::<std::result::Result<_, _>>().map_err(sql)
+    }
+
     /// A replicon's sequence, from its assembly's stored genome.
     pub fn replicon_seq(&self, rep: &Replicon) -> Result<Option<Vec<u8>>> {
         let path = self.reference_file(&rep.assembly, "fna");
@@ -1046,6 +1085,22 @@ pub(crate) mod tests {
         assert_eq!(near.len(), 1, "{near:?}");
         assert_eq!((near[0].name.as_str(), near[0].group), ("cadC", None));
         assert!(lib.neighbours("not a locus", 8_000).unwrap().is_empty());
+    }
+
+    #[test]
+    fn lists_the_records_carrying_a_gene() {
+        let tmp = tempdir("carrying");
+        let lib = fixture(&tmp);
+        let recs = lib.records_carrying(&[10, 12]).unwrap();
+        let got: Vec<(&str, &str, u64)> = recs
+            .iter()
+            .map(|(r, n)| (r.accession.as_str(), r.kind.as_str(), *n))
+            .collect();
+        assert_eq!(
+            got,
+            [("NC_3.1", "plasmid", 6), ("NZ_CP1.1", "chromosome", 3)]
+        );
+        assert!(lib.records_carrying(&[]).unwrap().is_empty());
     }
 
     #[test]

@@ -647,6 +647,32 @@ pub struct ElementReport {
     pub genes: Vec<ElementGene>,
 }
 
+/// A reference-library record carrying a panel gene: a whole element to
+/// compare the strains against.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ElementRecord {
+    pub accession: String,
+    /// "Listeria monocytogenes L1551 plasmid pLM33"
+    pub title: String,
+    /// "plasmid" or "chromosome".
+    pub kind: String,
+    pub length: u64,
+    /// The library genomes it stands for (itself and its near-duplicates).
+    pub genomes: u64,
+}
+
+/// The library records carrying a panel gene.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ElementRecords {
+    /// "Listeria library 2026-10-02.2"; empty without a library.
+    pub library: String,
+    pub records: Vec<ElementRecord>,
+    /// Largest record the comparison takes; a chromosome is bigger.
+    pub max_bp: u64,
+    /// Why the list could not be made, when it could not.
+    pub note: String,
+}
+
 /// One NCBI record carrying a panel gene, from the gene origin lookup.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct OriginRecord {
